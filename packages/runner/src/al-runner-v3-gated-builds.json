@@ -318,6 +318,30 @@
     }
   },
   {
+    "id": "main-bf3a3e863",
+    "track": "main",
+    "version": "al-runner 3.0.0-alpha.15+main.20261122 (bf3a3e863)",
+    "binarySha256": "b3e1d2550b569c8213980a3a3e836bed36ffe935fdd6d0fae536f0b72171a1ef",
+    "readingsFrom": "main-ef9f6a222",
+    "readingsDigest": "df57baf0e46da269f6f9e685be0f473a80092eea1c972dd77b8ca6877d13bb15",
+    "lethalCommit": "6e567baa4e752f522c01ccb25b27094cf731daad",
+    "gatedAt": "2026-11-22T12:42:15.040Z",
+    "warnFacts": {
+      "serve-keep-reasons": "diverged"
+    },
+    "batchFacts": {
+      "batch-no-cross-singleinstance": "matches",
+      "batch-no-cross-library-global": "matches",
+      "batch-no-cross-row": "matches",
+      "batch-no-cross-subscriber": "matches",
+      "batch-onrun-excluded-no-carry": "matches",
+      "batch-onrun-included-duplicates": "matches",
+      "batch-lane-hint-only": "matches",
+      "batch-lane-strict-reruns": "matches"
+    },
+    "dotnetSidecarSha256": "445a67eeefe41601b515f098820df11db2c73cb2a250fdcdff1363f1997b8134"
+  },
+  {
     "id": "main-ccd0f823d",
     "track": "main",
     "version": "al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)",
@@ -340,5 +364,29 @@
       "batch-lane-strict-reruns": "matches"
     },
     "dotnetSidecarSha256": "1fdb6bc6505f3cb7410952091529046102739a1af497cbead90d4b3e52b87276"
+  },
+  {
+    "id": "main-ef9f6a222",
+    "track": "main",
+    "version": "al-runner 3.0.0-alpha.14+main.20261122 (ef9f6a222)",
+    "binarySha256": "8d36889656d8152f5c84c17a47a2e22303744622390b717d5d646b04d0c53bfe",
+    "readingsFrom": "main-ef9f6a222",
+    "readingsDigest": "df57baf0e46da269f6f9e685be0f473a80092eea1c972dd77b8ca6877d13bb15",
+    "lethalCommit": "6e567baa4e752f522c01ccb25b27094cf731daad",
+    "gatedAt": "2026-11-22T08:43:23.016Z",
+    "warnFacts": {
+      "serve-keep-reasons": "diverged"
+    },
+    "batchFacts": {
+      "batch-no-cross-singleinstance": "matches",
+      "batch-no-cross-library-global": "matches",
+      "batch-no-cross-row": "matches",
+      "batch-no-cross-subscriber": "matches",
+      "batch-onrun-excluded-no-carry": "matches",
+      "batch-onrun-included-duplicates": "matches",
+      "batch-lane-hint-only": "matches",
+      "batch-lane-strict-reruns": "matches"
+    },
+    "dotnetSidecarSha256": "e2f40b1665c8d6e8622b179c1bd5324b25412748e4e9bbb89dcea6fa5866c1a6"
   }
 ]

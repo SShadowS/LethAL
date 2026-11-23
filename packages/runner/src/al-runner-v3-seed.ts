@@ -19,9 +19,28 @@ export const V3_SEED_ENV = "ALRUNNER_SEED";
 /** Upstream's fallback name for the same variable; O1's unpinned daemon must not inherit it either. */
 export const V3_SEED_ENV_FALLBACK = "AL_RUNNER_SEED";
 
-/** The environment extras for an al-runner process: `extra` plus the pinned seed. The one helper every spawn site uses. */
+/**
+ * PR-360 (R1185): upstream's login replay is ON by default once a build carries it, and `=0` turns it off. LethAL pins
+ * it off on every al-runner process until R1182 adopts it behind a measured flag, so a gated build cannot switch it on.
+ */
+export const V3_LOGIN_REPLAY_ENV = "ALRUNNER_LOGIN_REPLAY";
+
+/** The environment extras for an al-runner process: `extra` plus the pinned seed and the replay off. The one helper every spawn site uses. */
 export function v3ChildEnv(extra?: Readonly<Record<string, string>>): Record<string, string> {
-  return { ...extra, [V3_SEED_ENV]: String(V3_RUN_SEED) };
+  return { ...extra, [V3_SEED_ENV]: String(V3_RUN_SEED), [V3_LOGIN_REPLAY_ENV]: "0" };
+}
+
+/** PR-340: al-runner reads this variable's PRESENCE, so a mutant-run daemon always gets it, set to "1". */
+export const V3_STRICT_SEQUENTIAL_ENV = "AL_STRICT_SEQUENTIAL";
+
+/**
+ * PR-340 §1: `v3ChildEnv` plus `AL_STRICT_SEQUENTIAL=1`. Used ONLY where the backend starts a
+ * MUTANT-RUN serve daemon; never by leg C's ordinary fact servers (they use `v3ChildEnv`).
+ */
+export function v3MutantDaemonEnv(
+  extra?: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return { ...v3ChildEnv(extra), [V3_STRICT_SEQUENTIAL_ENV]: "1" };
 }
 
 /**
@@ -31,7 +50,12 @@ export function v3ChildEnv(extra?: Readonly<Record<string, string>>): Record<str
 export function v3UnpinnedEnv(
   extra?: Readonly<Record<string, string>>,
 ): Record<string, string | undefined> {
-  return { ...extra, [V3_SEED_ENV]: undefined, [V3_SEED_ENV_FALLBACK]: undefined };
+  return {
+    ...extra,
+    [V3_SEED_ENV]: undefined,
+    [V3_SEED_ENV_FALLBACK]: undefined,
+    [V3_LOGIN_REPLAY_ENV]: "0",
+  };
 }
 
 /** The child's full environment: the parent's, then `extra` on top; an `undefined` value removes the name. */
@@ -39,6 +63,12 @@ export function mergeChildEnv(
   extra: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
   const out: Record<string, string | undefined> = { ...process.env, ...extra };
+  // PR-340 S2: al-runner reads this variable's PRESENCE (even "0" turns sequential mode on), so an ambient
+  // value must never reach a child that did not ask for it: it stays only when `extra` sets it.
+  if (!Object.hasOwn(extra, V3_STRICT_SEQUENTIAL_ENV)) delete out[V3_STRICT_SEQUENTIAL_ENV];
+  // PR-360: likewise every ambient ALRUNNER_LOGIN_REPLAY* (the variable, `_CHECK`, any later one) unless `extra` sets it.
+  for (const k of Object.keys(process.env))
+    if (k.startsWith(V3_LOGIN_REPLAY_ENV) && !Object.hasOwn(extra, k)) delete out[k];
   for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k];
   return out as Record<string, string>;
 }

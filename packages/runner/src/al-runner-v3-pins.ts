@@ -11,7 +11,12 @@
  * set only by `checkGated` (`adoptV3Pin`).
  */
 import { createHash } from "node:crypto";
-import { type V3ContractResult, V3_CAPABILITY_FACTS, v3MuteKey } from "./al-runner-v3-contract";
+import {
+  type V3ContractResult,
+  V3_CAPABILITY_FACTS,
+  V3_CARRY_FACT,
+  v3MuteKey,
+} from "./al-runner-v3-contract";
 import RAW_GATED_BUILDS from "./al-runner-v3-gated-builds.json";
 import type { GatedBuild } from "./al-runner-v3-pin";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
@@ -815,6 +820,17 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
       },
     },
   },
+  {
+    // R1161 (pre-commitment master 8277d49c4, docs/superpowers/specs/2026-11-22-r1161-main-ef9f6a222-pin.md): upstream MAIN
+    // ef9f6a222, built here with upstream's recipe. It carries #8239's fix (PR #8622): O1's 16 partner-login row inserts run, as
+    // on BC. So the pin is the live root edge-d72d3197d's readings EXACTLY, with NO o1.partnerLoginRefusal: O1 is judged
+    // against BC's tables again. The first gate (judged on main-ccd0f823d's pin) failed on O1 alone, by those 16 rows passing.
+    id: "main-ef9f6a222",
+    version: "al-runner 3.0.0-alpha.14+main.20261122 (ef9f6a222)",
+    binarySha256: "8d36889656d8152f5c84c17a47a2e22303744622390b717d5d646b04d0c53bfe",
+    ...READINGS_8078BCF49,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+  },
 ];
 
 /** The readings before PR-209 moved leg T's counts: master's own, byte for byte (digest e8ce7f40...). */
@@ -1105,6 +1121,25 @@ export function baselineBatchingOffReason(
   return undefined;
 }
 
+/**
+ * PR-340 §4 (amendment 1): why the carry walk is OFF for this session, or `undefined` when it is allowed.
+ * This session's probe must read `batch-sequential-carry` `matches`; the build's own gate record
+ * (`batchFacts`) must not record it as anything else (a recorded `diverged` wins). A record WITHOUT the
+ * fact does not block: no build could carry it before this change, and every session runs the probe.
+ * Deliberately NOT part of `baselineBatchingOffReason`: the carry fact never moves batching.
+ */
+export function carryWalkOffReason(
+  contract: V3ContractResult | undefined,
+  gated: Pick<GatedBuild, "batchFacts" | "lethalCommit"> | undefined,
+): string | undefined {
+  const was = gated?.batchFacts?.[V3_CARRY_FACT];
+  if (was !== undefined && was !== "matches") return `the gate read ${V3_CARRY_FACT} ${was}`;
+  const read = contract?.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict;
+  if (read !== "matches")
+    return `this session's probe read ${V3_CARRY_FACT} ${read ?? "unmeasured"}`;
+  return undefined;
+}
+
 /** PR-114a: may this session batch the baseline's test codeunits? False until the build's own gate record says so. */
 export const baselineBatchingFor = (
   contract: V3ContractResult | undefined,
@@ -1112,6 +1147,18 @@ export const baselineBatchingFor = (
   binarySha256: string,
   gated: Pick<GatedBuild, "batchFacts" | "lethalCommit"> | undefined,
 ): boolean => baselineBatchingOffReason(contract, version, binarySha256, gated) === undefined;
+
+/** PR-256 (rule 7): the leg-C capability fact `alRunnerV3.stopGroups` needs (upstream #8564). */
+export const STOP_GROUPS_FACT = "stop-groups";
+
+/**
+ * PR-256 (rule 7): does this build's own gate record (`.gated` or the manifest row, as PR-117's capability
+ * facts) read the `stop-groups` fact `matches`? No record carries it yet: the probe and the gate of the first
+ * build with #8564 write it, so `alRunnerV3.stopGroups` is refused on every build until then.
+ */
+export function stopGroupsFor(gated: Pick<GatedBuild, "batchFacts"> | undefined): boolean {
+  return gated?.batchFacts?.[STOP_GROUPS_FACT] === "matches";
+}
 
 /** R782: does this exact build's pin record #5798 as fixed (version line AND sha256)? */
 export function serveRowFieldsFor(version: string, binarySha256: string): boolean {

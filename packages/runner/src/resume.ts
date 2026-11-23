@@ -456,6 +456,19 @@ export interface SessionFingerprintInput {
   readonly v3Environment?: "saas" | "onprem";
   /** R956: sha256 of `alRunnerV3.license`'s file: another license can give another verdict. Only when set, so no other digest moves. */
   readonly v3License?: string;
+  /** PR-282: `alRunnerV3.companies`: another company list can give another verdict. Only when set, so no other digest moves. */
+  readonly v3Companies?: string;
+  /** PR-297: `alRunnerV3.refusedCutTail` is on: a green test after a baseline-refusal cut can be measured alone. Only when on, so no other digest moves. */
+  readonly v3RefusedCutTail?: true;
+  /** PR-256: `alRunnerV3.stopGroups` is on: mutant requests carry per-entry stop groups. Only when on, so no other digest moves. */
+  readonly v3StopGroups?: true;
+  /** PR-303: `LETHAL_V3_REACH_PRUNE=on`: test codeunits that cannot reach a mutant's site are left out. Only when on, so no other digest moves. */
+  readonly v3ReachPrune?: true;
+  /**
+   * PR-340: `LETHAL_V3_CARRY_WALK=off` on al-runner-v3 (the walk is ON by default). Only when OFF, so every
+   * walk-on (default) digest is the one a run recorded before the knob existed.
+   */
+  readonly v3CarryWalkOff?: true;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -545,6 +558,11 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.isolationAuto === true ? { isolation: "auto" } : {}),
     ...(input.v3Environment !== undefined ? { v3Environment: input.v3Environment } : {}),
     ...(input.v3License !== undefined ? { v3License: input.v3License } : {}),
+    ...(input.v3Companies !== undefined ? { v3Companies: input.v3Companies } : {}), // PR-282
+    ...(input.v3RefusedCutTail === true ? { v3RefusedCutTail: true } : {}), // PR-297
+    ...(input.v3StopGroups === true ? { v3StopGroups: true } : {}), // PR-256
+    ...(input.v3ReachPrune === true ? { v3ReachPrune: true } : {}), // PR-303
+    ...(input.v3CarryWalkOff === true ? { v3CarryWalkOff: true } : {}), // PR-340
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,

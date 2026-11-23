@@ -13,6 +13,7 @@
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { TestOutcome } from "./backend";
+import { monoNow } from "./clock";
 import type { RunEvent, RunEventInput } from "./events";
 import { type IsolatedRecheck, withheldKillOf } from "./report";
 
@@ -58,6 +59,15 @@ export interface NestedRecheckResult {
   readonly baseline: readonly { readonly name: string; readonly outcome: TestOutcome }[];
   readonly baselineElapsedMs: number;
   readonly identity: RecheckIdentity;
+  /** PR-370 (R1189): the nested session's `phase-left` events in order, for the `recheck` phase's detail. */
+  readonly phases?: readonly { readonly phase: string; readonly elapsedMs: number }[];
+}
+
+/** PR-370: the nested session's split, for `phase-left` `recheck`'s detail: "nested: generate 12.0 s, ...". */
+export function nestedSplit(
+  phases: readonly { readonly phase: string; readonly elapsedMs: number }[],
+): string {
+  return `nested: ${phases.map((p) => `${p.phase} ${(p.elapsedMs / 1000).toFixed(1)} s`).join(", ")}`;
 }
 
 export interface RecheckRequest {
@@ -65,6 +75,10 @@ export interface RecheckRequest {
   /** The targets' covering tests, `Codeunit.Method`, each once. The nested baseline is exactly these. */
   readonly tests: readonly string[];
   readonly budgetSeconds: number;
+  /** PR-277: aborted by a SECOND SIGTERM or SIGINT: the runner closes its daemons and the run is abandoned. */
+  readonly signal?: AbortSignal;
+  /** PR-277: aborted by the FIRST signal: the runner spends the nested budget, so the nested session stops gracefully. */
+  readonly stop?: AbortSignal;
 }
 
 /** Runs the nested session: method isolation, fresh serve daemons, the pinned config. */
@@ -304,6 +318,12 @@ export interface RecheckDeps {
   readonly main: RecheckIdentity;
   readonly budgetSeconds: number;
   readonly runner: RecheckRunner;
+  /** PR-277: what stopped the session (`stopNameOf`), when something did: the recheck then does not start. */
+  readonly stopped?: string;
+  /** PR-277: aborted by a SECOND SIGTERM or SIGINT: the recheck is abandoned at once and its rows stay error. */
+  readonly abort?: AbortSignal;
+  /** PR-277: aborted by the FIRST signal: the nested session stops gracefully; its rows still stay error. */
+  readonly stopSignal?: AbortSignal;
   /** The backend's own facts, read after `decideTransport`. */
   readonly backend: {
     readonly methodIsolation?: boolean;
@@ -332,6 +352,27 @@ export function shouldRunRecheck(a: {
 /** The word the skip warning carries. */
 export const RECHECK_SKIPPED_CODE = "withheld-recheck-skipped";
 export const RECHECK_FAILED_CODE = "withheld-recheck-failed";
+/** PR-277 (R1158): the session stopped, so the recheck did not start. */
+export const RECHECK_SKIPPED_STOPPED_CODE = "al-runner-v3-recheck-skipped-stopped";
+
+/** PR-277: read through a call, so a signal that fires between two reads is seen (no narrowing). */
+function fired(s: AbortSignal | undefined): boolean {
+  return s?.aborted === true;
+}
+
+/** PR-277: what stopped a session, for the skip warning; `undefined` when nothing did. */
+export function stopNameOf(b: {
+  readonly reached?: unknown;
+  readonly signalled: boolean;
+  readonly memory?: unknown;
+  readonly churn?: unknown;
+}): string | undefined {
+  if (b.memory !== undefined) return "the memory guard (R948)";
+  if (b.signalled) return "a SIGTERM or SIGINT (R955)";
+  if (b.churn !== undefined) return "the daemon-churn guard (PR-250)";
+  if (b.reached !== undefined) return "the --time-budget (R912)";
+  return undefined;
+}
 
 /**
  * Runs the recheck once, as its own step. Emits `recheck-baseline-finished` and one `mutant-rechecked` per
@@ -341,6 +382,17 @@ export const RECHECK_FAILED_CODE = "withheld-recheck-failed";
 export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary> {
   const targets = recheckTargetsOf(d.events);
   if (targets.length === 0) return { targets: 0, recovered: 0 };
+  // PR-277 (R1158): a stopped session ends at once. The recheck cannot fill in what the stop left out, and the user
+  // (or a guard) asked the run to end; its withheld kills stay error, as with the recheck off.
+  const skipStopped = (by: string): RecheckSummary => {
+    d.emit({
+      type: "warning",
+      code: RECHECK_SKIPPED_STOPPED_CODE,
+      message: `[lethal] ${RECHECK_SKIPPED_STOPPED_CODE}: the session was stopped by ${by}, so the withheld-kill recheck did not start; ${targets.length} withheld kill(s) stay error (PR-277).`,
+    });
+    return { targets: targets.length, recovered: 0, skipped: `stopped by ${by}` };
+  };
+  if (d.stopped !== undefined) return skipStopped(d.stopped);
   const skip = (why: string): RecheckSummary => {
     d.emit({
       type: "warning",
@@ -360,13 +412,69 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   if (testSet.size === 0)
     return skip("no withheld kill has a covering test that did not pass under its mutant");
   const tests = [...testSet].sort();
+  // PR-370 (R1189): the recheck is a phase of its own, entered here (every skip above emits none) and left exactly once
+  // on every path below, so "teardown left" is never read as the end of the run.
+  const startedMs = monoNow();
+  d.emit({
+    type: "phase-entered",
+    phase: "recheck",
+    detail: `${targets.length} withheld kill(s), ${tests.length} test(s): a nested session (its own daemons, baseline and mutant phase)`,
+  });
+  // Once only: a throw inside an emit after `left()` reaches the catch, which calls it again.
+  let hasLeft = false;
+  const left = (phases?: NestedRecheckResult["phases"]) => {
+    if (hasLeft) return;
+    hasLeft = true;
+    d.emit({
+      type: "phase-left",
+      phase: "recheck",
+      elapsedMs: monoNow() - startedMs,
+      ...(phases !== undefined && phases.length > 0 ? { detail: nestedSplit(phases) } : {}),
+    });
+  };
   let result: NestedRecheckResult;
   try {
     // The main session's daemons would otherwise stay alive beside the nested session's.
     await d.backend.closeDaemons?.();
-    result = await d.runner({ targets, tests, budgetSeconds: d.budgetSeconds });
+    // PR-277: a signal during that close: no nested backend is built.
+    if (fired(d.stopSignal) || fired(d.abort)) {
+      left();
+      return skipStopped("a SIGTERM or SIGINT (R955)");
+    }
+    const abort = d.abort;
+    const run = d.runner({
+      targets,
+      tests,
+      budgetSeconds: d.budgetSeconds,
+      ...(abort !== undefined ? { signal: abort } : {}),
+      ...(d.stopSignal !== undefined ? { stop: d.stopSignal } : {}),
+    });
+    // PR-277: a second signal abandons the nested run at once (the runner closes its daemons); never wait on it.
+    result =
+      abort === undefined
+        ? await run
+        : await Promise.race([
+            run,
+            new Promise<never>((_, reject) => {
+              const stop = () => reject(new Error("a SIGTERM or SIGINT arrived during it"));
+              if (abort.aborted) stop();
+              else abort.addEventListener("abort", stop, { once: true });
+            }),
+          ]);
   } catch (err) {
+    left();
     const why = err instanceof Error ? err.message : String(err);
+    d.emit({
+      type: "warning",
+      code: RECHECK_FAILED_CODE,
+      message: `[lethal] the withheld-kill recheck failed (${why}); ${targets.length} withheld kill(s) stay error (PR-144).`,
+    });
+    return { targets: targets.length, recovered: 0, skipped: `failed: ${why}` };
+  }
+  // PR-277: a nested run a signal stopped part-way did not finish normally: nothing in it recovers a row.
+  if (fired(d.stopSignal)) {
+    left(result.phases);
+    const why = "a SIGTERM or SIGINT stopped it";
     d.emit({
       type: "warning",
       code: RECHECK_FAILED_CODE,
@@ -425,6 +533,17 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
     }
     recovered += 1;
     const r = decision.row;
+    // PR-322 (R1167): the recheck row lists every test the whole-codeunit recheck RAN, green or not. The recovered row
+    // keeps the mutant's own covering set (what its `coverageAttribution` describes), plus the killer when that set
+    // lacks it: the reproduced kill proves the killer reached the code, and the kill credit looks it up there. Rule
+    // (c) names the killer on every recovered row. Named limit: a covering test of ANOTHER codeunit with the killer's
+    // method name makes report-fold's bare-name credit ambiguous (counted in `ambiguousKills`, no verdict effect); on
+    // DO c2 that was 0 of 349 recoveries, as with the old list.
+    const killer = qualifiedKillerOf(r);
+    const coveringTests =
+      killer !== undefined && !target.coveringTests.includes(killer)
+        ? [...target.coveringTests, killer]
+        : target.coveringTests;
     d.emit({
       type: "mutant-rechecked",
       mutant: target.mutant,
@@ -435,10 +554,11 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
         ...(r.killingTestFailure !== undefined ? { killingTestFailure: r.killingTestFailure } : {}),
         ...(r.killPosition !== undefined ? { killPosition: r.killPosition } : {}),
         ...(r.reproducedFailure !== undefined ? { reproducedFailure: r.reproducedFailure } : {}),
-        coveringTests: r.coveringTests,
+        coveringTests,
         isolatedRecheck: decision.isolatedRecheck,
       },
     });
   }
+  left(result.phases);
   return { targets: targets.length, recovered };
 }

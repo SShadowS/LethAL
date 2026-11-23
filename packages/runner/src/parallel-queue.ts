@@ -61,6 +61,9 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     get isolatesTests() {
       return owner.isolatesTests === true;
     },
+    get baselineBatchingKnobOff() {
+      return owner.baselineBatchingKnobOff === true;
+    },
     ...(owner.baselineState !== undefined
       ? { baselineState: () => owner.baselineState?.() ?? Promise.resolve(undefined) }
       : {}),
@@ -81,7 +84,7 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     compileCheck: (dir) => owner.compileCheck(dir),
     activate: (id) => lane0.activate(id),
     run: (ref, opts) => lane0.run(ref, opts),
-    baselinePhase: (on) => owner.baselinePhase?.(on),
+    baselinePhase: (on, completed) => owner.baselinePhase?.(on, completed),
     mayStartGroup: () => lane0.mayStartGroup?.() ?? Promise.resolve(true), // R948
     noteReusedBaseline: (baseline) => owner.noteReusedBaseline?.(baseline),
     // R896: the choice is the owner's (every lane reads it); absent on an owner without auto.
@@ -101,9 +104,28 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     restoreCutState: (id, state) => lane0.restoreCutState?.(id, state),
     sendKillPair: (id, ref) => lane0.sendKillPair?.(id, ref) ?? Promise.resolve(),
     dropPendingPair: (id) => lane0.dropPendingPair?.(id),
-    survivorNote: (covering) => lane0.survivorNote?.(covering),
+    survivorNote: (covering, site) => lane0.survivorNote?.(covering, site),
+    // PR-340: NO `carryWalk` here, on purpose. A walk runs on the daemon and resource file of the lane
+    // that scored the mutant; forwarding it to lane 0 would walk on another lane's daemon. A caller
+    // holding this view sees an absent method, which means no walk.
     baselineNote: () => owner.baselineNote?.(),
   };
+}
+
+/**
+ * PR-281: the units, costliest first inside each window. A stable sort by window (ascending), then estimated
+ * cost (descending), then original index. Windows stay non-decreasing (the look-ahead bound needs it); a unit's
+ * mutants are never touched, so no scope's internal order (the R197 ledger's) changes. Returns a new array.
+ */
+export function orderUnitsCostliestFirst<U>(
+  units: readonly U[],
+  windowOf: (unit: U) => number,
+  costOf: (unit: U) => number,
+): U[] {
+  return units
+    .map((unit, i) => ({ unit, i, w: windowOf(unit), c: costOf(unit) }))
+    .sort((a, b) => a.w - b.w || b.c - a.c || a.i - b.i)
+    .map((x) => x.unit);
 }
 
 /** The first latch of the batch and the mutant behind it, or `undefined`. */
@@ -187,6 +209,8 @@ export class OrderedCommit {
     codes: readonly string[],
     private readonly latch: Latch,
     private readonly workers: number,
+    /** PR-281: called each time a lane finishes a mutant, before the record waits for its turn. */
+    private readonly onFinish?: () => void,
   ) {
     this.codes = codes;
     for (const [i, c] of codes.entries()) this.index.set(c, i);
@@ -267,6 +291,7 @@ export class OrderedCommit {
 
   private finish(code: string, commit: () => void, stop: Error | undefined): void {
     const i = this.idx(code);
+    this.onFinish?.();
     // R962: after the memory guard's stop a lane's in-flight mutant still finishes; its result is
     // complete, so it waits with the others and `conclude()` records it, by the latch rule then.
     if (this.stoppedByGuard) {

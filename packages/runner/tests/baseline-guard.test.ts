@@ -260,8 +260,10 @@ describe("R332: a frozen baseline never records itself", () => {
   // R654 S3: eleven, the six registered `al-runner.*` (v2) files gone with `itest:alrunner`.
   // R602: thirteen, with v3's multi-object and wrapped legs (pending their record run).
   // PR-144: fourteen, with leg RC's (recorded 2026-11-18).
-  test("the registry names fourteen gate baselines and their record commands", () => {
+  // PR-340: fifteen, with the carry gate's (pending its record run).
+  test("the registry names fifteen gate baselines and their record commands", () => {
     expect(Object.keys(GATE_BASELINES).sort()).toEqual([
+      "al-runner-v3.carry.baseline.json",
       "al-runner-v3.layout.baseline.json",
       "al-runner-v3.multiobject.baseline.json",
       "al-runner-v3.recheck.baseline.json",

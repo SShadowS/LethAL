@@ -69,7 +69,8 @@ export interface StreamCapabilities {
 const _streamCapsCover = (c: BackendCapabilities): StreamCapabilities => c;
 void _streamCapsCover;
 
-export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardown";
+/** PR-370 (R1189): `recheck` is the withheld-kill recheck's nested session, after `teardown`. */
+export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardown" | "recheck";
 
 /**
  * Why a baseline test did not pass — see `baseline-batch-finished`'s `verdicts[].classification`.
@@ -182,7 +183,13 @@ export type RunEventInput =
       readonly testCount?: number;
       readonly batchIndex?: number;
     }
-  | { readonly type: "phase-left"; readonly phase: RunPhase; readonly elapsedMs: number }
+  | {
+      readonly type: "phase-left";
+      readonly phase: RunPhase;
+      readonly elapsedMs: number;
+      /** PR-370: the `recheck` phase's nested session split ("nested: generate 12.0 s, ..."). */
+      readonly detail?: string;
+    }
   | {
       readonly type: "mutation-set-generated";
       readonly siteCount: number;
@@ -291,6 +298,22 @@ export type RunEventInput =
         readonly tier: "firm" | "uncertain-write" | "uncertain-read";
         readonly firstAccess: string;
       }>;
+    }
+  | {
+      /**
+       * PR-307 (R1168): the tests of this run's FINAL list that can change with the session kind (a client session or a headless
+       * one), emitted once, before anything is sent, only when there is at least one and `ciSessionKind` is set (unset, the
+       * session was refused). `backendSessionKind` is what this run's backend is; `ciSessionKind` is what the config says the
+       * user's CI runs. A label only; no verdict reads it. See `session-kind.ts`.
+       */
+      readonly type: "tests-session-kind-sensitive";
+      readonly tests: ReadonlyArray<{
+        readonly test: string;
+        readonly reasons: ReadonlyArray<"handlers" | "testpage" | "unreadable">;
+        readonly scanError?: string;
+      }>;
+      readonly backendSessionKind: "client" | "headless";
+      readonly ciSessionKind: "client" | "headless";
     }
   | {
       readonly type: "batch-published";
@@ -714,6 +737,8 @@ export type RunEventInput =
       };
       /** PR-250: present when the daemon-churn guard stopped the session: the lane, and its daemon closes in a row with no mutant scored. */
       readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
+      /** PR-277: the stop came after the main pass scored every mutant: nothing left out, the run finished, nothing to resume. */
+      readonly afterMainPass?: true;
     }
   | {
       /**

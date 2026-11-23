@@ -69,6 +69,7 @@
               "tests-testpage-unsupported",
               "tests-testpage-refused",
               "tests-restrictive-default-at-risk",
+              "session-kind-mismatch",
               "runner-disagreement",
               "stop-hung-sessions",
               "stop-answer-400",
@@ -93,7 +94,8 @@
               "nondebuggable-no-coverage",
               "withheld-kills",
               "isolated-recheck-kills",
-              "workdate-changed"
+              "workdate-changed",
+              "survivors-beside-unrun-tests"
             ]
           }
         },
@@ -218,6 +220,15 @@
                     "type": "string"
                   }
                 }
+              },
+              "companies": {
+                "type": "string"
+              },
+              "refusedCutTail": {
+                "const": true
+              },
+              "stopGroups": {
+                "const": true
               }
             }
           }
@@ -1192,6 +1203,36 @@
         }
       }
     },
+    "sessionKindSensitiveTests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "test",
+          "reasons"
+        ],
+        "properties": {
+          "test": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "handlers",
+                "testpage",
+                "unreadable"
+              ]
+            }
+          },
+          "scanError": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "baselineStopped": {
       "type": "object",
       "additionalProperties": false,
@@ -1207,6 +1248,31 @@
           }
         },
         "budgetMs": {
+          "type": "number"
+        }
+      }
+    },
+    "notRunAtBaseline": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "survivorsBesideUnrunTests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "survivors",
+        "notRunTests"
+      ],
+      "properties": {
+        "survivors": {
+          "type": "number"
+        },
+        "notRunTests": {
+          "type": "number"
+        },
+        "sharingACodeunit": {
           "type": "number"
         }
       }
@@ -1836,6 +1902,9 @@
               "type": "number"
             }
           }
+        },
+        "afterMainPass": {
+          "const": true
         }
       }
     },

@@ -1,0 +1,677 @@
+{
+  "about": "PR-361 (R1153 b): one REAL al-runner line per serve keep entry, copied from captured rows under /coord/handoff (the `from` path). al-runner's words are byte for byte; only a corpus value may be replaced by an invented one of the same shape. nearMiss: the real lines of R1153's 12 unproven entries, which no entry matches yet. Spec: docs/superpowers/specs/2026-11-23-pr361-keep-entries-real-lines.md",
+  "proven": [
+    {
+      "entry": "company-table-read",
+      "line": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      "from": "R-915/probe-out.json"
+    },
+    {
+      "entry": "company-table-read-named",
+      "line": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)",
+      "from": "PR-214/kept.ndjson"
+    },
+    {
+      "entry": "license-permission",
+      "line": "NotRun: out-of-scope: License Permission: only a count that names one object by type and number, or one object type with a license loaded, is served",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "entry": "api-webhook-entity",
+      "line": "NotRun: out-of-scope: API Webhook Entity: the entities of the API pages are listed by the platform and no corpus test pins them",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "entry": "page-action-promoted-area",
+      "line": "NotRun: out-of-scope: Page Action: page 'AL Test Tool': the rows of its Promoted area other than its actionrefs are not pinned (their ids, types and which exist)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "entry": "power-bi-blob",
+      "line": "NotRun: out-of-scope: IsEmpty on Power BI Blob: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "entry": "power-bi-default-selection",
+      "line": "NotRun: out-of-scope: IsEmpty on Power BI Default Selection: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "entry": "media-read",
+      "line": "NotRun: out-of-scope: Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "application-object-metadata",
+      "line": "NotRun: out-of-scope: Application Object Metadata: the Application Object Metadata row of table 'Object' (only a query's Metadata is pinned)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "entry": "permission-set-whole-object-type",
+      "line": "NotRun: out-of-scope: Permission: permission set 'All Objects': `table * = X` grants a whole object type (not listed row by row)",
+      "from": "PR-23/bc-check-expected/permission-denial.raw.json"
+    },
+    {
+      "entry": "denial-read-system-table",
+      "line": "NotRun: out-of-scope: a permission denial (read permission on object type 0 id 2000000120) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run",
+      "from": "PR-16/repros.json"
+    },
+    {
+      "entry": "denial-read-system-table-writes",
+      "line": "NotRun: out-of-scope: a permission denial (read permission on object type 0 id 2000000184) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media writes only); the test is not run",
+      "from": "PR-16/repros.json"
+    },
+    {
+      "entry": "denial-read-flowfield-system-table",
+      "line": "NotRun: out-of-scope: a permission denial (read permission on object type 0 id 2000000157) whose error is not pinned yet (a FlowField over a system table); the test is not run",
+      "from": "R-932/env-extmgmt-saas.json"
+    },
+    {
+      "entry": "denial-modify-missing-row",
+      "line": "NotRun: out-of-scope: a permission denial (modify permission on object type 0 id 50440) whose error is not pinned yet (on a row that does not exist (which error comes first is not pinned)); the test is not run",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "fieldref-method-never-assigned",
+      "line": "NotRun: out-of-scope: FieldRef.SetFilter on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.FieldRef_on_a_FieldRef_that_was_never_assigned.log"
+    },
+    {
+      "entry": "recordref-method-not-open",
+      "line": "NotRun: out-of-scope: RecordRef.KeyIndex on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.7-RecordRef_on_a_RecordRef_that_is_not_open.log"
+    },
+    {
+      "entry": "geturl-unpinned-object-type",
+      "line": "NotRun: out-of-scope: GetUrl(ClientType::Default or Windows) of object type Page with 5 arguments (only a page or a report, and a page with a record and UseFilters false, or true for Default, are pinned)",
+      "from": "PR-26/bc-check-expected/get-url.raw.json"
+    },
+    {
+      "entry": "geturl-phone-tablet-desktop",
+      "line": "NotRun: out-of-scope: GetUrl(Option member 'Phone'; the call had 4 arguments): for Phone, Tablet and Desktop only a company, a page or report with a positive id, and a page with a record and UseFilters false are pinned",
+      "from": "PR-26/bc-check-expected/get-url.raw.json"
+    },
+    {
+      "entry": "no-client-current-client-type",
+      "line": "NotRun: out-of-scope: CurrentClientType in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)",
+      "from": "R-907/noclient/sa-noclient.json"
+    },
+    {
+      "entry": "no-client-page-run",
+      "line": "NotRun: out-of-scope: Page.Run with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)",
+      "from": "R-907/noclient/vat-noclient.json"
+    },
+    {
+      "entry": "no-client-page-runmodal",
+      "line": "NotRun: out-of-scope: Page.RunModal with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)",
+      "from": "PR-23/bc-check-expected/no-client.raw.json"
+    },
+    {
+      "entry": "no-client-report-request-page-handler",
+      "line": "NotRun: out-of-scope: the request page of report \"Cell Report\" with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)",
+      "from": "PR-23/bc-check-expected/no-client.raw.json"
+    },
+    {
+      "entry": "no-client-run-request-page",
+      "line": "NotRun: out-of-scope: Report.RunRequestPage in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)",
+      "from": "PR-17/repros.json"
+    },
+    {
+      "entry": "dotnet-timezone-display-name",
+      "line": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.DisplayName: refused by policy: member 'System.TimeZoneInfo.DisplayName' (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host)",
+      "from": "PR-23/bc-check-expected/dotnet-no-object.raw.json"
+    },
+    {
+      "entry": "dotnet-timezone-get-utc-offset",
+      "line": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.GetUtcOffset: refused by policy: member 'System.TimeZoneInfo.GetUtcOffset' (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host); off Windows it runs only for one DateTime of the session clock's year, or on the zone of the id UTC made in process",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "entry": "dotnet-mock-graph-query",
+      "line": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery: refused by policy: server class 'Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery' is neither registered nor classified pure",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "dotnet-page-summary-get-summary-fields",
+      "line": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetSummaryFields: refused by policy: server class 'Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions' is neither registered nor classified pure",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "dotnet-page-summary-get-available-table-fields",
+      "line": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetAvailableTableFields: refused by policy: server class 'Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions' is neither registered nor classified pure",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "dotnet-learn-has-in-geo-support",
+      "line": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions.HasInGeoSupport: refused by policy: server class 'Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions' is neither registered nor classified pure",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "dotnet-copilot-gpt-token-count",
+      "line": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GptTokenCount: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-014 section 1)",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "register-table-connection-other-string",
+      "line": "NotRun: out-of-scope: RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)",
+      "from": "PR-30/bc-check-expected/table-connection.raw.json"
+    },
+    {
+      "entry": "crm-insert-through-table-connection",
+      "line": "NotRun: out-of-scope: Insert on a TableType = CRM table through a table connection: whether the table's triggers run is not pinned",
+      "from": "PR-30/bc-check-expected/table-connection.raw.json"
+    },
+    {
+      "entry": "company-open-subscriber-writes",
+      "line": "NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit \"U8013 Open Subscriber\".OnOpen writes the database in the test session before the first test, and this test can read table U8013 Open Row: what the test runner does with the writes is not pinned (ADR-046 amendment 1, A4 item 10)",
+      "from": "PR-28/repro/companyopen.json"
+    },
+    {
+      "entry": "find-empty-set-u8013",
+      "line": "NotRun: out-of-scope: Find on an empty set of table 'U8013 Find Row' without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)",
+      "from": "PR-30/repros.report.json"
+    },
+    {
+      "entry": "find-empty-set-time-zone",
+      "line": "NotRun: out-of-scope: Find on an empty set of table 'Time Zone' without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)",
+      "from": "PR-28/repro/misc.json"
+    },
+    {
+      "entry": "file-name-got-guid",
+      "line": "NotRun: out-of-scope: a file name, got Guid",
+      "from": "PR-28/repro/misc.json"
+    },
+    {
+      "entry": "sql-counter-stored",
+      "line": "NotRun: out-of-scope: storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead): the corpus pins only that a counter is not negative and the sign of its change around pinned operations, never a count",
+      "from": "PR-28/repro/misc.json"
+    },
+    {
+      "entry": "xmlport-unbound-text-element",
+      "line": "NotRun: out-of-scope: XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)",
+      "from": "PR-30/repros.report.json"
+    },
+    {
+      "entry": "feature-key-rollback",
+      "line": "NotRun: out-of-scope: a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)",
+      "from": "R-915/probe-out.json"
+    },
+    {
+      "entry": "setfilter-not-a-number",
+      "line": "NotRun: out-of-scope: SetFilter: `*hello*` is not a Decimal",
+      "from": "R-913/repro/run6-51227.json"
+    },
+    {
+      "entry": "blob-to-integer",
+      "line": "NotRun: out-of-scope: conversion of Blob to Integer",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "user-windows-sid",
+      "line": "NotRun: out-of-scope: a User with a Windows Security ID: the platform's uniqueness rule for it is not pinned",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "deleteall-filter-group-1",
+      "line": "NotRun: out-of-scope: DeleteAll on a record of a table with a filter in filter group 1 (the global group) that another record set: BC applies it to every record of the table for the session, the runtime does not",
+      "from": "R-902/repro-stream/run4.json"
+    },
+    {
+      "entry": "consistent-filter-group-1",
+      "line": "NotRun: out-of-scope: Consistent on a record of a table with a filter in filter group 1 (the global group) that another record set: BC applies it to every record of the table for the session, the runtime does not",
+      "from": "R-902/repro-stream/run4.json"
+    },
+    {
+      "entry": "autoformat-expression-procedure",
+      "line": "NotRun: out-of-scope: a control over table field Amount whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+      "from": "PR-05/repros-run.json"
+    },
+    {
+      "entry": "database-sid-no-user",
+      "line": "NotRun: out-of-scope: Database.SID without a user name (whose SID it answers is not pinned)",
+      "from": "PR-05/repro/a.json"
+    },
+    {
+      "entry": "clear-xmlwriteoptions",
+      "line": "NotRun: out-of-scope: Clear of a XmlWriteOptions value",
+      "from": "R-928/probe-ref/out.json"
+    },
+    {
+      "entry": "removecookie-last",
+      "line": "NotRun: out-of-scope: RemoveCookie of the last cookie of a request (what its Cookie header is then is not pinned)",
+      "from": "R-928/probe-ref/out.json"
+    },
+    {
+      "entry": "error-errorinfo-not-created",
+      "line": "NotRun: out-of-scope: Error with an ErrorInfo nobody created",
+      "from": "R-928/probe-ref/out.json"
+    },
+    {
+      "entry": "query-metadata-al-namespace",
+      "line": "NotRun: out-of-scope: the value of field 'AL Namespace' of platform table 'Query Metadata' is not known for any row: no corpus test pins it (docs/probes-needed.md)",
+      "from": "R-928/probe-ref/out.json"
+    },
+    {
+      "entry": "xml-name-empty",
+      "line": "NotRun: out-of-scope: XML name `` (only plain names without a prefix are pinned)",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "entry": "evaluate-now-date",
+      "line": "NotRun: out-of-scope: Evaluate of `11..NOW` into Date (form not pinned by the corpus)",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "entry": "evaluate-now-time",
+      "line": "NotRun: out-of-scope: Evaluate of `11:11:11..NOW` into Time (form not pinned by the corpus)",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "entry": "evaluate-format-2",
+      "line": "NotRun: out-of-scope: Evaluate with format number 2 (not pinned by the corpus)",
+      "from": "R-953/repro-batch8/out.json"
+    },
+    {
+      "entry": "httpclient-relative-path",
+      "line": "NotRun: out-of-scope: HttpClient with the relative request path `relative/path` and no base address: which error it raises is not measured (docs/probes-needed.md)",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "entry": "setfilter-value-expected",
+      "line": "NotRun: out-of-scope: SetFilter: value expected after @",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.SetFilter.log"
+    },
+    {
+      "entry": "evaluate-decimal-comparison",
+      "line": "NotRun: out-of-scope: Evaluate of `>100` into Decimal (form not pinned by the corpus)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.Evaluate_of_100_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "entry": "report-parameters-no-xml-declaration",
+      "line": "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.SaveAs (which character BC's filter error names is not pinned)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.a_parameters_string_without_the_XML_declaration_in_this_form.log"
+    },
+    {
+      "entry": "dotnet-zip-central-directory-corrupt",
+      "line": "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: Central Directory corrupt. <- System.IO.IOException: An attempt was made to move the position before the beginning of the stream.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-32/bc-check-expected/dotnet-exception.raw.json"
+    },
+    {
+      "entry": "dotnet-json-writer-no-token-to-close",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteEndObject raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path ''.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.DotNet_raised_the_NET_exception_.log"
+    },
+    {
+      "entry": "dotnet-json-writer-start-object-in-object",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'a'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.DotNet_raised_the_NET_exception_.log"
+    },
+    {
+      "entry": "boolean-false-to-biginteger",
+      "line": "NotRun: out-of-scope: conversion of Boolean false to BigInteger",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.conversion_of_Boolean_false_to_BigInteger.log"
+    },
+    {
+      "entry": "keyref-method-never-assigned",
+      "line": "NotRun: out-of-scope: KeyRef.FieldCount on a KeyRef that was never assigned",
+      "from": "R-913/repro/run7.json"
+    },
+    {
+      "entry": "setfilter-unexpected-gt-date-range",
+      "line": "NotRun: out-of-scope: SetFilter: unexpected `>` in filter `<-1M>..<CM>`",
+      "from": "PR-93/census2/t10-refusals/serve.t10-refusals.10-SetFilter.log"
+    },
+    {
+      "entry": "setfilter-date-text-no-form",
+      "line": "NotRun: out-of-scope: SetFilter: text filter value `-1M` for Date: no form pinned for this language (formulas and other region formats are not pinned, docs/probes-needed.md)",
+      "from": "PR-93/census2/t10-refusals/serve.t10-refusals.10-SetFilter.log"
+    },
+    {
+      "entry": "setfilter-not-a-biginteger",
+      "line": "NotRun: out-of-scope: SetFilter: `C*` is not a BigInteger",
+      "from": "PR-133/probe/run2.json"
+    },
+    {
+      "entry": "setfilter-empty-term",
+      "line": "NotRun: out-of-scope: SetFilter: empty filter term",
+      "from": "R-913/repro/run6-51225.json"
+    },
+    {
+      "entry": "page-run-recordref",
+      "line": "NotRun: out-of-scope: Page.Run with RecordRef as the record",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.5-Page_Run_with_RecordRef_as_the_record.log"
+    },
+    {
+      "entry": "page-run-unassigned-variant",
+      "line": "NotRun: out-of-scope: Page.Run with an unassigned Variant as the record",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.6-Page_Run_with_an_unassigned_Variant_as_the_record.log"
+    },
+    {
+      "entry": "recordref-gettable-text-not-a-record",
+      "line": "NotRun: out-of-scope: RecordRef.GetTable of Text 'Not a record'",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.8-RecordRef_GetTable_of_Text_Not_a_record_.log"
+    },
+    {
+      "entry": "report-saveas-id-zero",
+      "line": "NotRun: out-of-scope: Report.SaveAs#2 of id 0, which no report declares (error text not pinned)",
+      "from": "R-913/repro/run2.json"
+    },
+    {
+      "entry": "xmldocument-readfrom-not-instream",
+      "line": "NotRun: out-of-scope: XmlDocument.ReadFrom of something that is not an InStream",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.11-XmlDocument_ReadFrom_of_something_that_is_not_an_InStream.log"
+    },
+    {
+      "entry": "outstream-untouched-handle",
+      "line": "NotRun: out-of-scope: an OutStream was expected, got an untouched handle",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.13-an_OutStream_was_expected_got_an_untouched_handle.log"
+    },
+    {
+      "entry": "code-gl-to-biginteger",
+      "line": "NotRun: out-of-scope: conversion of Code 'GL00000000' to BigInteger",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.14-conversion_of_Code_GL00000000_to_BigInteger.log"
+    },
+    {
+      "entry": "calcdate-outside-range",
+      "line": "NotRun: out-of-scope: CalcDate result outside 0001-9999 (error text not pinned)",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.0-CalcDate_result_outside_0001_9999_error_text_not_pinned_.log"
+    },
+    {
+      "entry": "dotnet-json-writer-end-array-no-token",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteEndArray raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path ''.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-92/e1.raw.ndjson"
+    },
+    {
+      "entry": "dotnet-json-writer-property-in-array",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state Array would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-92/e1.raw.ndjson"
+    },
+    {
+      "entry": "fieldref-calcfield-not-flowfield",
+      "line": "NotRun: out-of-scope: FieldRef.CalcField of a field that is not a FlowField (not pinned)",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.0-FieldRef_CalcField_of_a_field_that_is_not_a_FlowField.log"
+    },
+    {
+      "entry": "evaluate-decimal-nul-run",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/probe/run1.json"
+    },
+    {
+      "entry": "conversion-text-to-blob",
+      "line": "NotRun: out-of-scope: conversion of Text '<?xml version=\"1.0\" encoding=\"...' to Blob",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.5-conversion_of_Text_xml_version_1_0_encoding_to_Blob.log"
+    },
+    {
+      "entry": "action-left-another-row",
+      "line": "NotRun: out-of-scope: an action left another row (another primary key) in Rec with changes to save (not pinned)",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.6-an_action_left_another_row_another_primary_key_in_Rec_with_c.log"
+    },
+    {
+      "entry": "conversion-text-to-integer",
+      "line": "NotRun: out-of-scope: conversion of Text '=18' to Integer",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.7-conversion_of_Text_18_to_Integer.log"
+    },
+    {
+      "entry": "copystream-untouched-to-dotnet",
+      "line": "NotRun: out-of-scope: CopyStream from an untouched handle into a DotNet stream",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.9-CopyStream_from_an_untouched_handle_into_a_DotNet_stream.log"
+    },
+    {
+      "entry": "report-saveas2-untouched-handle",
+      "line": "NotRun: out-of-scope: Report.SaveAs#2 to an untouched handle, which is not an OutStream",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.11-Report_SaveAs_2_to_an_untouched_handle_which_is_not_an_OutSt.log"
+    },
+    {
+      "entry": "recordref-gettable-integer-123",
+      "line": "NotRun: out-of-scope: RecordRef.GetTable of Integer 123",
+      "from": "PR-133/probe/run1.json"
+    },
+    {
+      "entry": "xml-unassigned-node",
+      "line": "NotRun: out-of-scope: use of an unassigned XmlNode",
+      "from": "PR-191/census/y2-xml/serve.y2-xml.0-use_of_an_unassigned_XmlNode.log"
+    },
+    {
+      "entry": "xml-unassigned-element",
+      "line": "NotRun: out-of-scope: use of an unassigned XmlElement",
+      "from": "PR-05/repros-run.json"
+    },
+    {
+      "entry": "xml-node-as-content",
+      "line": "NotRun: out-of-scope: XmlNode as XML content (only XML nodes and text are pinned)",
+      "from": "PR-191/census/y2-xml/serve.y2-xml.2-XmlNode_as_XML_content_only_XML_nodes_and_text_are_pinned_.log"
+    },
+    {
+      "entry": "xml-attribute-collection-other",
+      "line": "NotRun: out-of-scope: XmlAttributeCollection method on something else",
+      "from": "PR-191/census/y2-xml/serve.y2-xml.3-XmlAttributeCollection_method_on_something_else.log"
+    },
+    {
+      "entry": "xml-name-measured-chars",
+      "line": "NotRun: out-of-scope: XML name `+` (only plain names without a prefix are pinned)",
+      "from": "PR-191/census/y2-xml/serve.y2-xml.4-XML_name_only_plain_names_without_a_prefix_are_pinned_.log"
+    },
+    {
+      "entry": "collation-no-weight-measured",
+      "line": "NotRun: out-of-scope: ordering of the character U+516C (no collation weight)",
+      "from": "PR-195/v3.json"
+    },
+    {
+      "entry": "saveas-layout-statement",
+      "line": "NotRun: out-of-scope: an error in a SaveAs of report \"Standard Statement\", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): End Date must have a value.",
+      "from": "PR-354/keepcheck/kept.ndjson"
+    },
+    {
+      "entry": "saveas-layout-sales-invoice",
+      "line": "NotRun: out-of-scope: an error in a SaveAs of report \"Standard Sales - Invoice\", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): Tests cannot call the Commit function if TransactionModel property is set to AutoRollback.",
+      "from": "PR-245/kept.ndjson"
+    },
+    {
+      "entry": "relation-field-no-dimension-set-entry-dimension-code",
+      "line": "NotRun: out-of-scope: the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Code' of table 'Dimension Set Entry', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+      "from": "PR-255/dotnet/new.json"
+    },
+    {
+      "entry": "relation-field-no-sales-invoice-header-ship-to-post-code",
+      "line": "NotRun: out-of-scope: the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Ship-to Post Code' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+      "from": "PR-255/dotnet/new.json"
+    },
+    {
+      "entry": "relation-field-no-sales-invoice-header-dimension-set-id",
+      "line": "NotRun: out-of-scope: the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Set ID' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+      "from": "PR-255/dotnet/new.json"
+    },
+    {
+      "entry": "http",
+      "line": "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)",
+      "from": "R-612/probe/serve-rows.main.log"
+    },
+    {
+      "entry": "commit",
+      "line": "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned",
+      "from": "R-612/probe/serve-rows.main.log"
+    },
+    {
+      "entry": "cascade",
+      "line": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (UriSchemeThroughSystemApplication: did not run (dotnet-unavailable: DotNet 'System.Uri' the .NET runtime of BC build 28.): it can change session state the analysis does not follow, so the state it would have left is not BC's; this failure is not trusted: empty",
+      "from": "PR-295/repros-current.json"
+    },
+    {
+      "entry": "onrun-failed",
+      "line": "NotRun: out-of-scope: OnRun failed (runner behaviour not pinned): boom 537 onrun",
+      "from": "R-537/probe/out/run1/a2.M.json"
+    },
+    {
+      "entry": "dotnet-exception",
+      "line": "NotRun: out-of-scope: DotNet System.Convert.ToInt32 raised the .NET exception System.ArgumentException: Invalid Base.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-937/probe/out/types2.json"
+    },
+    {
+      "entry": "dotnet-no-object",
+      "line": "NotRun: out-of-scope: DotNet System.Uri.Host: 'System.Uri.Host' is an instance member and the variable holds no object",
+      "from": "PR-23/bc-check-expected/dotnet-no-object.raw.json"
+    },
+    {
+      "entry": "dotnet-assembly",
+      "line": "NotRun: out-of-scope: DotNet new Newtonsoft.Json.Linq.JObject: assembly 'Newtonsoft.Json' could not be loaded: FileNotFoundException: Could not load file or assembly 'Newtonsoft.Json, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified. Besides the .NET runtime's own assemblies, no folder was searched. To use it, pass a folder that holds Newtonsoft.Json.dll with --dotnet-assembly-dir.",
+      "from": "R-933/probe-nj/o-none.json"
+    },
+    {
+      "entry": "dotnet-member",
+      "line": "NotRun: out-of-scope: DotNet System.Uri.AbsoluteUri: property, field or method 'AbsoluteUri' not found on 'System.Uri'",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "entry": "dotnet-overload",
+      "line": "NotRun: out-of-scope: DotNet System.Convert.ToString: System.Convert.ToString has no overload taking 2 argument(s) of the given types (null, Int32)",
+      "from": "PR-135/repro/run1.json"
+    },
+    {
+      "entry": "stream-never-created",
+      "line": "NotRun: out-of-scope: use of an InStream that was never created",
+      "from": "R-913/repro/run3.json"
+    },
+    {
+      "entry": "dotnet-policy-timezone",
+      "line": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.Local: refused by policy: member 'System.TimeZoneInfo.Local' (time zone that bypasses the host)",
+      "from": "R-932/dn-crypto-none.json"
+    },
+    {
+      "entry": "platform-no-provider",
+      "line": "NotRun: out-of-scope: platform table 'File' (2000000022) has no provider",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "entry": "company-findset",
+      "line": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      "from": "R-915/probe-out.json"
+    },
+    {
+      "entry": "cascade-existing-state",
+      "line": "NotRun: out-of-scope: an earlier test of this codeunit, B_ChangesSeq, changed number sequence 'R937SEQ' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)",
+      "from": "R-989/restart/out/serve.I2.log"
+    },
+    {
+      "entry": "recordref-not-open",
+      "line": "NotRun: out-of-scope: RecordRef.FindSet on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "R-998/probe/out/oneshot.json"
+    },
+    {
+      "entry": "fieldref-never-assigned",
+      "line": "NotRun: out-of-scope: FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "from": "R-913/repro/run2.json"
+    },
+    {
+      "entry": "gettable-unassigned-variant",
+      "line": "NotRun: out-of-scope: RecordRef.GetTable of an unassigned Variant",
+      "from": "R-902/repro-stream/run4.json"
+    },
+    {
+      "entry": "stale-buffer-after-lock",
+      "line": "NotRun: out-of-scope: a stale R1009 Keep Row buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction (not pinned)",
+      "from": "R1009-keep/probe/out-edge-5a58a0f16-5a58a0f16/oneshot.json"
+    },
+    {
+      "entry": "gotokey-desc-last-row-above-window",
+      "line": "NotRun: out-of-scope: GoToKey on a list that opened on the last row of its descending view, with more rows above the rows it holds than a window (not pinned)",
+      "from": "R-942/lic-suite.json"
+    },
+    {
+      "entry": "setfilter-boolean-language-words",
+      "line": "NotRun: out-of-scope: SetFilter: a Boolean filter value under GlobalLanguage 1030 (the words of that language are not pinned)",
+      "from": "R-942/lic-suite.json"
+    },
+    {
+      "entry": "download-from-stream-needs-client",
+      "line": "NotRun: out-of-scope: File.DownloadFromStream needs a client (a browser round trip), which a headless run has not",
+      "from": "R-915/probe-out.json"
+    },
+    {
+      "entry": "zip-archive-invalid-data",
+      "line": "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "entry": "cascade-manual-binding",
+      "line": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (A1BindThenFail: failed (planted)) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: The binding of codeunit 51402 was unsuccessful. The codeunit has already been bound.",
+      "from": "PR-14/probe/out/oneshot.test.json"
+    },
+    {
+      "entry": "zip-dispose-over-held-bytes",
+      "line": "NotRun: out-of-scope: DotNet System.IO.Compression.ZipArchive.Dispose: a .NET write over the bytes an AL OutStream held before the call (what the Blob then holds is not pinned)",
+      "from": "R-942/lic-suite.json"
+    },
+    {
+      "entry": "format-region-std4",
+      "line": "NotRun: out-of-scope: Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned (docs/probes-needed.md)",
+      "from": "PR-18/probe/out/oneshot.cur.test.json"
+    },
+    {
+      "entry": "caption-no-source-table",
+      "line": "NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table (not pinned)",
+      "from": "R-942/lic-suite.json"
+    }
+  ],
+  "nearMiss": [
+    {
+      "entry": "geturl-company-characters",
+      "line": "NotRun: out-of-scope: GetUrl(ClientType::SOAP; the call had 2 arguments): a company of other characters than letters, digits and space (not pinned)",
+      "from": "PR-26/bc-check-expected/get-url.raw.json"
+    },
+    {
+      "entry": "geturl-object-type-or-arguments",
+      "line": "NotRun: out-of-scope: GetUrl(ClientType::ODataV4; the call had 5 arguments): this object type or argument list (not pinned)",
+      "from": "R-902/repro-stream/run4.json"
+    },
+    {
+      "entry": "dotnet-copilot-platform-authorization",
+      "line": "NotRun: out-of-scope: DotNet ALCopilotFunctions.IsPlatformAuthorizationConfigured for a Microsoft caller or other arguments (not pinned)",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "entry": "yaml-list-indent",
+      "line": "NotRun: out-of-scope: ReadFromYaml of a mapping item in a list at another indent than 4 (not pinned)",
+      "from": "PR-28/repro/yaml.json"
+    },
+    {
+      "entry": "yaml-null-or-number",
+      "line": "NotRun: out-of-scope: ReadFromYaml of a null form or a number other than `null` and a whole number (not pinned)",
+      "from": "PR-28/repro/yaml.json"
+    },
+    {
+      "entry": "yaml-blank-line-nested",
+      "line": "NotRun: out-of-scope: ReadFromYaml of a carriage return or a blank line in a nested, list or flow form (not pinned)",
+      "from": "PR-28/repro/yaml.json"
+    },
+    {
+      "entry": "yaml-flow-quoted-key",
+      "line": "NotRun: out-of-scope: ReadFromYaml of a flow mapping entry with this quoted key (not pinned)",
+      "from": "PR-05/repros-run.json"
+    },
+    {
+      "entry": "gotokey-statement-no-row",
+      "line": "NotRun: out-of-scope: GoToKey, GoToRecord or the move back of a Find...Field call, as a statement for a key no row has, on a page that is neither a list nor a part (not pinned)",
+      "from": "PR-05/repro/a.json"
+    },
+    {
+      "entry": "part-visible-other-shape",
+      "line": "NotRun: out-of-scope: an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a linked part without a repeater that was hidden since the page opened): the host page or its source table has other code, an extension, a subscriber or other properties than the measured one (not pinned)",
+      "from": "PR-05/repros-run.json"
+    },
+    {
+      "entry": "xmlport-import-header",
+      "line": "NotRun: out-of-scope: XmlPort import: the row of table element Header stored before its child rows is gone after them (not pinned)",
+      "from": "PR-05/repros-run.json"
+    },
+    {
+      "entry": "asdecimal-text-control",
+      "line": "NotRun: out-of-scope: AsDecimal of a Text control whose text has digits but is no number (not pinned)",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "entry": "page-no-record-onopenpage",
+      "line": "NotRun: out-of-scope: a page opened without a record whose OnOpenPage left Rec where its view has no row (not pinned)",
+      "from": "R-983/repro.current.json"
+    }
+  ]
+}

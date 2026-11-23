@@ -28,6 +28,7 @@ import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from ".
 import type { Interpretation } from "./interpretation";
 import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
+import { notRunLine, notRunSurvivors } from "./not-run-survivors";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import {
   PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
@@ -265,6 +266,7 @@ export type Caveat =
   | "tests-testpage-unsupported"
   | "tests-testpage-refused"
   | "tests-restrictive-default-at-risk"
+  | "session-kind-mismatch"
   | "runner-disagreement"
   | "stop-hung-sessions"
   | "stop-answer-400"
@@ -291,7 +293,9 @@ export type Caveat =
   // PR-144: the recheck recovered at least one withheld kill.
   | "isolated-recheck-kills"
   // R1131: at least one row was not scored because its start WorkDate moved from the batch's baseline.
-  | "workdate-changed";
+  | "workdate-changed"
+  // PR-381 (R1197): survivors in an al-runner-v3 run with tests v3 did not run at baseline.
+  | "survivors-beside-unrun-tests";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -458,6 +462,18 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "by parse: branches are not distinguished, and an access or a lowering inside another " +
       "codeunit is not seen, so a label can be wrong both ways and absence does not clear a run.",
     basis: "R1048",
+  },
+  "session-kind-mismatch": {
+    meaning:
+      "This run's backend runs its tests in a different session kind than the one `ciSessionKind` says your CI uses (a client " +
+      "session, GuiAllowed true, or a headless one, GuiAllowed false), and `sessionKindSensitiveTests` lists tests that can " +
+      "give a different result in the other kind: a test that binds HandlerFunctions, one the TestPage scan refuses " +
+      "(al-runner-v3 only), or one the scan could not read (al-runner-v3 only). bcdev runs headless; al-runner-v3 runs a " +
+      "client unless alRunnerV3.noClient is true.",
+    entailedNegative:
+      "Does NOT change a verdict, a count or `mutationScore`, and does not say a listed test differs: it says it can. A test " +
+      "that differs in a way the scan cannot see (an unhandled Confirm in app code) is not listed, so absence does not clear a run.",
+    basis: "R1168",
   },
   "runner-disagreement": {
     meaning:
@@ -738,7 +754,10 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "are not in the score. `timeBudget.unscheduledCount` counts those of the batch it stopped in; " +
       "`timeBudget.batchesNotStarted` counts the batches after it, which never started and whose " +
       "mutants are not counted. The run is not finished, so `--resume` continues it, carrying " +
-      "the verdicts already scored and running only the rest.",
+      "the verdicts already scored and running only the rest. Except when `timeBudget.afterMainPass` is set " +
+      "(PR-277): a signal (or guard) came after the main pass had scored every mutant, so nothing was left out, " +
+      "the run is finished and there is nothing to resume; only the withheld-kill recheck was cut short or not " +
+      "started, so its withheld kills stay error.",
     entailedNegative:
       "Not a statement about any mutant that was left out. Not a wrong verdict: every mutant that is " +
       "in the report ran to completion. Its test run was never cut short by the budget; only a " +
@@ -807,6 +826,24 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a wrong kill and not a wrong survivor: no verdict was taken under a moved date. Not a claim that " +
       "the baseline was wrong, and not a measure of how many rows a date move would have changed.",
     basis: "R1131",
+  },
+  "survivors-beside-unrun-tests": {
+    meaning:
+      "Some tests of this run could not be run to a verdict at baseline: the runner refused them, they " +
+      "timed out or LethAL stopped them (`notRunAtBaseline` names them; today it is filled for " +
+      "al-runner-v3 runs). Such a test kills nothing here, and there is no coverage for it, so a mutant that only it would kill reads " +
+      "`survived`. Every `survived` and `known-survivor` row of the run is flagged, and the " +
+      "`survivorsBesideUnrunTests` count is an UPPER BOUND on the survivors at risk. " +
+      "`sharingACodeunit` counts the survivors that carry the `[v3-refused-test-nearby]` note, a hint " +
+      "and not a bound (omitted when coverage is off). Evidence: on one DO run, 9 of 47 survivors " +
+      "were killed on BC by a test v3 had refused at baseline. To narrow the count, run the " +
+      "survivors on BC (`lethal run --confirm-from`). A static call-graph reach that names the " +
+      "survivors a refused test can reach was measured as no gain (PR-386, closed).",
+    entailedNegative:
+      "Not a wrong verdict, and not a claim that any one survivor is killable: no verdict moved and " +
+      "no score changed. A test that ran and failed on its own is not counted here: it is red on BC " +
+      "too.",
+    basis: "R1197",
   },
 };
 
@@ -1387,6 +1424,12 @@ export interface ExecutionContext {
    * bytes, never its contents. Only on directly measured al-runner-v3 entries, and only when set.
    */
   readonly license?: { readonly path: string; readonly sha256: string };
+  /** PR-282: the `alRunnerV3.companies` this run passed as `--companies`. Only on directly measured al-runner-v3 entries, and only when set. */
+  readonly companies?: string;
+  /** PR-297: `alRunnerV3.refusedCutTail` was ON: a green test after a baseline-refusal cut was measured alone. Only when on. */
+  readonly refusedCutTail?: true;
+  /** PR-256: `alRunnerV3.stopGroups` was ON: mutant requests carried per-entry stop groups. Only when on. */
+  readonly stopGroups?: true;
 }
 
 /** PR-247: one row of `SessionReport.costlyTests.top`. */
@@ -1762,6 +1805,17 @@ export interface SessionReport {
     readonly diagnosis: string;
   };
   /**
+   * PR-307 (R1168): the tests of the run's final list that can change with the session kind (a client session or a headless
+   * one): `handlers` (binds HandlerFunctions), `testpage` (al-runner-v3: the TestPage scan refuses it), `unreadable`
+   * (al-runner-v3: the scan could not read it; `scanError` is its text). LABELS ONLY. Absent when no test is sensitive. The
+   * caveat `session-kind-mismatch` is present when this run's backend kind differs from the config's `ciSessionKind`.
+   */
+  readonly sessionKindSensitiveTests?: ReadonlyArray<{
+    readonly test: string;
+    readonly reasons: ReadonlyArray<"handlers" | "testpage" | "unreadable">;
+    readonly scanError?: string;
+  }>;
+  /**
    * R658: baseline tests that ran past `--baseline-timeout-ms` (`budgetMs`) and that LethAL
    * stopped on the server (see `CAVEAT_INTERPRETATIONS["baseline-test-stopped"]`). They are
    * `timeout` rows, so not in `unsupportedTests`. Absent when no baseline test was stopped. A
@@ -1770,6 +1824,23 @@ export interface SessionReport {
   readonly baselineStopped?: {
     readonly tests: readonly string[];
     readonly budgetMs: number;
+  };
+  /**
+   * PR-381 (R1197): the baseline tests al-runner v3 did not run to a verdict: refused (NotRun), timed
+   * out or stopped by LethAL. Not a test that ran and failed (those are in `unsupportedTests`). Written
+   * on every al-runner-v3 report (`[]` when there are none), absent on bcdev: a v3 report without it
+   * predates it, and a reader says "not recorded in this report". Sorted qualified test names.
+   */
+  readonly notRunAtBaseline?: readonly string[];
+  /**
+   * PR-381 (R1197): present when `notRunAtBaseline` is non-empty and the run has a `survived` or
+   * `known-survivor` row (caveat `survivors-beside-unrun-tests`); see `notRunSurvivors`. An upper bound
+   * on the survivors at risk. `sharingACodeunit` is absent when coverage is off.
+   */
+  readonly survivorsBesideUnrunTests?: {
+    readonly survivors: number;
+    readonly notRunTests: number;
+    readonly sharingACodeunit?: number;
   };
   /**
    * R72: KILLED mutants whose site carries a recognised platform kill mechanism, or (R1121) whose
@@ -2240,6 +2311,12 @@ export interface SessionReport {
     };
     /** PR-250: the daemon-churn guard stopped the run: the lane whose al-runner-v3 serve daemon closed, and how many times in a row with no mutant scored. */
     readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
+    /**
+     * PR-277: the stop came after the main pass had scored every mutant (during the withheld-kill recheck, or just
+     * before it). Nothing was left out, the run is finished and there is nothing to resume; only the recheck was cut
+     * short, so its withheld kills stay error.
+     */
+    readonly afterMainPass?: true;
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
@@ -2317,6 +2394,21 @@ export const STRANDED_SKIP_INTERPRETATION: Interpretation = {
     "They are recorded `error` (score-excluded), never `survived`: the honest statement is `not " +
     "measured`, by either run.",
   basis: "R53",
+};
+
+/**
+ * PR-381 (R1197): an al-runner-v3 report with survivors that has no `notRunAtBaseline`: written before the
+ * field existed. Nothing is known about which baseline tests v3 did not run.
+ */
+export const NOT_RUN_NOT_RECORDED_INTERPRETATION: Interpretation = {
+  meaning:
+    "This al-runner-v3 report was written before it recorded which baseline tests v3 did not run " +
+    "(refused, timed out or stopped), so the `survivors-beside-unrun-tests` question is not answered " +
+    "for its survivors: tests not run at baseline are not recorded in this report. The count is the " +
+    "report's survivors.",
+  entailedNegative:
+    "Not a statement that no test was left unrun, and not a caveat: a re-run of the project records the field.",
+  basis: "R1197",
 };
 
 export interface MutantOutcome {
@@ -2888,6 +2980,9 @@ function buildExecutionContexts(
     readonly noClient?: true;
     readonly environment?: ExecutionContext["environment"];
     readonly license?: ExecutionContext["license"];
+    readonly companies?: string;
+    readonly refusedCutTail?: true;
+    readonly stopGroups?: true;
   },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
@@ -2917,6 +3012,9 @@ function buildExecutionContexts(
             ? { environment: runnerBuild.environment }
             : {}),
           ...(runnerBuild.license !== undefined ? { license: runnerBuild.license } : {}),
+          ...(runnerBuild.companies !== undefined ? { companies: runnerBuild.companies } : {}), // PR-282
+          ...(runnerBuild.refusedCutTail === true ? { refusedCutTail: true as const } : {}), // PR-297
+          ...(runnerBuild.stopGroups === true ? { stopGroups: true as const } : {}), // PR-256
         }
       : {}),
   };
@@ -3421,6 +3519,19 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     caveats.push("al-runner-v3-serve-default-fallback-warmup");
   // R907 - see CAVEAT_INTERPRETATIONS["al-runner-v3-coverage-off"].
   if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
+  // PR-381 (R1197) - see CAVEAT_INTERPRETATIONS["survivors-beside-unrun-tests"]. After the coverage-off
+  // push above: the count's hint part reads it.
+  // The field is filled for al-runner-v3 only in this PR (bcdev is PR-387): the fold's list is not read
+  // on bcdev, so a bcdev report prints and writes nothing new.
+  const notRunField =
+    input.caps.kind === "al-runner-v3" ? { notRunAtBaseline: input.notRunAtBaseline } : {};
+  const notRun = notRunSurvivors({
+    backend: input.caps.kind,
+    ...notRunField,
+    mutants,
+    validity: { caveats },
+  });
+  if (notRun !== undefined) caveats.push("survivors-beside-unrun-tests");
   // R912 - see CAVEAT_INTERPRETATIONS["time-budget-reached"].
   if (input.timeBudget !== undefined) caveats.push("time-budget-reached");
   // R1049 - see CAVEAT_INTERPRETATIONS["nondebuggable-no-coverage"]. The flag is a SITE property
@@ -3606,6 +3717,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     };
   })();
   if (restrictiveDefault !== undefined) caveats.push("tests-restrictive-default-at-risk");
+  // PR-307 (R1168): the label, and the caveat when the backend's session kind differs from the CI's.
+  const sessionKind = input.sessionKindSensitive;
+  if (sessionKind !== undefined && sessionKind.backendSessionKind !== sessionKind.ciSessionKind)
+    caveats.push("session-kind-mismatch");
   const narrowed =
     input.only !== undefined ||
     // R221: an exclusion narrows the measured scope like any other filter, so `reliability` must
@@ -3749,8 +3864,13 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         }
       : {}),
     ...(input.baselineStopped !== undefined ? { baselineStopped: input.baselineStopped } : {}),
+    ...notRunField,
+    ...(notRun !== undefined ? { survivorsBesideUnrunTests: notRun } : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
     ...(restrictiveDefault !== undefined ? { restrictiveDefault } : {}),
+    ...(sessionKind !== undefined && sessionKind.tests.length > 0
+      ? { sessionKindSensitiveTests: sessionKind.tests.map((t) => ({ ...t })) }
+      : {}),
     ...(likelyEquivalentSurvivors !== undefined ? { likelyEquivalentSurvivors } : {}),
     ...(readerMarkedEquivalent !== undefined ? { readerMarkedEquivalent } : {}),
     ...(assertionScreen !== undefined ? { assertionScreen } : {}),
@@ -4023,6 +4143,16 @@ export function renderConsole(r: SessionReport): string {
       `timeout-killed ${r.counts.timeoutKilled}, known-survivor ${r.counts.knownSurvivors}, ` +
       `error ${r.counts.errors} [unstable ${r.counts.unstable}${errorBreakdown(r)}])`,
   );
+  // PR-381 (R1197): beside the score, so a survivor count is never read without it. The same text
+  // follows the range and the withheld line below, which also speak of the score.
+  const notRunText = notRunLine(r);
+  if (notRunText !== undefined) {
+    lines.push(
+      r.survivorsBesideUnrunTests !== undefined
+        ? `${notRunText} (validity.caveats "survivors-beside-unrun-tests", R1197)`
+        : notRunText,
+    );
+  }
   // R844: the `error` rows are outside the score; say how far it could move had they run.
   // N is `counts.errors`, which already holds the deadline-exceeded and unstable rows, exactly the
   // rows `mutationScore` leaves out. With nothing scored (denominator 0) the range is 0% to 100%.
@@ -4036,7 +4166,7 @@ export function renderConsole(r: SessionReport): string {
         ? ` (${r.counts.deadlineExceeded} deadline-exceeded and ${r.counts.unstable} unstable are among them)`
         : "";
     lines.push(
-      `${n} mutant(s) errored${inside} and are not in the score; had they run, it would read ${pct(kills / (denom + n))} to ${pct((kills + n) / (denom + n))}.`,
+      `${n} mutant(s) errored${inside} and are not in the score; had they run, it would read ${pct(kills / (denom + n))} to ${pct((kills + n) / (denom + n))}.${notRunText !== undefined ? ` Its survivors: ${notRunText}.` : ""}`,
     );
   }
   // R1108: error rows whose covering test failed, but v3 withheld the failure. A lower bound.
@@ -4047,7 +4177,7 @@ export function renderConsole(r: SessionReport): string {
         ? ' Isolation "auto" scores most of them (R1102).'
         : ' They are in codeunits isolation "auto" kept on "test"; "method" runs them one test per session (R1102, #8218).';
     lines.push(
-      `at least ${withheld} of the ${r.counts.errors} error mutant(s) are withheld kills: a covering test failed under the mutant, but al-runner v3 did not trust the failure after an earlier test of its codeunit was refused, failed or ran out of time. The score leaves them out (validity.caveats "withheld-kills").${remedy}`,
+      `at least ${withheld} of the ${r.counts.errors} error mutant(s) are withheld kills: a covering test failed under the mutant, but al-runner v3 did not trust the failure after an earlier test of its codeunit was refused, failed or ran out of time. The score leaves them out (validity.caveats "withheld-kills").${remedy}${notRunText !== undefined ? ` The score's survivors: ${notRunText}.` : ""}`,
     );
   }
   // R1131: rows not scored because the start WorkDate moved from the batch's baseline (ruling A).
@@ -4206,6 +4336,15 @@ export function renderConsole(r: SessionReport): string {
     const firm = rd.tests.filter((t) => t.tier === "firm").length;
     lines.push(
       `RESTRICTIVE DEFAULT (${rd.issue}): ${rd.tests.length} test(s) pass here that BC would refuse (${firm} firm), and ${rd.kills.length} kill(s) and ${rd.survivors.length} survivor(s) rest on them; labelled, not changed (restrictiveDefault in the JSON report; fix: TestPermissions = Disabled, or lower permissions first).`,
+    );
+  }
+  // PR-307 (R1168): ONE line, only when the backend's session kind differs from the CI's.
+  if (
+    r.sessionKindSensitiveTests !== undefined &&
+    r.validity.caveats.includes("session-kind-mismatch")
+  ) {
+    lines.push(
+      `SESSION KIND: ${r.sessionKindSensitiveTests.length} test(s) can differ between a client and a headless session, and this run's backend is not your CI's kind (ciSessionKind); labelled, not changed (sessionKindSensitiveTests in the JSON report).`,
     );
   }
   // R658: a stopped baseline test reads as one more failing test otherwise.
@@ -4507,7 +4646,18 @@ export function renderConsole(r: SessionReport): string {
     );
   }
   // R912: a qualifier on the score: the mutants not reached are not in it.
-  if (r.timeBudget !== undefined) {
+  if (r.timeBudget?.afterMainPass === true) {
+    // PR-277: the stop came after every mutant was scored: nothing to resume.
+    const by =
+      r.timeBudget.stoppedByMemory !== undefined
+        ? "THE MEMORY GUARD"
+        : r.timeBudget.stoppedByDaemonChurn !== undefined
+          ? "THE DAEMON-CHURN GUARD"
+          : "SIGNAL (SIGTERM or SIGINT)";
+    lines.push(
+      `STOPPED BY ${by} AFTER THE MAIN PASS: every mutant was scored, so the stop left nothing unscheduled; the run is finished and there is nothing to resume. Only the withheld-kill recheck was cut short or not started, so its withheld kills stay error (PR-277).`,
+    );
+  } else if (r.timeBudget !== undefined) {
     const bs = r.timeBudget.baselineStopped;
     const mem = r.timeBudget.stoppedByMemory;
     const churn = r.timeBudget.stoppedByDaemonChurn;

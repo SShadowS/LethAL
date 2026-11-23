@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clipMutationText } from "@lethal/schemata";
-import { V3_NOT_RUN_SUFFIX } from "../src/al-runner-v3-backend";
+import { type V3DaemonClose, V3_NOT_RUN_SUFFIX } from "../src/al-runner-v3-backend";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -13,8 +13,11 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { TIME_BUDGET_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import type { RunEvent } from "../src/events";
+import { V3_DAEMON_CHURN_CLOSES } from "../src/mutant-windows";
 import { generateMutationSet, runSession } from "../src/orchestrator";
+import { CAVEAT_INTERPRETATIONS, renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { type RecheckRequest, recheckSiteKey, shouldRunRecheck } from "../src/withheld-recheck";
 
@@ -90,8 +93,21 @@ class StubBackend implements ExecutionBackend {
   private activations: Array<string | null> = [];
   constructor(
     readonly log: string[],
-    readonly opts: { methodIsolation?: boolean; serveEntries?: boolean; refuse?: boolean } = {},
+    readonly opts: {
+      methodIsolation?: boolean;
+      serveEntries?: boolean;
+      /** A number: only the first N mutant runs are refused (PR-277: the rest survive, so not every row errors). */
+      refuse?: boolean | number;
+      /** PR-277: called on each mutant run (1-based), before it answers. */
+      onMutantRun?: (n: number, b: StubBackend) => void;
+    } = {},
   ) {}
+  private mutantRuns = 0;
+  /** PR-277: the session's daemon-close sink (the PR-250 churn guard reads it). */
+  sink: ((c: V3DaemonClose) => void) | undefined;
+  setDaemonCloseSink(sink?: (c: V3DaemonClose) => void): void {
+    this.sink = sink;
+  }
   get methodIsolation(): boolean {
     return this.opts.methodIsolation === true;
   }
@@ -119,7 +135,15 @@ class StubBackend implements ExecutionBackend {
   }
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const active = this.activations.at(-1) ?? null;
-    if (active !== null && this.opts.refuse === true) {
+    if (active !== null) {
+      this.mutantRuns += 1;
+      this.opts.onMutantRun?.(this.mutantRuns, this);
+    }
+    const refuse = this.opts.refuse;
+    if (
+      active !== null &&
+      (refuse === true || (typeof refuse === "number" && this.mutantRuns <= refuse))
+    ) {
       return {
         ref,
         outcome: "error",
@@ -329,4 +353,259 @@ describe("runSession: the recheck hook", () => {
     expect(log).toEqual([]);
     expect(calls).toHaveLength(0);
   });
+});
+
+/**
+ * PR-277 (R1158), at the runSession level: a stopped session never starts the recheck and writes its report with
+ * the skip warning; a signal during a recheck that would block abandons it, so the session still ends.
+ */
+describe("PR-277: a stopped session skips the recheck; a signal abandons one in progress", () => {
+  type Hooks = {
+    stop?: () => void;
+    again?: () => void;
+  };
+  async function stoppedRun(o: {
+    onMutantRun?: (n: number, b: StubBackend, h: Hooks) => void;
+    runner?: (req: RecheckRequest) => Promise<never>;
+    timeBudgetSeconds?: number;
+    clockMs?: () => number;
+    refuse?: number;
+  }) {
+    const log: string[] = [];
+    const calls: RecheckRequest[] = [];
+    const events: RunEvent[] = [];
+    const h: Hooks = {};
+    const runner =
+      o.runner ??
+      (async (req: RecheckRequest) => {
+        log.push("runner");
+        calls.push(req);
+        return {
+          rows: [],
+          baseline: [{ name: "Sandbox Tests.T", outcome: "pass" as const }],
+          baselineElapsedMs: 1,
+          identity: {},
+        } as never;
+      });
+    const report = await withProject(async (projectDir, root) => {
+      const store = new ResultsStore(":memory:");
+      try {
+        const onMutantRun = o.onMutantRun;
+        return await runSession({
+          ...session(
+            projectDir,
+            root,
+            store,
+            new StubBackend(log, {
+              serveEntries: true,
+              refuse: o.refuse ?? true,
+              ...(onMutantRun !== undefined
+                ? { onMutantRun: (n: number, b: StubBackend) => onMutantRun(n, b, h) }
+                : {}),
+            }),
+          ),
+          emit: [(e) => events.push(e)],
+          recheck: { budgetSeconds: 30, runner },
+          registerStopSignal: (stop, again) => {
+            h.stop = stop;
+            h.again = again;
+            return () => {};
+          },
+          ...(o.timeBudgetSeconds !== undefined ? { timeBudgetSeconds: o.timeBudgetSeconds } : {}),
+          ...(o.clockMs !== undefined ? { clockMs: o.clockMs } : {}),
+        });
+      } finally {
+        store.close();
+      }
+    });
+    const skip = events.filter(
+      (e) => e.type === "warning" && e.code === "al-runner-v3-recheck-skipped-stopped",
+    );
+    return { log, calls, events, report, skip, h };
+  }
+
+  function expectSkipped(r: Awaited<ReturnType<typeof stoppedRun>>, stopName: string) {
+    expect(r.report.timeBudget).toBeDefined();
+    // No recheck: the runner never ran and the main daemons were never closed for it.
+    expect(r.calls).toHaveLength(0);
+    expect(r.log).toEqual([]);
+    expect(r.events.some((e) => e.type === "recheck-baseline-finished")).toBe(false);
+    expect(r.skip).toHaveLength(1);
+    const msg = r.skip[0]?.type === "warning" ? r.skip[0].message : "";
+    expect(msg).toContain(stopName);
+    expect(msg).toMatch(/[1-9]\d* withheld kill\(s\) stay error/);
+    // The report is written, its withheld kills still withheld (as with the recheck off).
+    expect(
+      r.report.mutants.some((m) => m.verdict === "error" && m.withheldKill !== undefined),
+    ).toBe(true);
+    expect(r.events.at(-1)?.type).toBe("session-finished");
+  }
+
+  test("stopped by a signal: no recheck, the report is written with the skip warning", async () => {
+    const r = await stoppedRun({ onMutantRun: (n, _b, h) => (n === 2 ? h.stop?.() : undefined) });
+    expect(r.report.timeBudget?.stoppedBySignal).toBe(true);
+    expectSkipped(r, "a SIGTERM or SIGINT");
+  });
+
+  test("stopped by the time budget: no recheck, the report is written with the skip warning", async () => {
+    let now = 0;
+    const r = await stoppedRun({
+      timeBudgetSeconds: 1,
+      clockMs: () => now,
+      // The second mutant's call spends the budget (the first is scored, a withheld kill).
+      onMutantRun: (n) => {
+        if (n === 2) now += 5_000;
+      },
+    });
+    expect(r.report.timeBudget?.stoppedBySignal).toBeUndefined();
+    expectSkipped(r, "the --time-budget");
+  });
+
+  test("stopped by the churn guard: no recheck, the report is written with the skip warning", async () => {
+    const r = await stoppedRun({
+      onMutantRun: (n, b) => {
+        if (n !== 1) return;
+        for (let i = 0; i < V3_DAEMON_CHURN_CLOSES; i++)
+          b.sink?.({ lane: 0, reason: "refusal", phase: "live" });
+      },
+    });
+    expect(r.report.timeBudget?.stoppedByDaemonChurn).toBeDefined();
+    expectSkipped(r, "the daemon-churn guard");
+  });
+
+  test("unstopped with targets: the recheck runs as before (control)", async () => {
+    const r = await stoppedRun({});
+    expect(r.report.timeBudget).toBeUndefined();
+    expect(r.skip).toHaveLength(0);
+    expect(r.log).toEqual(["closeDaemons", "runner"]);
+    expect(r.events.some((e) => e.type === "recheck-baseline-finished")).toBe(true);
+  });
+
+  test("a second signal during a recheck that would block: the session ends, the daemons are closed, rows stay error", async () => {
+    const log: string[] = [];
+    let hooks: Hooks | undefined;
+    const r = await stoppedRun({
+      refuse: 1,
+      onMutantRun: (_n, _b, h) => {
+        hooks = h;
+      },
+      runner: async (req) => {
+        log.push("runner");
+        // The first signal reached the session after its main pass (so it was not stopped); the second follows.
+        hooks?.stop?.();
+        hooks?.again?.();
+        expect(req.signal?.aborted).toBe(true);
+        return new Promise<never>(() => {}); // never settles: only the abort can end the recheck
+      },
+    });
+    expect(log).toEqual(["runner"]);
+    // Closed before the runner, and again by the second signal.
+    expect(r.log).toEqual(["closeDaemons", "closeDaemons"]);
+    expect(r.events.some((e) => e.type === "recheck-baseline-finished")).toBe(false);
+    const failed = r.events.find(
+      (e) => e.type === "warning" && e.code === "withheld-recheck-failed",
+    );
+    expect(failed?.type === "warning" ? failed.message : "").toContain("SIGTERM or SIGINT");
+    expectWithheldStayError(r.report);
+    expect(r.events.at(-1)?.type).toBe("session-finished");
+    // The report is a signal stop, so the CLI exits 7.
+    expect(r.report.timeBudget?.stoppedBySignal).toBe(true);
+    expect(exitCodeForReport(r.report)).toBe(TIME_BUDGET_EXIT_CODE);
+  });
+
+  test("ONE signal during a recheck: the nested run stops gracefully (not aborted), rows stay error, the report is a signal stop (exit 7)", async () => {
+    const seen: { stop: boolean | undefined; abort: boolean | undefined }[] = [];
+    let hooks: Hooks | undefined;
+    const r = await stoppedRun({
+      refuse: 1,
+      onMutantRun: (_n, _b, h) => {
+        hooks = h;
+      },
+      runner: async (req) => {
+        hooks?.stop?.();
+        // `stop` alone must not abort: only `again` does.
+        seen.push({ stop: req.stop?.aborted, abort: req.signal?.aborted });
+        return {
+          rows: [],
+          baseline: [{ name: "Sandbox Tests.T", outcome: "pass" as const }],
+          baselineElapsedMs: 1,
+          identity: {},
+        } as never;
+      },
+    });
+    expect(seen).toEqual([{ stop: true, abort: false }]);
+    // Closed once, before the runner: the second signal's close never ran.
+    expect(r.log).toEqual(["closeDaemons"]);
+    expect(r.events.some((e) => e.type === "mutant-rechecked")).toBe(false);
+    const failed = r.events.find(
+      (e) => e.type === "warning" && e.code === "withheld-recheck-failed",
+    );
+    expect(failed?.type === "warning" ? failed.message : "").toContain("stopped it");
+    expectWithheldStayError(r.report);
+    expect(r.report.timeBudget).toMatchObject({
+      stoppedBySignal: true,
+      unscheduledCount: 0,
+      afterMainPass: true,
+    });
+    expect(exitCodeForReport(r.report)).toBe(TIME_BUDGET_EXIT_CODE);
+    // The banner says nothing is left to resume; it never tells the user to --resume.
+    const text = renderConsole(r.report);
+    expect(text).toContain("STOPPED BY SIGNAL (SIGTERM or SIGINT) AFTER THE MAIN PASS");
+    expect(text).toContain("there is nothing to resume");
+    expect(text).not.toContain("--resume");
+  });
+
+  test("a normal signal stop (in the mutants phase) still says --resume, not 'after the main pass' (control)", async () => {
+    const r = await stoppedRun({ onMutantRun: (n, _b, h) => (n === 2 ? h.stop?.() : undefined) });
+    expect(r.report.timeBudget?.afterMainPass).toBeUndefined();
+    const text = renderConsole(r.report);
+    expect(text).toContain("Run with --resume to continue.");
+    expect(text).not.toContain("AFTER THE MAIN PASS");
+  });
+
+  test("the caveat's interpretation names the after-main-pass case", () => {
+    expect(CAVEAT_INTERPRETATIONS["time-budget-reached"].meaning).toContain(
+      "`timeBudget.afterMainPass`",
+    );
+    expect(CAVEAT_INTERPRETATIONS["time-budget-reached"].meaning).toContain(
+      "there is nothing to resume",
+    );
+  });
+
+  test("the churn guard tripping on the LAST mutant: a late time-budget-reached that carries the churn", async () => {
+    const total = (await stoppedRun({ refuse: 1 })).report.mutants.length;
+    expect(total).toBeGreaterThan(1);
+    const r = await stoppedRun({
+      refuse: 1,
+      onMutantRun: (n, b) => {
+        if (n !== total) return;
+        for (let i = 0; i < V3_DAEMON_CHURN_CLOSES; i++)
+          b.sink?.({ lane: 0, reason: "refusal", phase: "live" });
+      },
+    });
+    expect(r.report.timeBudget).toMatchObject({
+      stoppedByDaemonChurn: { lane: 0, closes: V3_DAEMON_CHURN_CLOSES },
+      afterMainPass: true,
+      unscheduledCount: 0,
+    });
+    expect(r.report.timeBudget?.stoppedBySignal).toBeUndefined();
+    expect(r.skip).toHaveLength(1); // the recheck did not start
+    expect(renderConsole(r.report)).toContain(
+      "STOPPED BY THE DAEMON-CHURN GUARD AFTER THE MAIN PASS",
+    );
+  });
+
+  test("no signal: no late time-budget-reached, exit 0 (control)", async () => {
+    const r = await stoppedRun({ refuse: 1 });
+    expect(r.events.some((e) => e.type === "time-budget-reached")).toBe(false);
+    expect(exitCodeForReport(r.report)).toBe(0);
+  });
+
+  function expectWithheldStayError(report: Awaited<ReturnType<typeof stoppedRun>>["report"]) {
+    const withheld = report.mutants.filter((m) => m.withheldKill !== undefined);
+    expect(withheld.length).toBeGreaterThan(0);
+    expect(withheld.every((m) => m.verdict === "error")).toBe(true);
+    // Not every row errors, so the exit code reads the stop, not "nothing scored".
+    expect(report.mutants.some((m) => m.verdict !== "error")).toBe(true);
+  }
 });

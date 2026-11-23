@@ -36,6 +36,7 @@ import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3AutoMethodOneShotRefusedError,
   AlRunnerV3Backend,
+  AlRunnerV3BaselineBatchingKnobRefusedError,
   AlRunnerV3BaselineUniformlyRefusedError,
   type AlRunnerV3Config,
   AlRunnerV3DependencyMissingError,
@@ -47,6 +48,7 @@ import {
   AlRunnerV3ServeStopUnsetError,
   AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
+  BASELINE_BATCHING_ENV,
   COST_READINGS_KEPT,
   ISOLATED_BASELINE_PROCESSES,
   MEMORY_WATCH_OVER_TICKS,
@@ -99,7 +101,7 @@ import type {
   V3RequestTimed,
 } from "../src/backend";
 import { buildBackend } from "../src/cli";
-import { baselineSourceTag } from "../src/orchestrator";
+import { baselineReachOf, baselineSourceTag, reachFromBaseline } from "../src/orchestrator";
 import { splitBackend } from "../src/parallel-queue";
 import type { SpawnFn } from "../src/publisher";
 import { installResourceSelector } from "../src/resource-selector";
@@ -1407,6 +1409,15 @@ describe("R885: demo data, on the serve path", () => {
     expect(on?.[(on?.indexOf("--license") ?? -2) + 1]).toBe("/l/x.bclicense");
     expect((await readyRig({ mutants: ["M0001"] })).serve.daemons[0] ?? []).not.toContain(
       "--license",
+    );
+  });
+
+  test("PR-282: the daemon argv carries --companies <value> only when it is set", async () => {
+    const on = (await readyRig({ mutants: ["M0001"], extra: { companies: "CRONUS,Other" } })).serve
+      .daemons[0];
+    expect(on?.[(on?.indexOf("--companies") ?? -2) + 1]).toBe("CRONUS,Other");
+    expect((await readyRig({ mutants: ["M0001"] })).serve.daemons[0] ?? []).not.toContain(
+      "--companies",
     );
   });
 
@@ -6917,7 +6928,12 @@ describe("R857: --isolate-tests", () => {
     const methods = ["A", "B", "C", "D", "E", "F"];
     const suite = methods.map((m) => ref(m));
     const rows: RowsFn = () => methods.map((method) => ({ method, status: "pass" as const }));
-    const opts = { ...ISOLATE, suite, oneShotRows: rows };
+    // PR-378: an answer is kept only when 2 x its wall time stays under the budget floor (cleanBaselineAnswer); a dropped one
+    // runs again alone, one more call. The fake holds each process for up to 100 timer ticks, measured on the real clock: about
+    // 1.6 s where a tick is 15.6 ms (Windows), so the rig's 1,000 ms floor dropped some answers there (CI 45144980326: 9 calls
+    // for 6 tests). A floor of an hour leaves the counts to the call counters alone.
+    const floor = [3_600_000, 3_600_000] as const;
+    const opts = { ...ISOLATE, suite, oneShotRows: rows, floor };
     const exactOf = (r: Rig) => r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]);
 
     test("every test once, at most four at a time, each verdict its own", async () => {
@@ -6934,7 +6950,7 @@ describe("R857: --isolate-tests", () => {
     test("--workers sets how many at a time: one, or more than four", async () => {
       for (const n of [1, 6]) {
         const extra = { isolateTests: true, isolatedBaselineProcesses: n };
-        const r = await rig({ extra, suite, oneShotRows: rows });
+        const r = await rig({ extra, suite, oneShotRows: rows, floor });
         await baseline(r.b, suite);
         expect(r.one.peak()).toBe(n);
         expect(r.one.calls).toHaveLength(methods.length);
@@ -12083,6 +12099,117 @@ describe("PR-115: batching the daemon baseline", () => {
       expect(q.body.test).toBeDefined();
       expect(q.body).not.toHaveProperty("coverage");
     }
+  });
+
+  /** PR-235: runs `fn` with LETHAL_V3_BASELINE_BATCHING set to `v` (unset when undefined), then restores it. */
+  async function withKnob<T>(v: string | undefined, fn: () => Promise<T>): Promise<T> {
+    const was = process.env[BASELINE_BATCHING_ENV];
+    if (v === undefined) delete process.env[BASELINE_BATCHING_ENV];
+    else process.env[BASELINE_BATCHING_ENV] = v;
+    try {
+      return await fn();
+    } finally {
+      if (was === undefined) delete process.env[BASELINE_BATCHING_ENV];
+      else process.env[BASELINE_BATCHING_ENV] = was;
+    }
+  }
+
+  test("PR-235 T-a: knob unset batches as today (one batch of two, then the lone codeunit)", async () => {
+    const r = await withKnob(undefined, () => bRig());
+    await baseline(r.b, SUITE3);
+    expect(r.serve.requests).toHaveLength(2);
+    const [batch, single] = r.serve.requests;
+    if (batch === undefined || single === undefined) throw new Error("two requests");
+    expect(isBatch(batch)).toBe(true);
+    expect(batch.body.excludeTests).toEqual([`Codeunit${CU3}.`, `Codeunit${ECHO}.`]);
+    expect(single.body.test).toBe(`Codeunit${CU3}.`);
+  });
+
+  test("PR-235 T-b: knob off sends one codeunit per request, each with coverage and perTestCoverage", async () => {
+    const r = await withKnob("off", () => bRig());
+    await baseline(r.b, SUITE3);
+    expect(r.serve.requests.map((q) => q.body.test)).toEqual([
+      `Codeunit${CU}.`,
+      `Codeunit${CU2}.`,
+      `Codeunit${CU3}.`,
+    ]);
+    for (const q of r.serve.requests) {
+      expect(q.body.coverage).toBe(true);
+      expect(q.body.perTestCoverage).toBe(true);
+    }
+  });
+
+  test("PR-235 T-c: a bad knob value is refused by name at construction, before any baseline request", async () => {
+    let sent = 0;
+    await expect(
+      withKnob("bogus", () =>
+        bRig({
+          serve: {
+            answer: () => {
+              sent++;
+              return undefined;
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow(AlRunnerV3BaselineBatchingKnobRefusedError);
+    await expect(withKnob("bogus", () => bRig())).rejects.toThrow(
+      `${BASELINE_BATCHING_ENV} is "bogus"; use off`,
+    );
+    expect(sent).toBe(0);
+  });
+
+  test("PR-235 T-d: an empty knob is the same as unset", async () => {
+    const r = await withKnob("", () => bRig());
+    await baseline(r.b, SUITE3);
+    expect(r.serve.requests).toHaveLength(2);
+    expect(r.serve.requests.map((q) => isBatch(q))).toEqual([true, false]);
+  });
+
+  test("PR-235 T-f: knob off, each single baseline request gives its own test's lines, and R926's reach reads exactly [A] and exactly [B]", async () => {
+    // The first method of a codeunit hits line 5 of the target, the second the NEXT line, 6 (per-test, line grain).
+    const own: CoverageFn = (_m, cu, active) => {
+      const file = join(active, "Logic.Codeunit.al");
+      const methods = SUITE_METHODS[cu] ?? [];
+      return {
+        coverage: [{ file, statements: methods.map((_m2, i) => ({ line: 5 + i, hits: 1 })) }],
+        perTestCoverage: methods.map((m, i) => ({
+          test: `Codeunit${cu}.${m}`,
+          coverage: [{ file, statements: [{ line: 5 + i, hits: 1 }] }],
+        })),
+      };
+    };
+    const r = await withKnob("off", () =>
+      bRig({
+        oneShotCoverage: own,
+        serve: { coverage: own },
+        extra: { coverage: "al-runner", daemonBaseline: true },
+      }),
+    );
+    const v = await baseline(r.b, SUITE3);
+    const linesOf = (x: TestVerdict | undefined): number[] =>
+      (x?.coverage?.entries ?? []).map((e) => e.line ?? -1);
+    const [a, b] = v;
+    if (a === undefined || b === undefined) throw new Error("two verdicts");
+    expect(a.coverage?.granularity).toBe("line");
+    expect(linesOf(a)).toEqual([5]);
+    expect(linesOf(b)).toEqual([6]);
+    expect(r.serve.requests.every((q) => q.body.test !== undefined)).toBe(true);
+    const rows = [a, b].map((verdict) => ({ ref: verdict.ref, verdict }));
+    const evidence = baselineReachOf(rows, new Set([a.ref, b.ref]), { isolationOf: () => "test" });
+    const entry = a.coverage?.entries[0];
+    if (entry === undefined) throw new Error("A has coverage");
+    const at = (line: number) => ({
+      reachGrain: "statement" as const,
+      reachLine: line,
+      objectType: entry.objectType,
+      codeunitId: entry.objectId,
+    });
+    const reach = (line: number) =>
+      reachFromBaseline(at(line), [a.ref, b.ref], evidence, () => "test");
+    const names = (line: number) => reach(line)?.reachedBy.map((n) => n.split(".").pop());
+    expect(names(5)).toEqual(["A"]); // exactly [A]
+    expect(names(6)).toEqual(["B"]); // the next line: exactly [B], no union and no shift
   });
 
   test("a batch request that fails keeps nothing: each codeunit is re-sent alone", async () => {

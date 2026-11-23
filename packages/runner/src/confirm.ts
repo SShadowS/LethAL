@@ -23,7 +23,9 @@ import {
 } from "@lethal/schemata";
 import { V3_REFUSED_NEARBY_TAG } from "./al-runner-v3-backend";
 import { type BackendKind, isBcdev } from "./backend";
+import { SURVIVING_VERDICTS } from "./equivalence-marks";
 import { keyOf } from "./mutant-key";
+import { notRunLine, notRunSurvivors } from "./not-run-survivors";
 import { failureTextMechanisms } from "./platform-artifact-kills";
 import type { MutantOutcome, SessionReport } from "./report";
 
@@ -515,7 +517,8 @@ export function narrowToConfirmed(
 // --- the merged artifact --------------------------------------------------------------------
 
 export const CONFIRMATION_KIND = "lethal-confirmation";
-export const CONFIRMATION_VERSION = 1;
+// 2: PR-381 (R1197) added `totals.survivorsBesideUnrunTests` and the not-run text in `totals.provenance`.
+export const CONFIRMATION_VERSION = 2;
 
 export type ConfirmationGroup = ConfirmGroup | "unconfirmed";
 export type ConfirmationMeasuredBy = "bcdev" | "al-runner-v3";
@@ -550,8 +553,16 @@ export interface ConfirmationTotals {
   /** (killed + timeout-killed) / (killed + timeout-killed + survived) over the FINAL verdicts, or
    *  null. Never read without `provenance`. */
   readonly score: number | null;
-  /** "N survivors, M of them measured on BC": printed beside every score. */
+  /** "N survivors, M of them measured on BC": printed beside every score. PR-381 (R1197): then, for an
+   *  al-runner-v3 run with tests not run at baseline, `notRunSentence` over the survivors still
+   *  measured by v3 (or "tests not run at baseline: not recorded in this report"). */
   readonly provenance: string;
+  /** PR-381 (R1197): the counts behind that sentence; absent when it does not apply. */
+  readonly survivorsBesideUnrunTests?: {
+    readonly survivors: number;
+    readonly notRunTests: number;
+    readonly sharingACodeunit?: number;
+  };
 }
 
 export interface ConfirmationSample {
@@ -719,12 +730,12 @@ export function mergeConfirmation(p: MergeInput): Confirmation {
     },
     seed: block.seed,
     mutants,
-    totals: totalsOf(mutants),
+    totals: totalsOf(mutants, v3),
     sample: sampleOf(mutants, block.sample, v3),
   };
 }
 
-function totalsOf(mutants: readonly ConfirmationMutant[]): ConfirmationTotals {
+function totalsOf(mutants: readonly ConfirmationMutant[], v3: SessionReport): ConfirmationTotals {
   const byFinalVerdict: Record<string, number> = {};
   const byMeasuredBy: Record<string, number> = {};
   for (const m of mutants) {
@@ -736,12 +747,26 @@ function totalsOf(mutants: readonly ConfirmationMutant[]): ConfirmationTotals {
   const survivorsOnBc = mutants.filter(
     (m) => m.finalVerdict === "survived" && m.measuredBy === "bcdev",
   ).length;
+  // PR-381 (R1197): only a survivor still measured by v3 can hide a kill a refused test would make;
+  // one BC measured is settled.
+  const stillV3 = new Set(
+    mutants
+      .filter((m) => m.measuredBy === "al-runner-v3" && SURVIVING_VERDICTS.has(m.finalVerdict))
+      .map((m) => m.key),
+  );
+  // The stored result counts the whole run: this subset is recomputed, so the field is left out.
+  const { survivorsBesideUnrunTests: _stored, ...v3Rest } = v3;
+  const view = { ...v3Rest, mutants: v3.mutants.filter((m) => stillV3.has(keyOf(m))) };
+  const notRun = notRunSurvivors(view);
+  const notRunText = notRunLine(view);
   return {
     byFinalVerdict,
     byMeasuredBy,
     bcStubKills: mutants.filter((m) => m.flags.includes("linux-rdlc-stub")).length,
     score: killed + survived === 0 ? null : killed / (killed + survived),
-    provenance: `${survived} survivors, ${survivorsOnBc} of them measured on BC`,
+    // Known-survivors count as survivors, as the not-run sentence counts them.
+    provenance: `${survived + (byFinalVerdict["known-survivor"] ?? 0)} survivors, ${survivorsOnBc} of them measured on BC${notRunText !== undefined ? `; ${notRunText}` : ""}`,
+    ...(notRun !== undefined ? { survivorsBesideUnrunTests: notRun } : {}),
   };
 }
 

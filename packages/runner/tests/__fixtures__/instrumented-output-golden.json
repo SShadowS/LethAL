@@ -32,6 +32,18 @@
       "sha256": "1fd3c54126c351075a06fe0e4d7c54aa52b7c92f3587292b587622e10106583a",
       "mutants": 6
     },
+    "fixtures/sandbox-carry-tests/src/SlProbeTests.Codeunit.al": {
+      "sha256": "b8e744a7142b44a00e30ff214a7e4728e94706ffbffa9a77ae569294643ccc65",
+      "mutants": 17
+    },
+    "fixtures/sandbox-carry/src/SlProbeLogic.Codeunit.al": {
+      "sha256": "ae936dc55f04d505096fda15c470a58ca38ca26dfb75d8c850bc0b8ad846f70c",
+      "mutants": 5
+    },
+    "fixtures/sandbox-carry/src/SlProbeState.Codeunit.al": {
+      "sha256": "37f532ee1b7abe25fc02ae12a9eac1fd15c5bd70b50759fd91765efb25c62975",
+      "mutants": 8
+    },
     "fixtures/sandbox-codefree-tests/src/CFTests.Codeunit.al": {
       "sha256": "d1fa22a4397c7e5183af981a8feaed06ac8743a6eac4df2d4ce3c77adc9abcf8",
       "mutants": 102
@@ -281,8 +293,8 @@
       "mutants": 6
     },
     "fixtures/sandbox-optin/src/OptinLogic.Codeunit.al": {
-      "sha256": "37dd478e1e04aa9d4fbdb09f867668e7250466024e29ecffd74bb49877baa970",
-      "mutants": 126
+      "sha256": "378617dece4faf6d6482b00056318b9de10a5ee7b88104a2b2ce84db851232ee",
+      "mutants": 125
     },
     "fixtures/sandbox-order-tests/src/OrderProbe.al": {
       "sha256": "9a724c16b7ed625a44c36e4f6c8116f3b8a33fe575bf6da878ecfa7d8a4ad180",
@@ -375,6 +387,18 @@
     "fixtures/sandbox-probes/src/WriteTxnTarget.Codeunit.al": {
       "sha256": "c77d9f7138ebb73958ca87d891170f8661e643db7f661e226d5d5fcb3e9db27f",
       "mutants": 7
+    },
+    "fixtures/sandbox-reach-tests/src/ReachTests.al": {
+      "sha256": "bda01b18b06124677f577a1de5f8cc76aa0ca0bc57dbfcad9b77e5531f8c6229",
+      "mutants": 37
+    },
+    "fixtures/sandbox-reach/src/ReachLogic.al": {
+      "sha256": "4d4f4499054e9df3fb7e920fe1e4c0a92c9f4021b46ce1ea9bcdd4b4664438cb",
+      "mutants": 89
+    },
+    "fixtures/sandbox-reach/src/ReachState.al": {
+      "sha256": "f6325098b90b69576500f27754d0ed921939ea8fca1dc02738f588531e77476f",
+      "mutants": 5
     },
     "fixtures/sandbox-recheck-tests/src/RecheckTests.Codeunit.al": {
       "sha256": "961ccbb6ec1a6d66ad7212908352ed95dedfcb919a1eafbe5d23083e024e1d2b",

@@ -221,6 +221,7 @@ describe("Caveat union", () => {
       "tests-testpage-unsupported": true,
       "tests-testpage-refused": true,
       "tests-restrictive-default-at-risk": true,
+      "session-kind-mismatch": true,
       "runner-disagreement": true,
       "stop-hung-sessions": true,
       "stop-answer-400": true,
@@ -246,8 +247,9 @@ describe("Caveat union", () => {
       "withheld-kills": true,
       "isolated-recheck-kills": true,
       "workdate-changed": true,
+      "survivors-beside-unrun-tests": true,
     };
-    expect(Object.keys(all).length).toBe(37);
+    expect(Object.keys(all).length).toBe(39);
   });
 });
 

@@ -22,9 +22,10 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { isV3RefusalText } from "./al-runner-rows";
+import { V3_TIMEOUT_MESSAGE, isV3RefusalText } from "./al-runner-rows";
 import {
   AlRunnerServer,
+  AlRunnerServerRequestError,
   type ServerSpawnFn,
   type ServerTestLine,
   V3_SERVE_SAFE_REFUSALS,
@@ -1167,7 +1168,7 @@ const plainFailMessage = (
  * one-shot; commit and onrun-failed are still refusals there). R1000: the fourth says a plain pass
  * is accepted (a build that measures the case runs the test).
  */
-const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = [
+export const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = [
   ["http", "Codeunit50670.HttpGet", true, false],
   ["commit", "Codeunit50671.CommitCall", false, false],
   ["cascade", "Codeunit50672.LaterFails", true, false],
@@ -1237,6 +1238,23 @@ const unkeptRefusal = (r: ServerTestLine | undefined): boolean =>
     Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(r.message ?? ""))
   );
 
+/**
+ * PR-363 (R1152): one generated app per refusal family (`scripts/pr363-legc-keep-apps.ts`); each holds only the
+ * cells chosen for the keep entries that family can produce, and gets its own fresh daemon and request.
+ */
+export interface V3KeepApp {
+  readonly family: string;
+  /** The app folder (a `sourcePaths` entry). */
+  readonly dir: string;
+  /** The entry each test must be refused under, and the serve test name (`Codeunit<id>.<method>`). */
+  readonly cases: readonly { readonly entry: string; readonly name: string }[];
+}
+
+/** PR-363: how many family apps the generator pins; fewer in `V3ProbeEnv.keepApps` reads `unmeasurable`. */
+export const V3_KEEP_APP_FAMILIES = 10;
+/** PR-363 (build review L1): how many cases the family apps pin in all; a manifest with another count is `unmeasurable`. */
+export const V3_KEEP_CASES = 47;
+
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
 const SERVE_TEST_TIMEOUT_S = 3;
 const SERVE_DEADLINE_MS = 120_000;
@@ -1265,7 +1283,22 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty-three codeunits, a report, two pages and four tables (twenty-four tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty-three codeunits, a report, two pages and four tables (twenty-four tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}; then (PR-363) one more fresh daemon and request per refusal family (${V3_KEEP_APP_FAMILIES} apps), each judged on its own rows: every chosen case a refusal under its own entry, no plain fail or pass allowed, and every refused row of the request kept`;
+  // PR-363: never run the old request alone, which would read exactly as it did before the family apps.
+  const keepApps = env.keepApps;
+  const keepCases = keepApps?.reduce((n, a) => n + a.cases.length, 0) ?? 0;
+  if (
+    keepApps === undefined ||
+    keepApps.length < V3_KEEP_APP_FAMILIES ||
+    keepCases !== V3_KEEP_CASES
+  )
+    return fact(
+      "serve-keep-reasons",
+      "warn",
+      "unmeasurable",
+      expected,
+      `the family apps are missing or short: ${keepApps === undefined ? "none given" : `${keepApps.length} of ${V3_KEEP_APP_FAMILIES} families, ${keepCases} of ${V3_KEEP_CASES} cases`} (PR-363; run scripts/pr363-legc-keep-apps.ts --out <dir>)`,
+    );
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
@@ -1346,16 +1379,80 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
       );
     }
   }
+  // PR-363: each family app on its OWN fresh daemon, started as the one above, judged on its OWN rows
+  // (every app names its tests `Codeunit5100x.Cell`, so rows of two requests must never be merged).
+  const unmeasured: string[] = [];
+  let caseCount = SERVE_CASES.length;
+  for (const app of keepApps) {
+    caseCount += app.cases.length;
+    const fam = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
+    let res: Awaited<ReturnType<AlRunnerServer["runTests"]>>;
+    try {
+      await fam.start(
+        SERVE_DEADLINE_MS,
+        [],
+        SERVE_TEST_TIMEOUT_S,
+        env.environment !== undefined ? ["--environment", env.environment] : [],
+      );
+      res = await fam.runTests(
+        { sourcePaths: [app.dir], testIsolation: "test" },
+        SERVE_DEADLINE_MS,
+      );
+    } catch (err) {
+      unmeasured.push(`${app.family}: ${String(err)}`);
+      continue;
+    } finally {
+      await fam.close();
+    }
+    if (res.tests.length === 0) {
+      unmeasured.push(
+        `${app.family}: the request returned no test row at all (compilationErrors: ${JSON.stringify(res.compilationErrors)})`,
+      );
+      continue;
+    }
+    const names = new Set(app.cases.map((c) => c.name));
+    for (const t of res.tests)
+      if (!names.has(t.name) && unkeptRefusal(t))
+        unkept.push(`${app.family} (unjudged): UNKEPT ${t.name}: ${t.message ?? "(no message)"}`);
+    for (const c of app.cases) {
+      const r = res.tests.find((t) => t.name === c.name);
+      if (unkeptRefusal(r)) {
+        unkept.push(`${app.family} ${c.entry}: UNKEPT ${c.name}: ${r?.message ?? "(no message)"}`);
+        continue;
+      }
+      const ok =
+        r !== undefined &&
+        r.notRun === true &&
+        r.status === "error" &&
+        r.message !== undefined &&
+        V3_SERVE_SAFE_REFUSALS[c.entry]?.test(r.message) === true;
+      if (ok) how.push(`${c.entry}: refusal`);
+      else
+        moved.push(
+          `${app.family} ${c.entry}: MOVED ${r === undefined ? `no row ${c.name}` : `${r.status} notRun=${String(r.notRun)} ${r.message ?? ""}`}`,
+        );
+    }
+  }
+  const verdict =
+    unkept.length > 0
+      ? "unkept"
+      : unmeasured.length > 0
+        ? "unmeasurable"
+        : moved.length === 0
+          ? "matches"
+          : "diverged";
   return fact(
     "serve-keep-reasons",
     "warn",
-    unkept.length > 0 ? "unkept" : moved.length === 0 ? "matches" : "diverged",
+    verdict,
     expected,
     unkept.length > 0
-      ? [...unkept, ...moved].join("; ")
-      : moved.length === 0
-        ? `the keep rule accepts every row of all ${SERVE_CASES.length} entries (${how.join(", ")})`
-        : moved.join("; "),
+      ? [...unkept, ...unmeasured, ...moved].join("; ")
+      : unmeasured.length > 0
+        ? [...unmeasured, ...moved].join("; ")
+        : moved.length === 0
+          ? `the keep rule accepts every row of all ${caseCount} entries (${how.join(", ")})`
+          : moved.join("; "),
   );
 }
 
@@ -1401,6 +1498,11 @@ export interface V3ProbeEnv {
   readonly gateOnlyTrusted?: string;
   /** PR-114a test hook: the deadline of one capability-fact request (default `SERVE_DEADLINE_MS`). */
   readonly serveDeadlineMs?: number;
+  /**
+   * PR-363: the family apps for `serve-keep-reasons` (the generator's manifest). Absent, or fewer than
+   * `V3_KEEP_APP_FAMILIES`: that fact reads `unmeasurable`.
+   */
+  readonly keepApps?: readonly V3KeepApp[];
   /** R612 test hook: the `serve` daemon for `serve-keep-reasons` (default: the real binary). */
   readonly serveSpawn?: ServerSpawnFn;
   /**
@@ -1510,6 +1612,16 @@ export const V3_CAPABILITY_FACTS = [
   "batch-lane-hint-only",
   "batch-lane-strict-reruns",
 ] as const;
+
+/**
+ * PR-340 §4: the carry fact. It is NOT in `V3_CAPABILITY_FACTS` on purpose: those eight gate baseline
+ * batching (`baselineBatchingOffReason`, the update script's record rule, DBM's seam), and a build with
+ * no record of this one must read "not carry-proven", never move batching or any other fact. It is a
+ * ninth batch-shaped probe fact, judged by leg C's default table (`matches`); its reading rides in the
+ * receipt's and `.gated`'s `batchFacts` map beside the eight, and `carryWalkOffReason` reads it.
+ * Its own server starts with `AL_STRICT_SEQUENTIAL=1`; the other facts' servers do not.
+ */
+export const V3_CARRY_FACT = "batch-sequential-carry";
 
 const batchSpareAl = (id: number): string => `codeunit ${id} "Batch Spare"
 {
@@ -1859,6 +1971,57 @@ codeunit ${b + 3} "Batch Lane Reader"
 
 ${batchSpareAl(b + 4)}`;
 
+/**
+ * PR-340: a SingleInstance store, a writer that leaves 5 in it and a reader that FAILS on any store
+ * not 0 (the leak detector the carry walk relies on). ids b+1 .. b+4 (the spare is b+4).
+ */
+const batchCarryAl = (b: number): string => `codeunit ${b + 1} "Carry Probe Store"
+{
+    SingleInstance = true;
+
+    var
+        Stored: Integer;
+
+    procedure SetValue(V: Integer)
+    begin
+        Stored := V;
+    end;
+
+    procedure GetValue(): Integer
+    begin
+        exit(Stored);
+    end;
+}
+
+codeunit ${b + 2} "Carry Probe Writer"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure LeavesFive()
+    var
+        S: Codeunit "Carry Probe Store";
+    begin
+        S.SetValue(5);
+    end;
+}
+
+codeunit ${b + 3} "Carry Probe Reader"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure WantsZero()
+    var
+        S: Codeunit "Carry Probe Store";
+    begin
+        if S.GetValue() <> 0 then
+            Error('carried %1', S.GetValue());
+    end;
+}
+
+${batchSpareAl(b + 4)}`;
+
 interface BatchRow {
   readonly name: string;
   readonly status: string;
@@ -1873,7 +2036,9 @@ interface BatchAnswer {
 type BatchAsk = (extra: Record<string, unknown>) => Promise<BatchAnswer>;
 
 interface BatchFactSpec {
-  readonly fact: (typeof V3_CAPABILITY_FACTS)[number];
+  readonly fact: (typeof V3_CAPABILITY_FACTS)[number] | typeof V3_CARRY_FACT;
+  /** PR-340: extra environment for this fact's OWN server (the carry fact only); absent: the shared server. */
+  readonly serverEnv?: Readonly<Record<string, string>>;
   /** The first of the fact's ten ids. */
   readonly base: number;
   readonly al: string;
@@ -2055,16 +2220,64 @@ const BATCH_FACTS: readonly BatchFactSpec[] = [
       };
     },
   },
+  {
+    fact: V3_CARRY_FACT,
+    // Its own server, started with AL_STRICT_SEQUENTIAL=1; no other fact's server gets the variable.
+    serverEnv: { AL_STRICT_SEQUENTIAL: "1" },
+    base: 50780,
+    al: batchCarryAl(50780),
+    expected:
+      'with AL_STRICT_SEQUENTIAL=1 and strictOrder: true (LethAL\'s lane body: the spare in excludeTests) the writer (50782) passes and the reader (50783) runs after it ONCE and FAILS with the carried state: exactly `fail` "carried 5", two rows in all',
+    judge: async (ask) => {
+      const batch = await ask({ excludeTests: ["Codeunit50784."], strictOrder: true });
+      const w = rowsOf(batch, 50782);
+      const r = rowsOf(batch, 50783);
+      return {
+        ok:
+          batch.rows.length === 2 &&
+          w.length === 1 &&
+          w[0]?.status === "pass" &&
+          r.length === 1 &&
+          r[0]?.status === "fail" &&
+          r[0]?.message === "carried 5" &&
+          batch.rows[0]?.name === w[0]?.name,
+        measured: rowText(batch.rows),
+      };
+    },
+  },
 ];
 
 /**
- * PR-114a: the eight capability facts, one serve daemon, one scratch folder per fact. A request that
- * fails (or a daemon that will not start) reads `unmeasurable` for the facts it carried.
+ * PR-114a: the capability facts, one serve daemon, one scratch folder per fact. A request that
+ * fails (or a daemon that will not start) reads `unmeasurable` for the facts it carried. PR-340: the
+ * carry fact has its OWN daemon (`serverEnv`), so the others run exactly as before.
  */
 async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fact[]> {
+  const shared = await batchFactsOn(
+    env,
+    root,
+    BATCH_FACTS.filter((s) => s.serverEnv === undefined),
+    undefined,
+  );
+  const own: V3Fact[] = [];
+  for (const spec of BATCH_FACTS.filter((s) => s.serverEnv !== undefined))
+    own.push(...(await batchFactsOn(env, root, [spec], spec.serverEnv)));
+  return [...shared, ...own];
+}
+
+async function batchFactsOn(
+  env: V3ProbeEnv,
+  root: string,
+  specs: readonly BatchFactSpec[],
+  serverEnv: Readonly<Record<string, string>> | undefined,
+): Promise<V3Fact[]> {
   const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
+  // PR-360 review LOW 1: the fact's own variables go INTO v3ChildEnv, so they cannot override its pins.
   const spawn: ServerSpawnFn = (argv) =>
-    (env.serveSpawn ?? defaultServerSpawn)(argv, { cwd: root, env: v3ChildEnv(cache) });
+    (env.serveSpawn ?? defaultServerSpawn)(argv, {
+      cwd: root,
+      env: v3ChildEnv({ ...cache, ...serverEnv }),
+    });
   const deadline = env.serveDeadlineMs ?? SERVE_DEADLINE_MS;
   const begin = async (): Promise<AlRunnerServer> => {
     const s = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
@@ -2080,7 +2293,7 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
   const out: V3Fact[] = [];
   try {
     server = await begin();
-    for (const spec of BATCH_FACTS) {
+    for (const spec of specs) {
       const dir = join(root, spec.fact);
       await mkdir(join(dir, "src"), { recursive: true });
       await writeFile(
@@ -2139,17 +2352,256 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
         // gets a fresh one (if none starts, the outer catch marks the rest unmeasurable).
         await server?.close();
         server = undefined;
-        if (spec !== BATCH_FACTS[BATCH_FACTS.length - 1]) server = await begin();
+        if (spec !== specs[specs.length - 1]) server = await begin();
       }
     }
   } catch (err) {
-    for (const spec of BATCH_FACTS)
+    for (const spec of specs)
       if (!out.some((f) => f.fact === spec.fact))
         out.push(fact(spec.fact, "capability", "unmeasurable", spec.expected, String(err)));
   } finally {
     await server?.close();
   }
   return out;
+}
+
+/**
+ * PR-342: the leg-C capability fact `alRunnerV3.stopGroups` needs (PR-256 rule 7, upstream #8564). GATE-ONLY: a
+ * session never measures it; PR-256 reads the gate's reading from the build's record (`batchFacts`). Anything but
+ * `matches` (a build without #8564 refuses the request: `diverged`) never fails the gate, it only keeps the flag off.
+ */
+export const STOP_GROUPS_FACT = "stop-groups";
+
+/** PR-256's pinned text of a row the stop skipped (PR-257, measured on #8564), naming the earlier failed test. */
+export const STOP_SKIP_TEXT =
+  /^NotRun: out-of-scope: the test Codeunit(\d+)\.(.+?) failed before it, and stopAfterFirstFailure \(--stop-after-first-failure\) /;
+
+/** PR-342: the probe's invented AL, ids 50780-50789. Test order is declaration order. */
+const STOP_GROUPS_AL = `codeunit 50781 "Stop First Fails"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure First()
+    begin
+        Error('first fails');
+    end;
+
+    [Test]
+    procedure Second()
+    begin
+    end;
+}
+
+codeunit 50782 "Stop Same Group"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Other()
+    begin
+    end;
+}
+
+codeunit 50783 "Stop Other Group"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Passes()
+    begin
+    end;
+}
+
+codeunit 50784 "Stop After Timeout"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Spins()
+    var
+        I: Integer;
+    begin
+        while true do
+            I += 1;
+    end;
+
+    [Test]
+    procedure After()
+    begin
+    end;
+}
+
+codeunit 50785 "Stop After Refusal"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        FldRef: FieldRef;
+        C: FieldClass;
+    begin
+        C := FldRef.Class();
+    end;
+
+    [Test]
+    procedure After()
+    begin
+    end;
+}
+`;
+
+/** PR-342: one row of a `stop-groups` request. */
+export interface StopRow {
+  readonly name: string;
+  readonly status: string;
+  readonly notRun: boolean;
+  readonly message: string | undefined;
+}
+
+/** PR-342: a request's rows; or the build's own refusal of it (an error line); or no answer (deadline, EOF, protocol). */
+export type StopAnswer =
+  | { readonly rows: readonly StopRow[] }
+  | { readonly refused: string }
+  | { readonly failed: string };
+
+/** PR-342: the three requests, in the order they go to one daemon. */
+export const STOP_GROUPS_REQUESTS = {
+  /** Cases 1 and 5: group `a` (50781 fails first, then 50781.Second and the second entry 50782), group `b` (50783). */
+  stop: {
+    stopAfterFirstFailure: true,
+    entries: [
+      { id: "a1", test: "Codeunit50781.", stopGroup: "a" },
+      { id: "a2", test: "Codeunit50782.", stopGroup: "a" },
+      { id: "b", test: "Codeunit50783.", stopGroup: "b" },
+    ],
+  },
+  /** Case 4: the same daemon answers a plain request after the skip. */
+  follow: { entries: [{ id: "f", test: "Codeunit50783." }] },
+  /** Cases 2 and 3, last (a timeout may leave the daemon busy): a timeout row and a refusal row as the first failure. */
+  guard: {
+    stopAfterFirstFailure: true,
+    entries: [
+      { id: "t", test: "Codeunit50784.", stopGroup: "t" },
+      { id: "r", test: "Codeunit50785.", stopGroup: "r" },
+    ],
+  },
+} as const;
+
+const stopRowText = (a: StopAnswer): string =>
+  "rows" in a
+    ? a.rows
+        .map(
+          (r) =>
+            `${r.name}=${r.status}${r.notRun ? "/notRun" : ""}${r.message !== undefined ? `(${r.message.slice(0, 160)})` : ""}`,
+        )
+        .join(" ")
+    : "refused" in a
+      ? `refused: ${a.refused.slice(0, 300)}`
+      : `no answer: ${a.failed.slice(0, 300)}`;
+
+/**
+ * PR-342: the `stop-groups` verdict from the three answers. `matches` only when ALL hold:
+ * 1. 50781.First is a plain fail, and 50781.Second and 50782.Other (a later entry of group `a`) each come back as
+ *    `error`, `notRun`, with the pinned skip text naming `Codeunit50781.First`;
+ * 5. 50783.Passes (group `b`) passes;
+ * 4. the follow-up request on the same daemon answers 50783.Passes `pass`.
+ * The build refusing a request (no #8564: "unknown field `stopGroup`") is `diverged`; no answer to `stop` or `follow`
+ * is `unmeasurable`. Cases 2 and 3 never change the verdict (PR-256 treats such a skip as no kill and re-runs the ref
+ * alone); whether the later test carried the skip text is RECORDED in `measured`.
+ */
+export function judgeStopGroups(a: {
+  readonly stop: StopAnswer;
+  readonly follow: StopAnswer;
+  readonly guard: StopAnswer;
+}): { readonly verdict: V3ContractVerdict; readonly measured: string } {
+  const only = (x: StopAnswer, name: string): StopRow | undefined => {
+    const rs = "rows" in x ? x.rows.filter((r) => r.name === name) : [];
+    return rs.length === 1 ? rs[0] : undefined;
+  };
+  const skipNaming = (r: StopRow | undefined, test: string): boolean => {
+    const m =
+      r?.notRun === true && r.status === "error" ? STOP_SKIP_TEXT.exec(r.message ?? "") : null;
+    return m !== null && `Codeunit${m[1]}.${m[2]}` === test;
+  };
+  const ran = (r: StopRow | undefined): string =>
+    r === undefined ? "no row" : STOP_SKIP_TEXT.test(r.message ?? "") ? "SKIPPED" : "ran";
+  const timeoutRow = only(a.guard, "Codeunit50784.Spins");
+  const refusalRow = only(a.guard, "Codeunit50785.Refuses");
+  const guardText = `after a timeout${timeoutRow !== undefined && V3_TIMEOUT_MESSAGE.test(timeoutRow.message ?? "") ? "" : " (first row not a timeout)"}: ${ran(only(a.guard, "Codeunit50784.After"))}; after a refusal${refusalRow?.notRun === true && refusalRow.status === "error" && (refusalRow.message ?? "").startsWith(`${V3_REFUSAL_PREFIX} `) ? "" : " (first row not a refusal)"}: ${ran(only(a.guard, "Codeunit50785.After"))}`;
+  const measured = `stop: ${stopRowText(a.stop)}; follow: ${stopRowText(a.follow)}; guard: ${stopRowText(a.guard)}; ${guardText}`;
+  if ("failed" in a.stop || "failed" in a.follow) return { verdict: "unmeasurable", measured };
+  const first = only(a.stop, "Codeunit50781.First");
+  const ok =
+    first?.status === "fail" &&
+    !first.notRun &&
+    skipNaming(only(a.stop, "Codeunit50781.Second"), "Codeunit50781.First") &&
+    skipNaming(only(a.stop, "Codeunit50782.Other"), "Codeunit50781.First") &&
+    only(a.stop, "Codeunit50783.Passes")?.status === "pass" &&
+    only(a.follow, "Codeunit50783.Passes")?.status === "pass";
+  return { verdict: ok ? "matches" : "diverged", measured };
+}
+
+/** PR-342: the `stop-groups` fact on its own daemon and scratch folder (leg C only). */
+async function stopGroupsFact(env: V3ProbeEnv, root: string): Promise<V3Fact> {
+  const expected =
+    "group a: Codeunit50781.First a plain fail, then 50781.Second and 50782.Other skipped with the pinned text naming it; group b's 50783.Passes passes; a follow-up request on the same daemon answers; after a timeout or a refusal row the later test is recorded (PR-256, #8564)";
+  const dir = join(root, STOP_GROUPS_FACT);
+  const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
+  const spawn: ServerSpawnFn = (argv) =>
+    (env.serveSpawn ?? defaultServerSpawn)(argv, { cwd: root, env: v3ChildEnv(cache) });
+  let server: AlRunnerServer | undefined;
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(
+      join(dir, "app.json"),
+      baseAppJson({
+        id: "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d0780",
+        name: "LethAL PR342 stop-groups",
+        idFrom: 50780,
+        idTo: 50789,
+      }),
+    );
+    await writeFile(join(dir, "src", "Stop.Codeunit.al"), STOP_GROUPS_AL);
+    const s = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
+    server = s;
+    await s.start(
+      SERVE_DEADLINE_MS,
+      [],
+      SERVE_TEST_TIMEOUT_S,
+      env.environment !== undefined ? ["--environment", env.environment] : [],
+    );
+    const ask = async (body: Record<string, unknown>): Promise<StopAnswer> => {
+      try {
+        const r = await s.runEntries(
+          { command: "runTests", sourcePaths: [dir], testIsolation: "test", ...body },
+          env.serveDeadlineMs ?? SERVE_DEADLINE_MS,
+        );
+        return {
+          rows: r.tests.map((t) => ({
+            name: String(t.name),
+            status: String(t.status),
+            notRun: t.notRun === true,
+            message: typeof t.message === "string" ? t.message : undefined,
+          })),
+        };
+      } catch (err) {
+        if (err instanceof AlRunnerServerRequestError && err.kind === "error")
+          return { refused: err.message };
+        return { failed: String(err) };
+      }
+    };
+    const stop = await ask(STOP_GROUPS_REQUESTS.stop);
+    const follow = "failed" in stop ? stop : await ask(STOP_GROUPS_REQUESTS.follow);
+    const guard = "failed" in follow ? follow : await ask(STOP_GROUPS_REQUESTS.guard);
+    const j = judgeStopGroups({ stop, follow, guard });
+    return fact(STOP_GROUPS_FACT, "capability", j.verdict, expected, j.measured);
+  } catch (err) {
+    return fact(STOP_GROUPS_FACT, "capability", "unmeasurable", expected, String(err));
+  } finally {
+    await server?.close();
+  }
 }
 
 /** The probe. Never throws for a v3 answer; a fact it could not read is `unmeasurable`. */
@@ -2160,7 +2612,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
   const spawnIn = env.spawn ?? defaultSpawn;
   // R807: every process this probe starts (the binary only; the burner uses Bun.spawn) gets the pinned seed.
   const spawn: SpawnFn = (argv, opts) =>
-    spawnIn(argv, { ...opts, env: { ...v3ChildEnv(), ...opts?.env }, cwd: root });
+    spawnIn(argv, { ...opts, env: v3ChildEnv({ ...opts?.env }), cwd: root }); // PR-360: the pins win
   const alRunnerPath = absToolPath(env.alRunnerPath);
   const packagesDir = resolve(env.packagesDir);
   const cacheDir = env.cacheDir !== undefined ? resolve(env.cacheDir) : undefined;
@@ -2786,6 +3238,8 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     } else facts.push(await serveKeepReasons(env, app, root));
     // PR-114a: the eight capability facts (batch carry and the SingleInstance lane); never a refusal.
     facts.push(...(await batchCapabilityFacts(env, root)));
+    // PR-342: stop-groups, GATE-ONLY (PR-256 reads the gate's reading from the build's record, never a session's).
+    if (env.gateOnlyTrusted === undefined) facts.push(await stopGroupsFact(env, root));
     // duplicate-key-insert-raises (#5603), r9 §6 (branch F): bc1 FAILS the test at its end.
     const keys = await call(["--codeunit", "50655"], { codeunit: 50655 });
     const k = onlyRow(keys, "DuplicateNamedKey");

@@ -7,7 +7,7 @@ import {
 } from "@lethal/schemata";
 import type { CoverageMode } from "./backend";
 import { decodeSource, hashSourceSnapshot } from "./baseline-snapshot";
-import { MARK_REASON_PLACEHOLDER } from "./equivalence-marks";
+import { MARK_REASON_PLACEHOLDER, SURVIVING_VERDICTS } from "./equivalence-marks";
 import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
 import { spanCovered } from "./line-filter";
@@ -18,6 +18,7 @@ import {
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
   MARK_KEYS_STALE_INTERPRETATION,
+  NOT_RUN_NOT_RECORDED_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
@@ -292,8 +293,16 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 33: PR-212 (R1113) added the cause value `left-out-test-reach` to `$.notMeasured[].cause`. A new value, so it
  * bumps (R233); v32 is frozen.
+ *
+ * 34: PR-307 (R1168) added the caveat value `session-kind-mismatch` to `$.caveats[].caveat`. A new value, so it
+ * bumps (R233); v33 is frozen.
+ *
+ * 35: PR-381 (R1197) added the caveat value `survivors-beside-unrun-tests` to `$.caveats[].caveat` and the optional
+ * `$.score.survivorsBesideUnrunTests` (three counts, copied from the report's field of the same name), and the tool
+ * condition `not-run-tests-not-recorded` (an older al-runner-v3 report with survivors). New values and new paths,
+ * so it bumps (R233); v34 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 33;
+export const EXPLAIN_SCHEMA_VERSION = 35;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -345,6 +354,7 @@ export const ADMISSIBLE_INTERPRETATIONS: readonly Interpretation[] = [
   COVERAGE_NOT_MEASURED_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   STRANDED_SKIP_INTERPRETATION,
+  NOT_RUN_NOT_RECORDED_INTERPRETATION,
   MARK_KEYS_STALE_INTERPRETATION,
 ];
 
@@ -397,6 +407,16 @@ export interface ExplainScore {
     readonly errors: number;
     readonly noCoverage: number;
     readonly knownSurvivors: number;
+  };
+  /**
+   * PR-381 (R1197): verbatim from `SessionReport.survivorsBesideUnrunTests`; present exactly when the report
+   * has it. The words are the `survivors-beside-unrun-tests` caveat's interpretation above: this block adds
+   * only the three counts, because the projection authors no prose of its own.
+   */
+  readonly survivorsBesideUnrunTests?: {
+    readonly survivors: number;
+    readonly notRunTests: number;
+    readonly sharingACodeunit?: number;
   };
 }
 
@@ -686,17 +706,23 @@ export interface ExplainNotMeasured {
 
 /**
  * A session-level condition about LethAL's OWN state — the half of the line this projection is
- * fully prescriptive about. Each is keyed 1:1 to a report field: `quarantined` to
+ * fully prescriptive about. There are three. Two are keyed 1:1 to a report field: `quarantined` to
  * `SessionReport.quarantined`'s presence, `stranded-skips` to a non-zero
- * `SessionReport.resumedFrom.skippedStranded`.
+ * `SessionReport.resumedFrom.skippedStranded`. The third, `not-run-tests-not-recorded` (PR-381), keys on the
+ * field `notRunAtBaseline` being ABSENT, together with the backend (al-runner-v3) and a survivor.
  *
- * The TOKENS are the source and the type is derived from them, not the other way round, so the two
+ * The TOKENS are the source and the type is derived from them, not the other way round, so they
  * cannot drift apart. R115 gap (3): `explain.test.ts` builds its allowed-authored-string set from
- * runtime constants rather than from a hand-maintained list, and these two literals are the only
+ * runtime constants rather than from a hand-maintained list, and these literals are the only
  * strings in the output with no registry or report behind them. A hand list would have been one
  * more place a new authored string could be quietly added.
  */
-export const TOOL_CONDITIONS = ["quarantined", "stranded-skips"] as const;
+export const TOOL_CONDITIONS = [
+  "quarantined",
+  "stranded-skips",
+  // PR-381: an al-runner-v3 report with survivors that does not record the tests v3 did not run.
+  "not-run-tests-not-recorded",
+] as const;
 export type ToolCondition = (typeof TOOL_CONDITIONS)[number];
 
 export interface ExplainToolCondition {
@@ -790,8 +816,8 @@ export interface ExplainOutput {
  * mode, relocated onto an existing pinned path.
  *
  * Fix round 3 corrects this comment's own overclaim: `note` is NOT the only string authored here.
- * Three more are — `structureStableUnder`'s `"explainSchemaVersion"` below, and the two
- * `ToolCondition` literals `"quarantined"` / `"stranded-skips"` in `toolConditionsOf`. They need no
+ * Three more are — `structureStableUnder`'s `"explainSchemaVersion"` below, and the three
+ * `ToolCondition` literals `"quarantined"` / `"stranded-skips"` / `"not-run-tests-not-recorded"` in `toolConditionsOf`. They need no
  * pin of their own because they are single TOKENS that consumers filter on by exact value, so
  * widening one into a sentence breaks the code that reads it rather than smuggling anything: putting
  * advice inside `"quarantined"` (through an `as ToolCondition` cast, since the type refuses it
@@ -1791,6 +1817,19 @@ function toolConditionsOf(report: SessionReport): ExplainToolCondition[] {
       interpretation: STRANDED_SKIP_INTERPRETATION,
     });
   }
+  // PR-381: say so on an older al-runner-v3 report; never print silence.
+  const unrecorded = report.mutants.filter((m) => SURVIVING_VERDICTS.has(m.verdict)).length;
+  if (
+    report.backend === "al-runner-v3" &&
+    report.notRunAtBaseline === undefined &&
+    unrecorded > 0
+  ) {
+    conditions.push({
+      condition: "not-run-tests-not-recorded",
+      count: unrecorded,
+      interpretation: NOT_RUN_NOT_RECORDED_INTERPRETATION,
+    });
+  }
   return conditions;
 }
 
@@ -2036,6 +2075,9 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
         noCoverage: counts.noCoverage,
         knownSurvivors: counts.knownSurvivors,
       },
+      ...(validated.survivorsBesideUnrunTests !== undefined
+        ? { survivorsBesideUnrunTests: { ...validated.survivorsBesideUnrunTests } }
+        : {}),
     },
     caveats: validity.caveats.map((caveat) => ({
       caveat,

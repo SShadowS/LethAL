@@ -30,7 +30,9 @@
  *   one-shot): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
  *   `LETHAL_ITEST_V3_SECOND_ECHO=0|1` (serve-entries only), refused by name otherwise
  *   (`v3ItestTransport`); `LETHAL_ITEST_V3_REPORT_DIR=<dir>` writes each session's report as
- *   `<dir>/<leg>.report.json` before any assertion; `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first
+ *   `<dir>/<leg>.report.json` before any assertion on it (the warning set, the control compare, the leg's tables: R1196,
+ *   `writeReportThenCheck`), so a failing leg keeps its report; a session that throws has none to write;
+ *   `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first
  *   compares each session per mutant with `<dir>/<leg>.report.json` (the edge one-shot control).
  * - R586c: a build with a per-build pin (`al-runner-v3-pins.ts`, matched on the exact version line
  *   AND sha256) is judged against it; the first line says so. `LETHAL_ITEST_V3_K_ON_CANDIDATE=1`
@@ -63,7 +65,10 @@ import {
 import { MEMORY_HEADROOM_GB_DEFAULT, baselineSampleIds } from "../src/al-runner-v3-baseline-check";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import {
+  STOP_GROUPS_FACT,
+  type V3KeepApp,
   V3_CAPABILITY_FACTS,
+  V3_CARRY_FACT,
   runV3ContractProbe,
   v3DefectWarnings,
 } from "../src/al-runner-v3-contract";
@@ -232,6 +237,7 @@ import {
   assertLayoutRun,
   printLayoutTable,
 } from "./layout-fixture";
+import { writeReportThenCheck } from "./leg-report";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { assertSymbolBuild, printSymbolTable } from "./symbol-fixture";
 import {
@@ -451,17 +457,6 @@ async function session(
   // R785: a `LETHAL_ITEST_V3_WORKERS > 1` D-leg run also says how many lanes started; that one code is
   // expected on top of the leg's N = 1 set. Unset (the gate), the pinned set is checked unchanged.
   const pinned = GATE_WARNINGS[`al-runner-v3/${leg}`];
-  if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested()) {
-    assertGateWarnings(
-      "al-runner-v3",
-      leg,
-      gateWarnings.codes(),
-      pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
-      gateWarnings.examples(),
-    );
-    // PR-98: the notice must also report as many lanes as asked, or the leg fails by name.
-    assertLanesStarted(gateWarnings.examples()["al-runner-v3-lanes-started"], V3_WORKERS);
-  } else checkGateWarnings("al-runner-v3", leg, gateWarnings);
   const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
   if (serveLeg) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
@@ -470,10 +465,25 @@ async function session(
   if (serveLeg || REPORT_DIR !== undefined) {
     console.log(`  ${leg}: timings ${JSON.stringify(r.timings)}`);
   }
-  if (REPORT_DIR !== undefined) {
-    await mkdir(REPORT_DIR, { recursive: true });
-    await writeFile(join(REPORT_DIR, `${leg}.report.json`), `${JSON.stringify(r, null, 2)}\n`);
-  }
+  // R1196: the report first, then the warning set, so a leg that fails its warnings still keeps its report.
+  await writeReportThenCheck({
+    leg,
+    report: r,
+    reportDir: REPORT_DIR,
+    check: () => {
+      if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested()) {
+        assertGateWarnings(
+          "al-runner-v3",
+          leg,
+          gateWarnings.codes(),
+          pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
+          gateWarnings.examples(),
+        );
+        // PR-98: the notice must also report as many lanes as asked, or the leg fails by name.
+        assertLanesStarted(gateWarnings.examples()["al-runner-v3-lanes-started"], V3_WORKERS);
+      } else checkGateWarnings("al-runner-v3", leg, gateWarnings);
+    },
+  });
   if (CONTROL_DIR !== undefined) {
     const control = join(CONTROL_DIR, `${leg}.report.json`);
     must(
@@ -619,7 +629,16 @@ async function legC(scratch: string): Promise<readonly string[]> {
     f.startsWith("Microsoft_Library Assert_"),
   );
   const [libraryAssert] = assertApps;
+  // PR-363: the per-family keep apps, built by `scripts/pr363-legc-keep-apps.ts` (run as a script: packages/ cannot import scripts/).
+  const keepDir = join(scratch, "pr363-keep-apps");
+  execFileSync("bun", [join(REPO, "scripts", "pr363-legc-keep-apps.ts"), "--out", keepDir], {
+    encoding: "utf8",
+  });
+  const keepApps = JSON.parse(
+    await readFile(join(keepDir, "manifest.json"), "utf8"),
+  ) as V3KeepApp[];
   const r = await runV3ContractProbe({
+    keepApps,
     alRunnerPath: BIN,
     expectedVersion: (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim(),
     packagesDir: await microsoftDeps(scratch),
@@ -641,11 +660,19 @@ async function legC(scratch: string): Promise<readonly string[]> {
   // PR-117: the capability readings, for DBM and the receipt (recorded only if DBM batches and passes).
   legCBatchFacts = Object.fromEntries(
     r.facts
-      .filter((f) => (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact))
+      // PR-340: the carry fact's reading rides beside the eight, and `.gated` records it from here.
+      // PR-342: and `stop-groups`, which PR-256's flag reads from the record.
+      .filter(
+        (f) =>
+          (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact) ||
+          f.fact === V3_CARRY_FACT ||
+          f.fact === STOP_GROUPS_FACT,
+      )
       .map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 36 facts (r13,
-  // R590: 9 defect, 18 contract, 1 warn; PR-114a: 8 capability, each must read matches); a warn fact (V3_WARN_FACTS) only adds its line, except
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 38 facts (r13,
+  // R590: 9 defect, 18 contract, 1 warn; PR-114a: 8 capability, each must read matches; PR-340: the
+  // carry fact, which must read matches too; PR-342: stop-groups, whose diverged only adds its line); a warn fact (V3_WARN_FACTS) only adds its line, except
   // `unkept` (R1000), which is gate-fail.
   const c = classifyLegC(
     r.facts,
@@ -2866,6 +2893,9 @@ async function legT(
     projectDir: fixture("sandbox-data"),
     testDir: fixture("sandbox-data-tests"),
     selectorIds: { selectorId: 79399, controlId: 79398, tableId: 79397 },
+    // PR-307: `Data Tests.PageActionComputesNonZero` is session-kind-sensitive on v3 (the TestPage scan), so the field is
+    // needed; this fixture's gates pin the headless behaviour.
+    ciSessionKind: "headless",
   });
   const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
   const now = normalizeForComparison(r);

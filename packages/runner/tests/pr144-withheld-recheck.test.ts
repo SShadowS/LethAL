@@ -280,6 +280,9 @@ function fakeRunner(result: (req: RecheckRequest) => NestedRecheckResult | Error
   };
 }
 
+const isRecheckPhase = (e: RunEventInput): boolean =>
+  (e.type === "phase-entered" || e.type === "phase-left") && e.phase === "recheck";
+
 const seqOf = (es: readonly RunEventInput[]): RunEvent[] =>
   es.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
 
@@ -346,7 +349,10 @@ async function drive(
     // PR-225: every covering test counts as a candidate here, so these driver tests keep their pre-PR-225 test set;
     // the narrowing itself is tested in pr225-recheck-set.test.ts.
     notPassOf: (t) => t.coveringTests,
-    emit: (e) => emitted.push(e),
+    // PR-370: the recheck phase's own two events are pinned in pr370-recheck-phase.test.ts, not here.
+    emit: (e) => {
+      if (!isRecheckPhase(e)) emitted.push(e);
+    },
     main: MAIN,
     budgetSeconds: 77,
     runner: (req) => fake.run(req, () => emitted.length),
@@ -434,6 +440,44 @@ describe("runWithheldRecheck: the driver", () => {
     expect(rechecked[0]).toMatchObject({ recovery: { killingTest: "T2" } });
     expect(rechecked[1]).toMatchObject({ keptNote: expect.stringContaining("rule (b)") });
     expect(summary).toEqual({ targets: 2, recovered: 1 });
+  });
+
+  // PR-322 (R1167): the recheck runs whole codeunits in method isolation, so its row lists every test it ran, green
+  // or not. A recovered row keeps the mutant's own covering tests (what `coverageAttribution: exact` promises),
+  // plus the killer when the covering set lacks it (its reproduced kill proves it reached the code).
+  test("PR-322: a recovery keeps the main-pass covering set, not the recheck's run set (revert: r.coveringTests)", async () => {
+    const runSet = ["T Codeunit.T1", "T Codeunit.T2", "T Codeunit.T3", "T Codeunit.T4"];
+    const fake = fakeRunner(() => ({
+      ...nestedFor(["M1"]),
+      rows: nestedFor(["M1"]).rows.map((r) => ({ ...r, coveringTests: runSet })),
+    }));
+    const { emitted } = await drive(
+      mainEvents([scored("M1", { coveringTests: ["T Codeunit.T2"] })]),
+      fake,
+    );
+    const rechecked = emitted.filter((e) => e.type === "mutant-rechecked");
+    expect(rechecked[0]).toMatchObject({
+      recovery: { killingTest: "T2", coveringTests: ["T Codeunit.T2"] },
+    });
+  });
+
+  test("PR-322: a killer outside the covering set is added, so its kill is still credited (revert: the killer add)", async () => {
+    // the recheck's run set differs from both the covering set and the expected result
+    const fake = fakeRunner(() => ({
+      ...nestedFor(["M1"]),
+      rows: nestedFor(["M1"]).rows.map((r) => ({
+        ...r,
+        coveringTests: ["T Codeunit.T2", "T Codeunit.T3"],
+      })),
+    }));
+    const { emitted } = await drive(
+      mainEvents([scored("M1", { coveringTests: ["T Codeunit.T1"] })]),
+      fake,
+    );
+    const rechecked = emitted.filter((e) => e.type === "mutant-rechecked");
+    expect(rechecked[0]).toMatchObject({
+      recovery: { killingTest: "T2", coveringTests: ["T Codeunit.T1", "T Codeunit.T2"] },
+    });
   });
 
   test("a recheck survived keeps error", async () => {
@@ -873,6 +917,8 @@ describe("v3RecheckOf (cli wiring)", () => {
   function wire(
     alRunnerV3: Record<string, unknown>,
     kind: "al-runner-v3" | "bcdev" = "al-runner-v3",
+    /** PR-277: the nested session waits on this before it returns. */
+    gate?: Promise<void>,
   ) {
     const built: { config: unknown; dir: string }[] = [];
     const ran: SessionConfig[] = [];
@@ -892,6 +938,15 @@ describe("v3RecheckOf (cli wiring)", () => {
       },
       runSession: async (cfg) => {
         ran.push(cfg);
+        // PR-370: the nested session's phases reach the result in order; other events do not.
+        const sink = Array.isArray(cfg.emit) ? cfg.emit : cfg.emit !== undefined ? [cfg.emit] : [];
+        for (const e of [
+          { type: "phase-left", phase: "generate", elapsedMs: 5 },
+          { type: "warning", code: "x", message: "y" },
+          { type: "phase-left", phase: "teardown", elapsedMs: 7 },
+        ] as const)
+          for (const f of sink) f({ ...e, seq: 0 } as never);
+        await gate;
         return {
           mutants: [],
           sourceSha256: "s",
@@ -912,6 +967,20 @@ describe("v3RecheckOf (cli wiring)", () => {
 
   test("key absent: the recheck is built (default on, PR-182)", () => {
     expect(wire(section).recheck?.budgetSeconds).toBe(3600);
+  });
+
+  test("PR-256 (rule 2): the nested recheck never carries the stop; a config without the key is unchanged", async () => {
+    const t = target("M1");
+    const req = { targets: [t], tests: ["T Codeunit.T1"], budgetSeconds: 60 };
+    const on = wire({ ...section, stopGroups: true });
+    await on.recheck?.runner(req);
+    const nested = (on.built[0]?.config as { alRunnerV3: Record<string, unknown> }).alRunnerV3;
+    expect(nested.stopGroups).toBe(false);
+    const absent = wire(section);
+    await absent.recheck?.runner(req);
+    expect(
+      (absent.built[0]?.config as { alRunnerV3: Record<string, unknown> }).alRunnerV3,
+    ).not.toHaveProperty("stopGroups");
   });
 
   test("option off, or another backend: no recheck is built", () => {
@@ -955,6 +1024,50 @@ describe("v3RecheckOf (cli wiring)", () => {
       sourceSha256: "s",
       dependencySourceSha256: "d",
     });
+    expect(res?.phases).toEqual([
+      { phase: "generate", elapsedMs: 5 },
+      { phase: "teardown", elapsedMs: 7 },
+    ]);
     expect([w.closed(), w.storeClosed()]).toEqual([1, 1]);
+  });
+
+  test("PR-277: the nested session registers no signal handler, and an abort closes its backend at once", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const w = wire({ ...section, recheckWithheldKills: true }, "al-runner-v3", gate);
+    const ac = new AbortController();
+    const first = new AbortController();
+    const pending = w.recheck?.runner({
+      targets: [target("M1")],
+      tests: ["T Codeunit.T1"],
+      budgetSeconds: 1,
+      signal: ac.signal,
+      stop: first.signal,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.ran).toHaveLength(1); // the nested session is running, blocked
+    expect(w.closed()).toBe(0);
+    // The nested registration puts no listener on the process; it listens to the main session's two signals.
+    const before = process.listenerCount("SIGTERM");
+    let nestedStops = 0;
+    const off = w.ran[0]?.registerStopSignal?.(
+      () => {
+        nestedStops += 1;
+      },
+      () => {},
+    );
+    expect(off).toBeDefined();
+    expect(process.listenerCount("SIGTERM")).toBe(before);
+    // The first signal spends the nested budget (a graceful stop) and closes nothing.
+    first.abort();
+    expect([nestedStops, w.closed()]).toEqual([1, 0]);
+    // The second also spends it and closes the backend at once, while the nested session still runs.
+    ac.abort();
+    expect([nestedStops, w.closed()]).toEqual([2, 1]);
+    off?.();
+    release();
+    await pending;
   });
 });

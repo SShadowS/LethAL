@@ -24,25 +24,68 @@ import {
   BURN_RELATIVE_FACTOR,
   BURN_TRIES,
   MESSAGE_PREFIX_REASON,
+  SERVE_CASES,
   SERVE_TESTS_AL,
+  STOP_GROUPS_FACT,
+  STOP_GROUPS_REQUESTS,
+  type StopAnswer,
   type V3ContractResult,
+  type V3KeepApp,
+  type V3ProbeEnv,
   V3_CAPABILITY_FACTS,
+  V3_CARRY_FACT,
+  V3_KEEP_APP_FAMILIES,
+  V3_KEEP_CASES,
   burnerArgv,
   classifySleep,
+  judgeStopGroups,
   leastBusyCore,
   parseAllowedCores,
-  runV3ContractProbe,
+  runV3ContractProbe as runV3ContractProbeRaw,
   v3ContractRefusals,
   v3DefectWarnings,
   v3DefectsGone,
 } from "../src/al-runner-v3-contract";
+
+/**
+ * PR-363: a fake manifest of `V3_KEEP_APP_FAMILIES` family apps, each with one case (`stream-never-created`, whose
+ * refusal text is one short line). `fakeServe` answers a request for one of these dirs with that case's row.
+ */
+const FAKE_KEEP_DIR = "/fake/keep";
+const KEEP_CASE = { entry: "stream-never-created", name: "Codeunit51001.Cell" } as const;
+const KEEP_TEXT = "NotRun: out-of-scope: use of an OutStream that was never created";
+// Build review L1: the manifest must hold exactly V3_KEEP_CASES cases, so fam0 carries the rest (one per family otherwise).
+const KEEP_APPS: readonly V3KeepApp[] = Array.from({ length: V3_KEEP_APP_FAMILIES }, (_, i) => ({
+  family: `fam${i}`,
+  dir: `${FAKE_KEEP_DIR}/fam${i}`,
+  cases:
+    i === 0
+      ? Array.from({ length: V3_KEEP_CASES - (V3_KEEP_APP_FAMILIES - 1) }, (_, k) => ({
+          entry: KEEP_CASE.entry,
+          name: `Codeunit${51001 + k}.Cell`,
+        }))
+      : [KEEP_CASE],
+}));
+/** PR-363: the default answer to a family app's request: each of its cases a kept refusal. */
+const keptRows = (dir: string) =>
+  (KEEP_APPS.find((a) => a.dir === dir)?.cases ?? [KEEP_CASE]).map((c) => ({
+    name: c.name,
+    status: "error",
+    notRun: true,
+    message: KEEP_TEXT,
+  }));
+/** Every probe in this file gets the fake family apps unless it names its own (or, with the raw one, none). */
+const runV3ContractProbe = (env: V3ProbeEnv) =>
+  runV3ContractProbeRaw({ keepApps: KEEP_APPS, ...env });
 import {
   AlRunnerV3UngatedBuildError,
   checkGated,
   parseGated,
   sha256OfFile,
 } from "../src/al-runner-v3-pin";
+import { baselineBatchingOffReason, carryWalkOffReason } from "../src/al-runner-v3-pins";
 import { V3_PREDEFINED_CANDIDATES } from "../src/al-runner-v3-probe";
+import { mergeChildEnv } from "../src/al-runner-v3-seed";
 import type { ArtifactIo } from "../src/artifact";
 import type { SpawnFn } from "../src/publisher";
 
@@ -509,6 +552,12 @@ const CAP_APPS: Record<string, readonly (readonly [number, readonly string[]])[]
     [50773, ["NeedsFive"]],
     [50774, ["Spare"]],
   ],
+  // PR-340: the carry fact (outside V3_CAPABILITY_FACTS).
+  "batch-sequential-carry": [
+    [50782, ["LeavesFive"]],
+    [50783, ["WantsZero"]],
+    [50784, ["Spare"]],
+  ],
 };
 
 /** The last part of a path, whether it uses `/` or `\` (the probe's scratch folders use the host's: backslashes on Windows). */
@@ -517,6 +566,10 @@ const folderName = (p: string): string => p.split(/[\\/]/).pop() ?? "";
 /** PR-114a: is this serve request one of the capability facts' (a scratch folder named `batch-...`)? */
 const isCapabilityRequest = (q: Record<string, unknown>): boolean =>
   Array.isArray(q.sourcePaths) && folderName(String(q.sourcePaths[0])).startsWith("batch-");
+
+/** PR-342: is this serve request the stop-groups fact's? */
+const isStopGroupsRequest = (q: Record<string, unknown>): boolean =>
+  Array.isArray(q.sourcePaths) && folderName(String(q.sourcePaths[0])) === "stop-groups";
 
 const capRow = (id: number, method: string, status = "pass", message?: string) => ({
   name: `Codeunit${id}.${method}`,
@@ -556,7 +609,73 @@ function capabilityAnswer(fact: string, req: Record<string, unknown>): CapAnswer
     tests.push(capRow(50752, "ReaderSeesNoRow", "fail", "reader: carried row 7"));
     tests.push(capRow(50753, "OtherInsertsAndSeesOne", "fail", "other: count 2"));
   }
+  if (fact === "batch-sequential-carry") {
+    // PR-340: with AL_STRICT_SEQUENTIAL=1 and strictOrder the writer runs first and the reader sees its store.
+    // (The fake cannot see the variable; the test that reads the spawn options checks it.)
+    return {
+      tests: cus.flatMap(([id, methods]) =>
+        methods.map((m) =>
+          m === "WantsZero" ? capRow(id, m, "fail", "carried 5") : capRow(id, m),
+        ),
+      ),
+      summary,
+    };
+  }
   return { tests, summary };
+}
+
+/** PR-342: the stop-groups folder's codeunits, `[method, status, notRun, message]` each, as unstopped. */
+const STOP_APP: Record<number, readonly (readonly [string, string, boolean, string?])[]> = {
+  50781: [
+    ["First", "fail", false, "first fails"],
+    ["Second", "pass", false],
+  ],
+  50782: [["Other", "pass", false]],
+  50783: [["Passes", "pass", false]],
+  50784: [
+    ["Spins", "error", true, "Test exceeded 3s timeout."],
+    ["After", "pass", false],
+  ],
+  50785: [
+    ["Refuses", "error", true, "NotRun: out-of-scope: FieldRef.Class on a FieldRef never assigned"],
+    ["After", "pass", false],
+  ],
+};
+
+/** PR-342: upstream #8564's skip text (PR-257), naming the group's first failed test. */
+const skipText = (test: string, group: string): string =>
+  `NotRun: out-of-scope: the test ${test} failed before it, and stopAfterFirstFailure (--stop-after-first-failure) runs no test of its codeunit or of a later entry of its stopGroup \`${group}\` after a failure`;
+
+/**
+ * PR-342: what a #8564 build answers a stop-groups request: entries in order, and with the stop, every row after the
+ * first PLAIN fail of a group (a timeout or a refusal row is notRun, never a fail) is skipped with `skipText`.
+ */
+function stopGroupsAnswer(req: Record<string, unknown>): CapAnswer {
+  const stop = req.stopAfterFirstFailure === true;
+  const failedIn = new Map<string, string>();
+  const tests: Record<string, unknown>[] = [];
+  for (const e of (req.entries ?? []) as { id: string; test: string; stopGroup?: string }[]) {
+    const id = Number(e.test.slice("Codeunit".length, -1));
+    for (const [m, status, notRun, message] of STOP_APP[id] ?? []) {
+      const name = `Codeunit${id}.${m}`;
+      const g = e.stopGroup;
+      const by = stop && g !== undefined ? failedIn.get(g) : undefined;
+      if (by !== undefined && g !== undefined) {
+        tests.push({ name, entry: e.id, status: "error", notRun: true, message: skipText(by, g) });
+        continue;
+      }
+      tests.push({
+        name,
+        entry: e.id,
+        status,
+        notRun,
+        ...(message !== undefined ? { message } : {}),
+      });
+      if (stop && g !== undefined && status === "fail" && !notRun && !failedIn.has(g))
+        failedIn.set(g, name);
+    }
+  }
+  return { tests, summary: {} };
 }
 
 /** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
@@ -566,6 +685,10 @@ function fakeServe(
     ready?: boolean;
     /** PR-114a: change one capability fact's answer to a request (default: the measured reading). */
     cap?: (fact: string, req: Record<string, unknown>, def: CapAnswer) => CapAnswer;
+    /** PR-363: the rows a family app's request (by its dir) gets; default one kept refusal. */
+    family?: (
+      dir: string,
+    ) => { name: string; status: string; notRun?: boolean; message?: string }[];
   } = {},
 ): { spawn: ServerSpawnFn; argvs: string[][]; requests: Record<string, unknown>[] } {
   const argvs: string[][] = [];
@@ -589,9 +712,13 @@ function fakeServe(
         const capFact = Array.isArray(req.sourcePaths)
           ? folderName(String(req.sourcePaths[0] ?? ""))
           : undefined;
-        if (req.command === "runTests" && capFact?.startsWith("batch-") === true) {
-          // PR-114a: a capability fact's request (its own scratch folder is named for it).
-          const def = capabilityAnswer(capFact, req);
+        if (
+          req.command === "runTests" &&
+          (capFact?.startsWith("batch-") === true || capFact === "stop-groups")
+        ) {
+          // PR-114a: a capability fact's request (its own scratch folder is named for it). PR-342: and stop-groups'.
+          const def =
+            capFact === "stop-groups" ? stopGroupsAnswer(req) : capabilityAnswer(capFact, req);
           const ans = o.cap?.(capFact, req, def) ?? def;
           const send = (a: CapAnswer): void => {
             if ("hang" in a) late = a.hang;
@@ -606,6 +733,16 @@ function fakeServe(
           late = undefined;
           if (pending !== undefined) send(pending);
           send(ans);
+        } else if (
+          req.command === "runTests" &&
+          Array.isArray(req.sourcePaths) &&
+          String(req.sourcePaths[0]).startsWith(`${FAKE_KEEP_DIR}/`)
+        ) {
+          // PR-363: a family app's request (its own fresh daemon); answered by dir, default one kept refusal
+          const dir = String(req.sourcePaths[0]);
+          const ans = o.family?.(dir) ?? keptRows(dir);
+          for (const t of ans) emit(JSON.stringify({ type: "test", ...t }));
+          emit(JSON.stringify({ type: "summary", exitCode: 1 }));
         } else if (req.command === "runTests") {
           for (const [name, r] of Object.entries(rows))
             emit(JSON.stringify({ type: "test", name, ...r }));
@@ -666,8 +803,9 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
       expect(c.cwd).toBeDefined();
       expect(c.cwd).not.toBe(process.cwd());
     }
-    // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon.
-    expect(serveCwds).toHaveLength(2);
+    // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon; PR-340: and the carry fact's own; PR-342: and stop-groups'.
+    // PR-363: and one fresh daemon per family app, after serve-keep-reasons' own (now 4 + V3_KEEP_APP_FAMILIES)
+    expect(serveCwds).toHaveLength(4 + V3_KEEP_APP_FAMILIES);
     for (const c of serveCwds) {
       expect(c).toBeDefined();
       expect(c).not.toBe(process.cwd());
@@ -746,7 +884,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 20 entries");
+    // PR-363: SERVE_CASES' rows plus the V3_KEEP_CASES family cases
+    expect(f?.measured).toContain(
+      `the keep rule accepts every row of all ${SERVE_CASES.length + V3_KEEP_CASES} entries`,
+    );
     // R998, R1019, R1043, R1009, PR-47, PR-53, PR-54: each new family judged a refusal by its own entry
     for (const e of [
       "download-from-stream-needs-client",
@@ -764,10 +905,17 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     expect(f?.measured).toContain("http: refusal");
     expect(f?.measured).toContain("cascade: refusal");
     expect(f?.measured).toContain("cascade-existing-state: refusal");
-    // PR-114a: a second daemon, with the same argv, measures the capability facts.
+    // PR-114a: a second daemon, with the same argv, measures the capability facts; PR-340: a third, the carry fact's own; PR-342: a fourth, stop-groups'.
     const serveArgv = [resolve("/fake/alrunner"), "serve", "--test-timeout", "3"];
-    expect(s.argvs).toEqual([serveArgv, serveArgv]);
-    const run = s.requests.filter((q) => q.command === "runTests" && !isCapabilityRequest(q));
+    // PR-363: and one more per family app (V3_KEEP_APP_FAMILIES), right after the first
+    expect(s.argvs).toEqual(Array.from({ length: 4 + V3_KEEP_APP_FAMILIES }, () => serveArgv));
+    const run = s.requests.filter(
+      (q) =>
+        q.command === "runTests" &&
+        !isCapabilityRequest(q) &&
+        !isStopGroupsRequest(q) &&
+        !String((q.sourcePaths as string[])[0]).startsWith(`${FAKE_KEEP_DIR}/`),
+    );
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS)).toEqual({
@@ -1143,8 +1291,8 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     for (const v of ["matches", "diverged"]) {
       const s = fakeServe();
       const r = await session(s, { "serve-keep-reasons": v });
-      // PR-114a: a session does start serve, for the capability facts alone.
-      expect(s.argvs.length).toBe(1);
+      // PR-114a: a session does start serve, for the capability facts alone (PR-340: and the carry fact's own daemon).
+      expect(s.argvs.length).toBe(2);
       expect(
         s.requests.filter((q) => q.command === "runTests").every((q) => isCapabilityRequest(q)),
       ).toBe(true);
@@ -1178,6 +1326,7 @@ describe("§8 the contract probe", () => {
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(r.facts.map((f) => f.fact).sort()).toEqual(
       [
+        "batch-sequential-carry",
         "version",
         "unknown-flag-rejected",
         "rows-shape",
@@ -1215,6 +1364,8 @@ describe("§8 the contract probe", () => {
         "batch-onrun-included-duplicates",
         "batch-lane-hint-only",
         "batch-lane-strict-reruns",
+        // PR-342
+        "stop-groups",
       ].sort(),
     );
   });
@@ -1244,8 +1395,13 @@ describe("PR-114a: the eight capability facts", () => {
     const { r, f } = await readOf();
     for (const n of V3_CAPABILITY_FACTS)
       expect(f(n), n).toMatchObject({ kind: "capability", verdict: "matches" });
+    // PR-340: the carry fact is read beside the eight, but is NOT one of them.
+    expect(f(V3_CARRY_FACT)).toMatchObject({ kind: "capability", verdict: "matches" });
+    expect((V3_CAPABILITY_FACTS as readonly string[]).includes(V3_CARRY_FACT)).toBe(false);
     expect(r.facts.filter((x) => x.kind === "capability").map((x) => x.fact)).toEqual([
       ...V3_CAPABILITY_FACTS,
+      V3_CARRY_FACT,
+      STOP_GROUPS_FACT,
     ]);
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
@@ -1403,9 +1559,9 @@ describe("PR-114a: the eight capability facts", () => {
       return { ...h, write: (l: string) => h.write(l.replaceAll("/", "\\\\")) };
     };
     const r = await probe({}, win);
-    for (const n of V3_CAPABILITY_FACTS)
+    for (const n of [...V3_CAPABILITY_FACTS, V3_CARRY_FACT, STOP_GROUPS_FACT])
       expect(r.facts.find((x) => x.fact === n)?.verdict, n).toBe("matches");
-    expect(r.facts.length).toBe(36);
+    expect(r.facts.length).toBe(38);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -1421,7 +1577,7 @@ describe("PR-114a: the eight capability facts", () => {
     // the next fact, and every other, reads as if nothing had happened: a fresh daemon after the timeout
     for (const n of V3_CAPABILITY_FACTS.filter((x) => x !== "batch-no-cross-singleinstance"))
       expect(f(n)?.verdict, n).toBe("matches");
-    expect(serve.argvs.length).toBe(3); // serve-keep-reasons, the capability daemon, and its replacement
+    expect(serve.argvs.length).toBe(5 + V3_KEEP_APP_FAMILIES); // serve-keep-reasons, then PR-363's family daemons, the capability daemon, its replacement, the carry fact's daemon, stop-groups'
   });
 
   test("batch-onrun-excluded-no-carry: diverged when the excluded OnRun writer's row reaches the batch", async () => {
@@ -1510,7 +1666,7 @@ describe("PR-114a: the eight capability facts", () => {
     const { serve } = await readOf();
     const cap = serve.requests.filter((q) => q.command === "runTests" && isCapabilityRequest(q));
     // 4 no-cross x2, excluded-no-carry x3, included x1, hint x1, strict x1
-    expect(cap).toHaveLength(14);
+    expect(cap).toHaveLength(15);
     for (const q of cap) {
       expect(q.testIsolation).toBe("test");
       expect(q.coverage).toBe(true);
@@ -1520,15 +1676,18 @@ describe("PR-114a: the eight capability facts", () => {
       expect(Array.isArray(q.sourcePaths) && q.sourcePaths.length === 1).toBe(true);
     }
     const dirs = new Set(cap.map((q) => (q.sourcePaths as string[])[0] ?? ""));
-    expect([...dirs].map(folderName).sort()).toEqual([...V3_CAPABILITY_FACTS].sort());
+    expect([...dirs].map(folderName).sort()).toEqual(
+      [...V3_CAPABILITY_FACTS, V3_CARRY_FACT].sort(),
+    );
     const strict = cap.filter((q) => Object.hasOwn(q, "strictOrder"));
     expect(strict.map((q) => folderName((q.sourcePaths as string[])[0] ?? ""))).toEqual([
       "batch-lane-strict-reruns",
+      V3_CARRY_FACT,
     ]);
     // the batch requests name the complement in excludeTests and carry no `test`
     // (L2) every batch request, of every fact, has a non-empty complement: LethAL's body
     const batches = cap.filter((x) => x.test === undefined);
-    expect(batches).toHaveLength(8);
+    expect(batches).toHaveLength(9);
     for (const q of batches)
       expect(
         (q.excludeTests as string[] | undefined)?.length ?? 0,
@@ -1536,22 +1695,29 @@ describe("PR-114a: the eight capability facts", () => {
       ).toBeGreaterThan(0);
   });
 
-  test("the invented AL: ids in 50700-50779, ten per fact, none in the main probe's 50600-50699, and no DotNet", async () => {
+  test("the invented AL: ids in 50700-50789, ten per fact, none in the main probe's 50600-50699, and no DotNet", async () => {
     const seen = new Map<string, string>();
+    let stopAl: string | undefined;
     const { r } = await readOf((name, q, def) => {
       const dir = (q.sourcePaths as string[])[0] ?? "";
-      if (!seen.has(name))
+      if (name === "stop-groups" && stopAl === undefined)
+        stopAl = readFileSync(join(dir, "src", "Stop.Codeunit.al"), "utf8");
+      else if (!seen.has(name))
         seen.set(name, readFileSync(join(dir, "src", "Batch.Codeunit.al"), "utf8"));
       return def;
     });
-    expect(r.facts.length).toBe(36);
-    expect([...seen.keys()].sort()).toEqual([...V3_CAPABILITY_FACTS].sort());
+    expect(r.facts.length).toBe(38);
+    expect([...seen.keys()].sort()).toEqual([...V3_CAPABILITY_FACTS, V3_CARRY_FACT].sort());
+    // PR-342: stop-groups' own AL, ids 50781-50785 (its own scratch folder, so the carry fact's 50780s do not meet it).
+    const stopIds = [...(stopAl ?? "").matchAll(/^codeunit (\d+) /gm)].map((m) => Number(m[1]));
+    expect(stopIds).toEqual([50781, 50782, 50783, 50784, 50785]);
+    expect(stopAl).not.toMatch(/DotNet/);
     for (const [name, al] of seen) {
       const ids = [...al.matchAll(/^(?:table|codeunit) (\d+) /gm)].map((m) => Number(m[1]));
       expect(ids.length, name).toBeGreaterThan(2);
       for (const id of ids) {
         expect(id, name).toBeGreaterThanOrEqual(50700);
-        expect(id, name).toBeLessThanOrEqual(50779);
+        expect(id, name).toBeLessThanOrEqual(50789);
         expect(Math.floor((id - 50700) / 10), name).toBe(
           Math.floor((Math.min(...ids) - 50700) / 10),
         );
@@ -2113,7 +2279,7 @@ describe("§8 the contract probe, continued", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(36);
+    expect(r.facts.length).toBe(38);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -2424,7 +2590,7 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10 (R590, r13; PR-114a): 36 facts, 9 defect, 18 contract, 1 warn, 8 capability; the old count of 28 is gate-fail", async () => {
+  test("P10 (R590, r13; PR-114a; PR-340; PR-342): 38 facts, 9 defect, 18 contract, 1 warn, 10 capability-kind (8 + the carry fact + stop-groups); the old counts 37, 36 and 28 are gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
     expect([
@@ -2433,8 +2599,10 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
       kinds("contract"),
       kinds("warn"),
       kinds("capability"),
-    ]).toEqual([36, 9, 18, 1, 8]);
-    expect(V3_LEG_C_FACTS).toBe(36);
+    ]).toEqual([38, 9, 18, 1, 10]);
+    expect(V3_LEG_C_FACTS).toBe(38);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 37).outcome).toBe("gate-fail");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 36).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 28).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 27).outcome).toBe("gate-fail");
     expect(
@@ -2985,5 +3153,539 @@ describe("T18: the .gated pin", () => {
     expect(
       "batchFacts" in parseGated(JSON.stringify({ ...base, batchFacts: { b: "pass" } }), "x"),
     ).toBe(false);
+  });
+
+  test("PR-342: a record's batchFacts keep stop-groups' reading, matches or diverged, beside the eight", () => {
+    const base = { version: "v", binarySha256: "a".repeat(64), lethalCommit: COMMIT };
+    for (const v of ["matches", "diverged"])
+      expect(
+        parseGated(
+          JSON.stringify({
+            ...base,
+            batchFacts: { "batch-no-cross-row": "matches", [STOP_GROUPS_FACT]: v },
+          }),
+          "x",
+        ).batchFacts,
+      ).toEqual({ "batch-no-cross-row": "matches", "stop-groups": v });
+  });
+});
+
+describe("PR-340: the carry fact batch-sequential-carry", () => {
+  const spawnsWithEnv = () => {
+    const serve = fakeServe();
+    const envs: (Readonly<Record<string, string | undefined>> | undefined)[] = [];
+    const spawn: ServerSpawnFn = (argv, opts) => {
+      envs.push(opts?.env);
+      return serve.spawn(argv, opts);
+    };
+    return { spawn, envs, serve };
+  };
+
+  // Test 8, leg C half. Red (a): drop `serverEnv` from the carry spec in BATCH_FACTS, so its server
+  // does not get the variable. Red (b): put AL_STRICT_SEQUENTIAL into `v3ChildEnv`, so every server does.
+  test("only the carry fact's OWN server gets AL_STRICT_SEQUENTIAL=1; serve-keep-reasons' and the eight facts' servers do not", async () => {
+    const before = process.env.AL_STRICT_SEQUENTIAL;
+    try {
+      // S2: judged on the env each spawn REALLY gets (merged over the ambient one), whatever the ambient value.
+      // Red: `mergeChildEnv` not dropping the ambient variable puts "0" or "1" on the first two servers.
+      for (const ambient of ["0", "1", undefined]) {
+        if (ambient === undefined) Reflect.deleteProperty(process.env, "AL_STRICT_SEQUENTIAL");
+        else process.env.AL_STRICT_SEQUENTIAL = ambient;
+        const { spawn, envs } = spawnsWithEnv();
+        const r = await probe({}, spawn);
+        expect(r.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict).toBe("matches");
+        // serve-keep-reasons, the eight facts', the carry fact's, then (PR-342) stop-groups'.
+        // PR-363: serve-keep-reasons' own and its V3_KEEP_APP_FAMILIES family daemons come first, all without the variable.
+        expect(envs).toHaveLength(3 + 1 + V3_KEEP_APP_FAMILIES);
+        expect(
+          envs.map((e) => mergeChildEnv(e ?? {}).AL_STRICT_SEQUENTIAL),
+          `ambient ${ambient}`,
+        ).toEqual([
+          ...Array.from({ length: 1 + V3_KEEP_APP_FAMILIES }, () => undefined),
+          undefined,
+          "1",
+          undefined,
+        ]);
+      }
+    } finally {
+      if (before === undefined) Reflect.deleteProperty(process.env, "AL_STRICT_SEQUENTIAL");
+      else process.env.AL_STRICT_SEQUENTIAL = before;
+    }
+  });
+
+  // Red: judge the reader `pass` as `matches` (loosen the judge), or drop the reader-status check.
+  test("a build that does NOT carry (the reader passes) reads diverged; the other facts and a session are untouched, the gate fails", async () => {
+    const serve = fakeServe(SERVE_ROWS, {
+      cap: (fact, _q, def) =>
+        fact === V3_CARRY_FACT && "tests" in def
+          ? { ...def, tests: def.tests.map((t) => ({ ...t, status: "pass", message: undefined })) }
+          : def,
+    });
+    const r = await probe({}, serve.spawn);
+    const f = (n: string) => r.facts.find((x) => x.fact === n);
+    expect(f(V3_CARRY_FACT)?.verdict).toBe("diverged");
+    for (const n of V3_CAPABILITY_FACTS) expect(f(n)?.verdict, n).toBe("matches");
+    expect(v3ContractRefusals(r)).toEqual([]);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+
+  test("an empty answer is not a match", async () => {
+    const serve = fakeServe(SERVE_ROWS, {
+      cap: (fact, _q, def) =>
+        fact === V3_CARRY_FACT && "tests" in def ? { ...def, tests: [] } : def,
+    });
+    const r = await probe({}, serve.spawn);
+    expect(r.facts.find((x) => x.fact === V3_CARRY_FACT)?.verdict).toBe("diverged");
+  });
+
+  // Test 7 (the gate half, amendment 1): this session's probe must read matches, and a record of the fact
+  // must not say otherwise; a record WITHOUT the fact does not block. Red: drop the probe check (the
+  // `bad` and `undefined` cases), or drop the `was !== undefined &&` guard (the no-record cases).
+  test("carryWalkOffReason: this session's probe must read matches; a recorded diverged wins; a missing record does not block", async () => {
+    const r = await probe();
+    const lethalCommit = "a".repeat(40);
+    const eight = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
+    expect(carryWalkOffReason(r, { batchFacts: eight, lethalCommit })).toBeUndefined();
+    expect(carryWalkOffReason(r, undefined)).toBeUndefined();
+    const full = { ...eight, [V3_CARRY_FACT]: "matches" };
+    expect(carryWalkOffReason(r, { batchFacts: full, lethalCommit })).toBeUndefined();
+    expect(
+      carryWalkOffReason(r, {
+        batchFacts: { ...eight, [V3_CARRY_FACT]: "diverged" },
+        lethalCommit,
+      }),
+    ).toContain("diverged");
+    const bad = {
+      ...r,
+      facts: r.facts.map((f) => (f.fact === V3_CARRY_FACT ? { ...f, verdict: "diverged" } : f)),
+    } as V3ContractResult;
+    expect(carryWalkOffReason(bad, { batchFacts: full, lethalCommit })).toContain("probe read");
+    expect(carryWalkOffReason(bad, undefined)).toContain("probe read");
+    expect(carryWalkOffReason(undefined, { batchFacts: full, lethalCommit })).toContain(
+      "unmeasured",
+    );
+    expect(carryWalkOffReason(undefined, undefined)).toContain("unmeasured");
+    // The record rule of baseline batching names none of this fact.
+    expect(
+      baselineBatchingOffReason(r, "v", "b".repeat(64), { batchFacts: eight, lethalCommit }) ?? "",
+    ).not.toContain(V3_CARRY_FACT);
+  });
+});
+
+describe("PR-342: the stop-groups capability fact (PR-256's alRunnerV3.stopGroups)", () => {
+  type R = { name: string; status: string; notRun?: boolean; message?: string };
+  const rows = (rs: R[]): StopAnswer => ({
+    rows: rs.map((r) => ({
+      name: r.name,
+      status: r.status,
+      notRun: r.notRun === true,
+      message: r.message,
+    })),
+  });
+  /** What a #8564 build answers (PR-257's text), straight from the fake daemon's model. */
+  const asBuilt = (): { stop: StopAnswer; follow: StopAnswer; guard: StopAnswer } => {
+    const of = (q: Record<string, unknown>) =>
+      rows(
+        (stopGroupsAnswer(q) as { tests: Record<string, unknown>[] }).tests.map((t) => ({
+          name: String(t.name),
+          status: String(t.status),
+          notRun: t.notRun === true,
+          ...(typeof t.message === "string" ? { message: t.message } : {}),
+        })),
+      );
+    return {
+      stop: of(STOP_GROUPS_REQUESTS.stop),
+      follow: of(STOP_GROUPS_REQUESTS.follow),
+      guard: of(STOP_GROUPS_REQUESTS.guard),
+    };
+  };
+  const replace = (a: StopAnswer, name: string, r: Omit<R, "name">): StopAnswer =>
+    rows(
+      ("rows" in a ? a.rows : []).map((x) =>
+        x.name === name
+          ? { name, ...r }
+          : {
+              name: x.name,
+              status: x.status,
+              notRun: x.notRun,
+              ...(x.message !== undefined ? { message: x.message } : {}),
+            },
+      ),
+    );
+  const SKIP_FIRST = skipText("Codeunit50781.First", "a");
+
+  test("case 1, 4, 5 as #8564 gives them: matches; the guard readings are recorded as ran", () => {
+    const j = judgeStopGroups(asBuilt());
+    expect(j.verdict).toBe("matches");
+    expect(j.measured).toContain("after a timeout: ran; after a refusal: ran");
+  });
+
+  test("a build without #8564 refuses the request by name: diverged (fails closed), the refusal recorded", () => {
+    const refused: StopAnswer = {
+      refused:
+        'al-runner serve: the request was refused: "unknown field `stopGroup` in an entry of `entries`"',
+    };
+    const j = judgeStopGroups({ ...asBuilt(), stop: refused });
+    expect(j.verdict).toBe("diverged");
+    expect(j.measured).toContain("unknown field `stopGroup`");
+  });
+
+  test("case 1: a build that runs the second test (no skip) is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(
+      replace(a.stop, "Codeunit50781.Second", { status: "pass" }),
+      "Codeunit50782.Other",
+      { status: "pass" },
+    );
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("review nit: a doubled skip row (two rows of one name) is diverged, never matched on its first copy", () => {
+    const a = asBuilt();
+    const rs = "rows" in a.stop ? a.stop.rows : [];
+    const second = rs.find((x) => x.name === "Codeunit50781.Second");
+    expect(second).toBeDefined();
+    if (second === undefined) return;
+    const stop: StopAnswer = { rows: [...rs, second] };
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 1: a skip of the SECOND ENTRY missing (only the codeunit's own rest) is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(a.stop, "Codeunit50782.Other", { status: "pass" });
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 1: the skip text naming another test, or reworded, is diverged", () => {
+    const a = asBuilt();
+    for (const message of [
+      skipText("Codeunit50783.Passes", "a"),
+      SKIP_FIRST.replace("NotRun: out-of-scope: ", "NotRun: "),
+    ]) {
+      const stop = replace(a.stop, "Codeunit50781.Second", {
+        status: "error",
+        notRun: true,
+        message,
+      });
+      expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+    }
+  });
+
+  test("case 1: the skip text on a row that is not notRun/error is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(a.stop, "Codeunit50781.Second", { status: "fail", message: SKIP_FIRST });
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 1: a first test that is not a plain fail is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(a.stop, "Codeunit50781.First", {
+      status: "fail",
+      notRun: true,
+      message: "first fails",
+    });
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 5: group a's failure skipping group b's test is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(a.stop, "Codeunit50783.Passes", {
+      status: "error",
+      notRun: true,
+      message: SKIP_FIRST,
+    });
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 4: the follow-up request not answered normally: diverged on a row, unmeasurable on no answer", () => {
+    const a = asBuilt();
+    expect(
+      judgeStopGroups({
+        ...a,
+        follow: replace(a.follow, "Codeunit50783.Passes", { status: "fail" }),
+      }).verdict,
+    ).toBe("diverged");
+    expect(judgeStopGroups({ ...a, follow: rows([]) }).verdict).toBe("diverged");
+    expect(judgeStopGroups({ ...a, follow: { refused: "busy" } }).verdict).toBe("diverged");
+    expect(judgeStopGroups({ ...a, follow: { failed: "deadline" } }).verdict).toBe("unmeasurable");
+    expect(judgeStopGroups({ ...a, stop: { failed: "eof" } }).verdict).toBe("unmeasurable");
+  });
+
+  test("cases 2 and 3: a skip after a timeout or a refusal row is RECORDED, and never changes the verdict", () => {
+    const a = asBuilt();
+    const guard = replace(
+      replace(a.guard, "Codeunit50784.After", {
+        status: "error",
+        notRun: true,
+        message: skipText("Codeunit50784.Spins", "t"),
+      }),
+      "Codeunit50785.After",
+      { status: "error", notRun: true, message: skipText("Codeunit50785.Refuses", "r") },
+    );
+    const j = judgeStopGroups({ ...a, guard });
+    expect(j.verdict).toBe("matches");
+    expect(j.measured).toContain("after a timeout: SKIPPED; after a refusal: SKIPPED");
+    // a guard first row that is not what it claims to test is named, too
+    const notTimeout = replace(a.guard, "Codeunit50784.Spins", { status: "pass" });
+    expect(judgeStopGroups({ ...a, guard: notTimeout }).measured).toContain(
+      "after a timeout (first row not a timeout): ran",
+    );
+    expect(judgeStopGroups({ ...a, guard: { failed: "deadline" } }).verdict).toBe("matches");
+  });
+
+  test("the probe sends the three requests to ONE daemon, in order, with the pinned shapes, and reads matches", async () => {
+    const serve = fakeServe();
+    const r = await probe({}, serve.spawn);
+    const f = r.facts.find((x) => x.fact === STOP_GROUPS_FACT);
+    expect(f).toMatchObject({ kind: "capability", verdict: "matches" });
+    const sent = serve.requests.filter(isStopGroupsRequest);
+    expect(sent.map(({ sourcePaths: _, ...q }) => q)).toEqual([
+      { command: "runTests", testIsolation: "test", ...STOP_GROUPS_REQUESTS.stop },
+      { command: "runTests", testIsolation: "test", ...STOP_GROUPS_REQUESTS.follow },
+      { command: "runTests", testIsolation: "test", ...STOP_GROUPS_REQUESTS.guard },
+    ]);
+    expect(STOP_GROUPS_REQUESTS.stop.entries.every((e) => e.stopGroup !== undefined)).toBe(true);
+    expect("stopAfterFirstFailure" in STOP_GROUPS_REQUESTS.follow).toBe(false);
+  });
+
+  test("the probe on a build that refuses `stopGroup` reads diverged, and leg C still passes with the off line", async () => {
+    const serve = fakeServe(SERVE_ROWS, {
+      cap: (fact, _q, def) =>
+        fact === "stop-groups"
+          ? { error: "unknown field `stopGroup` in an entry of `entries`" }
+          : def,
+    });
+    const r = await probe({}, serve.spawn);
+    expect(r.facts.find((x) => x.fact === STOP_GROUPS_FACT)?.verdict).toBe("diverged");
+    const c = classifyLegC(
+      r.facts,
+      V3_DEFECT_FACTS,
+      V3_LEG_C_FACTS,
+      V3_WARN_FACTS,
+      undefined,
+      V3_CAPABILITY_FACTS,
+    );
+    expect(c.outcome).toBe("pass");
+    expect(
+      c.lines.some((l) => l.startsWith("al-runner-v3-stop-groups-off: stop-groups: diverged")),
+    ).toBe(true);
+  });
+
+  test("leg C: stop-groups matches passes with no line; unmeasurable is infra-fail; another fact's diverged still fails", () => {
+    const one = (fact: string, verdict: string) => [{ fact, verdict, measured: "m" }];
+    expect(classifyLegC(one("stop-groups", "matches"), [], 1)).toEqual({
+      outcome: "pass",
+      lines: [],
+    });
+    expect(classifyLegC(one("stop-groups", "unmeasurable"), [], 1).outcome).toBe("infra-fail");
+    expect(classifyLegC(one("version", "diverged"), [], 1).outcome).toBe("gate-fail");
+  });
+
+  test("a session (gate-only) never measures stop-groups", async () => {
+    const s = fakeServe();
+    const r = await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: fakeV3(),
+      serveSpawn: s.spawn,
+      gateOnlyTrusted: "the gated build's leg C at 5eb544ef",
+    });
+    expect(r.facts.some((x) => x.fact === STOP_GROUPS_FACT)).toBe(false);
+    expect(s.requests.some(isStopGroupsRequest)).toBe(false);
+  });
+});
+
+describe("PR-363: serve-keep-reasons' per-family apps, each on its own fresh daemon, judged on its own rows", () => {
+  const keepFact = (r: V3ContractResult) => r.facts.find((x) => x.fact === "serve-keep-reasons");
+  const OTHER = { name: "Codeunit51002.Other", status: "error", notRun: true } as const;
+
+  // Red: judge `rows` merged across requests (find the case in the first request that has the name).
+  test("each request is judged on its OWN rows: two families return the same test name with different outcomes", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam1") ? [{ name: KEEP_CASE.name, status: "pass" }] : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toContain("fam1 stream-never-created: MOVED pass");
+    expect(f?.measured).not.toContain("fam0");
+    expect(f?.measured.split("; ")).toHaveLength(1);
+  });
+
+  // Red: start the family daemon once, outside the loop in serveKeepReasons (a shared daemon).
+  test("each family gets a FRESH daemon: one process per request, the same argv as the first", async () => {
+    const inner = fakeServe();
+    const procs: string[][] = [];
+    const spawn: ServerSpawnFn = (argv, opts) => {
+      const p = inner.spawn(argv, opts);
+      const mine: string[] = [];
+      procs.push(mine);
+      return {
+        ...p,
+        write: (line: string) => {
+          const q = JSON.parse(line) as { command: string; sourcePaths?: string[] };
+          if (q.command === "runTests") mine.push(String(q.sourcePaths?.[0]));
+          p.write(line);
+        },
+      };
+    };
+    await probe({}, spawn);
+    // process 0 is the existing request; 1..N each hold exactly one request, for their own app
+    expect(procs.slice(1, 1 + V3_KEEP_APP_FAMILIES)).toEqual(KEEP_APPS.map((a) => [a.dir]));
+    expect(procs[0]).toHaveLength(1);
+    expect(procs[0]?.[0]).not.toContain(FAKE_KEEP_DIR);
+    const serveArgv = [resolve("/fake/alrunner"), "serve", "--test-timeout", "3"];
+    expect(inner.argvs.slice(0, 1 + V3_KEEP_APP_FAMILIES)).toEqual(
+      Array.from({ length: 1 + V3_KEEP_APP_FAMILIES }, () => serveArgv),
+    );
+  });
+
+  const raw = (keepApps?: readonly V3KeepApp[]) => {
+    const s = fakeServe();
+    return runV3ContractProbeRaw({
+      ...(keepApps !== undefined ? { keepApps } : {}),
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: fakeV3(),
+      serveSpawn: s.spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    }).then((r) => ({ r, s }));
+  };
+
+  // Red: delete the `keepApps === undefined || keepApps.length < V3_KEEP_APP_FAMILIES` check in serveKeepReasons.
+  test("the family apps absent, or fewer than the pinned count: unmeasurable, the reason named, no request made for it", async () => {
+    for (const apps of [undefined, KEEP_APPS.slice(0, V3_KEEP_APP_FAMILIES - 1)]) {
+      const { r, s } = await raw(apps);
+      const f = keepFact(r);
+      expect(f?.verdict).toBe("unmeasurable");
+      expect(f?.measured).toContain("the family apps are missing");
+      expect(f?.measured).toContain(
+        apps === undefined ? "none given" : `9 of ${V3_KEEP_APP_FAMILIES}`,
+      );
+      // never the old request alone: serve-keep-reasons ran no request at all
+      expect(
+        s.requests.some(
+          (q) => q.command === "runTests" && !isCapabilityRequest(q) && !isStopGroupsRequest(q),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  // Red: judge only the chosen cases (drop the `(unjudged)` loop over the request's other rows).
+  test("a refused row in a family request that no entry keeps is unkept, named by family, and fails leg C", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) => [
+        ...keptRows(dir),
+        ...(dir.endsWith("/fam3")
+          ? [{ ...OTHER, message: "NotRun: out-of-scope: a reworded refusal nobody keeps" }]
+          : []),
+      ],
+    });
+    const r = await probe({}, s.spawn);
+    const f = keepFact(r);
+    expect(f?.verdict).toBe("unkept");
+    expect(f?.measured).toContain("fam3 (unjudged): UNKEPT Codeunit51002.Other");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS).outcome).toBe(
+      "gate-fail",
+    );
+  });
+
+  // Red: let a chosen case's refusal that its OWN entry does not match fall to `moved` only (drop the unkeptRefusal check).
+  test("a chosen case whose refusal text no entry keeps is unkept (a reworded entry), not merely moved", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam7")
+          ? [
+              {
+                name: KEEP_CASE.name,
+                status: "error",
+                notRun: true,
+                message: `${KEEP_TEXT} (reworded)`,
+              },
+            ]
+          : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("unkept");
+    expect(f?.measured).toContain("fam7 stream-never-created: UNKEPT");
+  });
+
+  // Red: drop the `res.tests.length === 0` branch (every case would then read MOVED, a mere warning).
+  test("a family request with no row at all is unmeasurable, naming the family and its compilationErrors", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) => (dir.endsWith("/fam5") ? [] : keptRows(dir)),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain("fam5: the request returned no test row at all");
+    expect(f?.measured).toContain("compilationErrors");
+  });
+
+  // Red: accept a plain fail or pass for a family case (copy the SERVE_CASES allowances into the family loop).
+  test("a family case that fails plainly (the refusal moved) reads diverged: refusal only", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam2")
+          ? [{ name: KEEP_CASE.name, status: "fail", message: "some plain failure" }]
+          : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toContain("fam2 stream-never-created: MOVED fail");
+  });
+
+  // Build review S1. Red: swap `unmeasurable` and `diverged` in the verdict order (a blind family would then pass as a warning).
+  test("a family with no row beside another family's moved case reads unmeasurable, not diverged", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam5")
+          ? []
+          : dir.endsWith("/fam2")
+            ? [{ name: KEEP_CASE.name, status: "pass" }]
+            : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain("fam5: the request returned no test row at all");
+    expect(f?.measured).toContain("fam2 stream-never-created: MOVED pass"); // build review L2: moved rows still shown
+  });
+
+  // Build review S1. Red: put `unmeasurable` before `unkept` in the verdict order.
+  test("a family with no row beside another family's unkept row reads unkept", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam5")
+          ? []
+          : dir.endsWith("/fam3")
+            ? [
+                ...keptRows(dir),
+                { ...OTHER, message: "NotRun: out-of-scope: a reworded refusal nobody keeps" },
+              ]
+            : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("unkept");
+    expect(f?.measured).toContain("fam3 (unjudged): UNKEPT Codeunit51002.Other");
+  });
+
+  // Build review L1. Red: drop the case-count half of the manifest check.
+  test("a manifest with the right family count but the wrong case count reads unmeasurable before any request", async () => {
+    const short = KEEP_APPS.map((a, i) => (i === 0 ? { ...a, cases: [KEEP_CASE] } : a));
+    const { r } = await raw(short);
+    const f = keepFact(r);
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain(`10 of 10 families, 10 of ${V3_KEEP_CASES} cases`);
   });
 });

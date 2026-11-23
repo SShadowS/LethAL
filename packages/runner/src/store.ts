@@ -369,6 +369,9 @@ export interface TestNarrowing {
 /** R896: the `runner_build` suffix of an `isolation: "auto"` run (always last). */
 export const ISOLATION_AUTO_BUILD_TAG = " isolation-auto";
 
+/** PR-303 rule 4: the note on a mutant whose every covering codeunit was pruned. History never lends such a survivor. */
+export const PRUNED_NOTE = "pruned: no covering test reaches its site";
+
 /** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
 export interface LendingSession {
   readonly backend: string;
@@ -1431,8 +1434,11 @@ export class ResultsStore {
     }[];
     // The tag sits before the optional license tag (R956) and the (always last) isolation-auto tag;
     // both stay in the stripped build, so another license is still a different build.
-    const tag = / environment-(saas|onprem)( license-[0-9a-f]{8})?( isolation-auto)?$/;
-    const strip = (b: string) => b.replace(tag, "$2$3");
+    // PR-282: the optional companies tag sits between the license tag and isolation-auto.
+    const tag =
+      / environment-(saas|onprem)( license-[0-9a-f]{8})?( companies-[0-9a-f]{8})?( refused-cut-tail)?( stop-groups)?( isolation-auto)?$/;
+    // PR-297: refused-cut-tail, then PR-256's stop-groups, sit before isolation-auto
+    const strip = (b: string) => b.replace(tag, "$2$3$4$5$6");
     for (const r of rows) {
       if (r.runner_build === q.runnerBuild || strip(r.runner_build) !== strip(q.runnerBuild))
         continue;
@@ -2803,7 +2809,8 @@ export class ResultsStore {
     const rows = this.db
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file, member_hash, covering_tests FROM mutants " +
-          "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
+          // PR-303: a pruned survivor never ran a test, so it is never lent into another run.
+          "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor') AND COALESCE(failure_note, '') NOT LIKE 'pruned:%'",
       )
       .all(run.id) as Array<{
       covering_tests: string | null;

@@ -48,6 +48,7 @@ describe("(a) every spawn path sets the variable, and an ambient value does not 
     expect(v3ChildEnv({ ALRUNNER_CACHE: "/c" })).toEqual({
       ALRUNNER_CACHE: "/c",
       ALRUNNER_SEED: "1",
+      ALRUNNER_LOGIN_REPLAY: "0", // PR-360
     });
   });
 
@@ -112,6 +113,7 @@ describe("(a) every spawn path sets the variable, and an ambient value does not 
     }).catch(() => {});
     expect(seen.length).toBeGreaterThan(0);
     for (const e of seen) expect(e?.ALRUNNER_SEED).toBe("1");
+    for (const e of seen) expect(e?.ALRUNNER_LOGIN_REPLAY).toBe("0"); // PR-360
   });
 });
 
@@ -247,6 +249,8 @@ describe("(a) the backend's own spawns", () => {
     expect(v3.calls.some((c) => c.argv[1] === "--version")).toBe(true);
     expect(v3.calls.some((c) => c.argv.includes("--codeunit"))).toBe(true);
     for (const c of v3.calls) expect(c.env?.ALRUNNER_SEED).toBe("1");
+    // PR-360: the same spawns carry the login replay off.
+    for (const c of v3.calls) expect(c.env?.ALRUNNER_LOGIN_REPLAY).toBe("0");
   });
 });
 
@@ -513,12 +517,15 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
     const bad = hits.filter((m) => !text.slice(m.index, (m.index ?? 0) + reach).includes(needle));
     return { count: hits.length, bad: bad.map((m) => text.slice(m.index, (m.index ?? 0) + 80)) };
   };
-  test("the backend: --version, one-shot and serve spawns all take cacheEnv() (which wraps v3ChildEnv)", async () => {
+  // PR-340: serve spawns pass `cacheEnv(mutantRun)` (v3MutantDaemonEnv, which wraps v3ChildEnv), so the
+  // needle is the call, with or without its argument.
+  test("the backend: --version, one-shot and serve spawns all take cacheEnv(...) (which wraps v3ChildEnv)", async () => {
     const t = await read("al-runner-v3-backend.ts");
-    const r = eachFollowedBy(t, /this\.(?:serverSpawn|spawn)\(/g, "this.cacheEnv()", 250);
+    const r = eachFollowedBy(t, /this\.(?:serverSpawn|spawn)\(/g, "this.cacheEnv(", 250);
     expect(r.count).toBe(4); // R907: the `test --help` read is the fourth
     expect(r.bad).toEqual([]);
-    expect(t).toContain("env: v3ChildEnv(");
+    // PR-340: both branches wrap v3ChildEnv (v3MutantDaemonEnv is v3ChildEnv plus AL_STRICT_SEQUENTIAL).
+    expect(t).toContain("env: mutantRun ? v3MutantDaemonEnv(extra) : v3ChildEnv(extra)");
   });
   test("the probe, the contract probe and doctor wrap their spawns in v3ChildEnv", async () => {
     const probe = eachFollowedBy(
@@ -530,11 +537,12 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
     expect(probe.count).toBe(1);
     expect(probe.bad).toEqual([]);
     const c = await read("al-runner-v3-contract.ts");
-    expect(eachFollowedBy(c, /spawnIn\(argv/g, "v3ChildEnv()", 150)).toEqual({ count: 1, bad: [] });
-    // serve-keep-reasons' daemon and (PR-114a) the capability facts' daemon
+    // PR-360: the probe's own env now goes INTO v3ChildEnv (`v3ChildEnv({ ...opts?.env })`), so the pins win.
+    expect(eachFollowedBy(c, /spawnIn\(argv/g, "v3ChildEnv({", 150)).toEqual({ count: 1, bad: [] });
+    // serve-keep-reasons' daemon, (PR-114a) the capability facts' daemon and (PR-342) the stop-groups daemon
     expect(
       eachFollowedBy(c, /env\.serveSpawn \?\? defaultServerSpawn\)\(/g, "v3ChildEnv(", 150),
-    ).toEqual({ count: 2, bad: [] });
+    ).toEqual({ count: 3, bad: [] });
     expect(
       eachFollowedBy(await read("cli.ts"), /spawn\(\[c\.path, "--version"\]/g, "v3ChildEnv()", 100),
     ).toEqual({ count: 1, bad: [] });

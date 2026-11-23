@@ -218,6 +218,8 @@ same commit as your binary (the sidecar is not in the release files), run from a
 `doctor` prints the sidecar in the `al-runner-v3` check; a missing one is a `WARNING`, not a failure. A run records the
 sidecar it used (the dll's sha256, or `none`) and `downloadDemoData`; `--resume` and `--resume-run` refuse a run
 whose record differs, or is missing (a v3 run from before R886), and say which setting changed from what to what. The project's own gates set `dotnetSidecar: false`.
+**Which build runs (PR-294).** If a session runs a gated al-runner build that is not the `current` one, LethAL warns once with `al-runner-v3-pinned-not-current`, naming both paths. It is not a refusal: older gated builds are allowed. If you meant `current`, check `alRunnerV3.path` in the config.
+
 **The baseline daemon and the memory guard (R948).** On the serve transport the baseline runs through one serve daemon
 (one request per test codeunit, with coverage), not one al-runner process per codeunit. A few codeunits (the first, the
 last and every 25th, at most eight) are also run as fresh processes and compared test by test (status, fail text, exact
@@ -266,7 +268,7 @@ A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the bina
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
-round trip instead of forty. This needs LethAL Control 1.0.0.28 or newer on the server; an older
+round trip instead of forty. This needs LethAL Control 1.0.0.29 or newer on the server; an older
 one is refused before any test runs. The report's `groupedCalls` says how many such calls were
 made. Three flags touch it and you should not need them: `--max-methods-per-call <n>` caps one
 call, `--request-ceiling-ms <n>` bounds one call (keep it under the hosting gateway's idle
@@ -390,6 +392,14 @@ al-runner's license switch on every al-runner call that runs tests (one-shot and
 and sha256 in `executionContexts[].license`, never its contents, and a different license is a different
 run fingerprint, so `--resume` will not mix them. Use only a license you are allowed to use for testing.
 
+**Companies for al-runner (PR-282).** A mutant that loops over the Company table is refused ("FindSet on the
+Company table"), because al-runner does not know which companies the database holds. Set
+`alRunnerV3.companies` to al-runner's own list: company names, comma separated, the session company first, or `all`
+(which needs test data). LethAL passes it as al-runner's companies switch on every al-runner call that runs tests (one-shot and
+serve). There is no default: absent, nothing is passed and the refusal stays, since a guessed list would give wrong
+verdicts. The report names the value in `executionContexts[].companies`, and a different list is a different run
+fingerprint, so `--resume` will not mix them.
+
 **Isolation `auto` and a codeunit with no green test (R956).** A test codeunit whose whole-codeunit baseline
 has no green test stays on `test` and is not re-baselined one test per process; the `isolation` caveat's
 reason says "0 green under test: a tie at 0 decides nothing, kept on test (R956)".
@@ -442,7 +452,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v33.schema.json](../schemas/explain-v33.schema.json)
+- `lethal explain`: [../schemas/explain-v35.schema.json](../schemas/explain-v35.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
   as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
@@ -490,7 +500,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 33`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 35`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -1190,6 +1200,15 @@ Stated so a consumer does not read an absence as a finding.
   assumption (any assumption, not only this one). Fewer tests run: al-runner refuses calls it has not
   measured without a client (CurrentClientType, `Page.Run` with a record, a request page with a
   handler). On PaymentPractices' header table it then agreed with BC on every kill and every survivor.
+- `"ciSessionKind": "client" | "headless"` (top level, no default; R1168, PR-307) names the session kind your own CI runs
+  tests in. `--ci-session-kind client|headless` overrides it (flag, then config, then unset), for a config file you may
+  not edit (PR-311).
+  - **When it is required:** a run whose final test list holds a session-kind-sensitive test refuses without it, by name
+    (`SessionKindUnsetError`). A test is sensitive when it binds `HandlerFunctions`, or, on al-runner-v3, when it may
+    open a TestPage or the scan cannot read it.
+  - **What the report shows:** it lists those tests in `sessionKindSensitiveTests`, and adds the `session-kind-mismatch`
+    caveat when the backend's kind differs from yours. bcdev is headless; v3 is client unless `noClient`.
+  - **The limit:** a test that changes only through APP code (an unhandled Confirm) is not seen (R1169).
 - One-shot calls ask al-runner to skip after a timeout when the build supports it (R897): after a test
   is stopped at the limit, the rest of its codeunit is not run, so a hung mutant costs one limit.
 - A test that opens a `TestPage` cannot be scored, and on the default path one such test can hang

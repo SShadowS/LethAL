@@ -326,7 +326,8 @@
             "deploy",
             "baseline",
             "mutants",
-            "teardown"
+            "teardown",
+            "recheck"
           ]
         },
         "detail": {
@@ -366,11 +367,15 @@
             "deploy",
             "baseline",
             "mutants",
-            "teardown"
+            "teardown",
+            "recheck"
           ]
         },
         "elapsedMs": {
           "type": "number"
+        },
+        "detail": {
+          "type": "string"
         },
         "seq": {
           "type": "number"
@@ -946,6 +951,72 @@
               }
             }
           }
+        },
+        "seq": {
+          "type": "number"
+        },
+        "atMs": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "tests",
+        "backendSessionKind",
+        "ciSessionKind",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "tests-session-kind-sensitive"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "test",
+              "reasons"
+            ],
+            "properties": {
+              "test": {
+                "type": "string"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "handlers",
+                    "testpage",
+                    "unreadable"
+                  ]
+                }
+              },
+              "scanError": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "backendSessionKind": {
+          "type": "string",
+          "enum": [
+            "client",
+            "headless"
+          ]
+        },
+        "ciSessionKind": {
+          "type": "string",
+          "enum": [
+            "client",
+            "headless"
+          ]
         },
         "seq": {
           "type": "number"
@@ -2709,6 +2780,9 @@
               "type": "number"
             }
           }
+        },
+        "afterMainPass": {
+          "const": true
         },
         "seq": {
           "type": "number"

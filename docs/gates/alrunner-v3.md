@@ -722,6 +722,7 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
   duplicate key, 4 TestPage, and R975's 6 Data Main `OnValidate` rows that read `no-coverage` by line attribution).
 
 ## History
+- 2026-11-21 (PR-301, GitHub #52, spec `docs/superpowers/specs/2026-11-21-pr301-step-amount-hang.md`): R1061's rule B also refuses `remove-assignment` of a step amount set before the loop (`Len := Step` before `while I < 10 do I += Len`). On `sandbox-optin` that removes the uncalled `SpinCopy` site, so DBM is 17 / 5 / 103 over 125 (was 104 over 126). No tuple or ordinal moved; no other fixture site moved.
 
 - 2026-11-19 (PR-229, R1139; spec `docs/superpowers/specs/2026-11-19-pr229-r1139-cdo-slice-default-set.md`, amendment 1):
   D1 and D1c run the default set again, judged by the BC oracle extended on bc3 (`bc3-A.default`, `bc3-B.default`):

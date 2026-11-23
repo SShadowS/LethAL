@@ -852,6 +852,9 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // PR-195 (spec 2026-11-19-pr195-y2-collation-keep-precommitment.md): the two code points DO's codeunit 68986 meets under the
   // four toggle-blank-string mutants of `IsAsciiAlphaNumeric`, each by name (U+516C CJK, U+041A Cyrillic). No code-point pattern.
   COLLCHAR: "(?:516C|041A)",
+  // PR-354 (spec 2026-11-22-pr354-saveas-layout-keep.md): the four inner errors c2 and t1 met in a SaveAs of report
+  // "Standard Statement", each by name (BaseApp texts). Only the payment reference varies, and only as 15 digits.
+  SAVEASSTMTERR: String.raw`(?:Start Date must have a value\.|End Date must have a value\.|Start date must be earlier than End date\.|The payment reference must be unique\. Payment reference \d{15} already exists\.)`,
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1226,6 +1229,38 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // the same code points from another operation (a key or record ordering); in DO only codeunit 68986 holds such characters.
   // Pinned by `al-runner-serve-pr195.test.ts`.
   ["collation-no-weight-measured", "ordering of the character U+%COLLCHAR% (no collation weight)"],
+  // PR-354 (spec 2026-11-22-pr354-saveas-layout-keep.md, R1184): the SaveAs-with-layout refusal, 89 of c2's 146 refusal
+  // closes. One row per measured report, each with only the inner errors measured with it (census of c2 and t1:
+  // /coord/handoff/PR-354/census.txt). Kept by the kept-vs-fresh DO check of its spec section 3
+  // (/coord/handoff/PR-354/keepcheck/, main-bf3a3e863, 2026-11-22): 14 requests, every text met on ONE kept daemon (the
+  // payment-reference one at baseline, codeunit 68996), then a request with no mutant after each and one over all six codeunits;
+  // 14 of 14 equal to fresh daemons; the planted-difference self-test caught.
+  // Pinned by `pr354-saveas-keep.test.ts`.
+  [
+    "saveas-layout-statement",
+    'an error in a SaveAs of report "Standard Statement", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): %SAVEASSTMTERR%',
+  ],
+  [
+    "saveas-layout-sales-invoice",
+    'an error in a SaveAs of report "Standard Sales - Invoice", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): Tests cannot call the Commit function if TransactionModel property is set to AutoRollback.',
+  ],
+  // PR-365 (spec 2026-11-23-pr365-relationfieldno-keep.md, R1187): upstream 1bea5bc7a's refusal of Field.RelationFieldNo for a
+  // TableRelation without a field of an unmeasured shape, refused at BASELINE in 7 DO test runs. Unkept, PR-250 cut each
+  // codeunit's entry before it, leaving 1,504 of c3's mutants `error`. One exact row per measured (field, table) pair, BaseApp
+  // names; no slot, so a fourth pair or a reworded text still closes. Landed on the orchestrator's ruling of 2026-11-23 after the
+  // kept-vs-fresh DO check: A and B equal; C's 10 differences each `error` from 1bea5bc7a's out-of-scope withholding.
+  [
+    "relation-field-no-dimension-set-entry-dimension-code",
+    "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Code' of table 'Dimension Set Entry', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+  ],
+  [
+    "relation-field-no-sales-invoice-header-ship-to-post-code",
+    "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Ship-to Post Code' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+  ],
+  [
+    "relation-field-no-sales-invoice-header-dimension-set-id",
+    "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Set ID' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+  ],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),

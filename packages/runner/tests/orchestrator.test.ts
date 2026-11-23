@@ -810,6 +810,8 @@ describe("runSession", () => {
       store,
       ...dirs,
       selectorIds,
+      // PR-307: the unparsable test file is session-kind-unreadable on v3, so a run needs the setting.
+      ciSessionKind: "headless",
       emit: [createEmitter([(e) => events.push(e)])],
     });
     expect(report.counts.killed).toBeGreaterThan(0);
@@ -4169,7 +4171,8 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     const dirs = await makeProject(testAl);
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
-    return dirs;
+    // PR-307: a TestPage test is session-kind-sensitive on an al-runner-v3 stub, so a run needs the setting.
+    return { ...dirs, ciSessionKind: "headless" as const };
   }
   const FENCED = { ...CAPS_NST, coverage: "fenced" as const };
 
@@ -9598,11 +9601,14 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
   });
 
   // R692: "raise the floor with --mutant-timeout-ms" is advice for a budget overrun only.
-  const strandReason = async (v: {
-    outcome: "error" | "deadline-exceeded";
-    durationMs: number;
-    failureMessage: string;
-  }): Promise<string> => {
+  const strandReason = async (
+    v: {
+      outcome: "error" | "deadline-exceeded";
+      durationMs: number;
+      failureMessage: string;
+    },
+    stopHungSessions = false,
+  ): Promise<string> => {
     let activeMutant: string | null = null;
     const backend = fakeBackend({
       capabilities: () => ({
@@ -9623,6 +9629,7 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
     const report = await runSessionForTest(backend, {
       quarantineDir: freshTmpDir(),
       nowIso: () => "2026-07-20T12:00:00.000Z",
+      ...(stopHungSessions ? { stopHungSessions: true } : {}),
     });
     return report.quarantined?.reason ?? "";
   };
@@ -9654,6 +9661,36 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
       failureMessage: "RunMutant failed: HTTP 408",
     });
     expect(reason).toContain("raise the floor with --mutant-timeout-ms");
+  });
+
+  // PR-301 (GitHub #52): an overrun may be a hang, which only the hung-session stop can score. The note
+  // named the budget and never the stop, so a user whose mutant looped had no way to learn of it.
+  test("PR-301: a budget overrun names --stop-hung-sessions and its config field (revert: the hint)", async () => {
+    const reason = await strandReason({
+      outcome: "deadline-exceeded",
+      durationMs: 999_999_999,
+      failureMessage: "RunMutant failed: HTTP 408",
+    });
+    expect(reason).toContain("--stop-hung-sessions");
+    expect(reason).toContain("bcdev.stopHungSessions");
+  });
+
+  test("PR-301: with --stop-hung-sessions ON, an overrun does not tell the user to turn it on (revert: the setting check)", async () => {
+    const reason = await strandReason(
+      { outcome: "deadline-exceeded", durationMs: 999_999_999, failureMessage: "RunMutant failed: HTTP 408" },
+      true,
+    );
+    expect(reason).toContain("raise the floor with --mutant-timeout-ms");
+    expect(reason).not.toContain("--stop-hung-sessions");
+  });
+
+  test("PR-301: a fast failure inside the budget does not name the stop (not a hang)", async () => {
+    const reason = await strandReason({
+      outcome: "error",
+      durationMs: 40,
+      failureMessage: "RunMutant failed: HTTP 500",
+    });
+    expect(reason).not.toContain("--stop-hung-sessions");
   });
 
   test("a plain deadline-exceeded (no in-flight-unknown operation) stays an ordinary error — no quarantine, session continues", async () => {
@@ -25179,5 +25216,94 @@ describe("R907: --no-client in a session", () => {
       expect(m.cause).toBe("runner-refused");
     }
     expect(report.counts.killed).toBe(0);
+  });
+});
+
+// PR-315 (GitHub #52, R1171). With the stop off, a mutant that never ends quarantines the tier.
+// The warning says so once, before anything is deployed, on bcdev only.
+describe("PR-315: stop-hung-sessions-off warning", () => {
+  async function warningsOf(
+    backend: ExecutionBackend,
+    overrides: Partial<SessionConfig> = {},
+  ): Promise<{ events: RunEvent[]; warnings: Extract<RunEvent, { type: "warning" }>[] }> {
+    const events: RunEvent[] = [];
+    await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      emit: [createEmitter([(e) => events.push(e)])],
+      ...overrides,
+    });
+    const warnings = events.filter(
+      (e): e is Extract<RunEvent, { type: "warning" }> =>
+        e.type === "warning" && e.code === "stop-hung-sessions-off",
+    );
+    return { events, warnings };
+  }
+
+  test("emitted once, before the first deployment, for a bcdev session with the stop off", async () => {
+    const { events, warnings } = await warningsOf(fakeBackend());
+    expect(warnings.length).toBe(1);
+    const at = events.findIndex((e) => e.type === "warning" && e.code === "stop-hung-sessions-off");
+    const firstDeploy = events.findIndex((e) => e.type === "batch-published");
+    expect(firstDeploy).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(firstDeploy);
+  });
+
+  test("the message names the flag, the config field and #52", async () => {
+    const { warnings } = await warningsOf(fakeBackend());
+    const m = warnings[0]?.message ?? "";
+    expect(m).toContain("--stop-hung-sessions");
+    expect(m).toContain('"stopHungSessions": true');
+    expect(m).toContain("#52");
+    expect(m).toContain("lethal clear-quarantine");
+    expect(m).toContain("lethal force-reset-lease");
+    expect(m).toContain("envTool");
+  });
+
+  test("not emitted when the stop is on", async () => {
+    const { warnings } = await warningsOf(fakeBackend(), { stopHungSessions: true });
+    expect(warnings.length).toBe(0);
+  });
+
+  test("not emitted for al-runner-v3", async () => {
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "none",
+        isolation: "session",
+        kind: "al-runner-v3",
+        authoritative: false,
+      }),
+    });
+    const { events, warnings } = await warningsOf(backend);
+    // The session ran far enough to reach the generate phase, so the zero is not a crash.
+    expect(events.some((e) => e.type === "mutation-set-generated")).toBe(true);
+    expect(warnings.length).toBe(0);
+  });
+
+  // runNamedMutants (and so `lethal verify`) has no stop setting: it asks the backend.
+  async function namedWarnings(stops: boolean | undefined): Promise<number> {
+    const fx = await installedFixture();
+    const events: RunEvent[] = [];
+    const base = fx.cfg.backend;
+    const backend = (
+      stops === undefined
+        ? base
+        : Object.assign(Object.create(base), { stopsHungSessions: () => stops })
+    ) as ExecutionBackend;
+    await runNamedMutants({ ...fx.cfg, backend, emit: [(e) => events.push(e)] });
+    return events.filter((e) => e.type === "warning" && e.code === "stop-hung-sessions-off")
+      .length;
+  }
+
+  test("runNamedMutants: emitted once on bcdev with the stop off", async () => {
+    expect(await namedWarnings(false)).toBe(1);
+  });
+
+  test("runNamedMutants: a backend that cannot say is read as off", async () => {
+    expect(await namedWarnings(undefined)).toBe(1);
+  });
+
+  test("runNamedMutants: not emitted when the backend's stop is on", async () => {
+    expect(await namedWarnings(true)).toBe(0);
   });
 });

@@ -21,6 +21,16 @@ import { parseArgs } from "node:util";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const ENTRY = join(REPO_ROOT, "packages", "runner", "src", "cli.ts");
+/**
+ * PR-292: every file `bun build --compile` must embed as an entry point: the CLI, and each worker thread a source file
+ * starts with `new Worker(new URL("./<file>", import.meta.url))`. A compiled binary contains a worker only if it is an
+ * entry point; without it, the worker fails to load in every release binary (review B1). `build-binary.test.ts` scans the
+ * runner's sources and refuses a worker that is not listed here.
+ */
+export const COMPILE_ENTRIES: readonly string[] = [
+  ENTRY,
+  join(REPO_ROOT, "packages", "runner", "src", "bound-print-worker.ts"),
+];
 const OUT_DIR = join(REPO_ROOT, "build");
 
 const NATIVE_DIR = join(REPO_ROOT, "packages", "engine", "vendor", "native");
@@ -282,7 +292,7 @@ async function build(
       `--target=${t.target}`,
       ...defines,
       `--define=__LETHAL_NATIVE_KEY__=${JSON.stringify(t.nativeKey)}`,
-      ENTRY,
+      ...COMPILE_ENTRIES,
       "--outfile",
       outPath,
     ],

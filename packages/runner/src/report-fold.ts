@@ -13,6 +13,7 @@ import {
 } from "./excluded-sites";
 import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
+import { isNotRunBaselineRow } from "./not-run-survivors";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
   type CostlyTestRow,
@@ -199,8 +200,25 @@ export interface FoldedReport {
     readonly tier: "firm" | "uncertain-write" | "uncertain-read";
     readonly firstAccess: string;
   }>;
+  /** PR-307 (R1168): the `tests-session-kind-sensitive` event; see `SessionReport.sessionKindSensitiveTests`. */
+  readonly sessionKindSensitive?: {
+    readonly tests: ReadonlyArray<{
+      readonly test: string;
+      readonly reasons: ReadonlyArray<"handlers" | "testpage" | "unreadable">;
+      readonly scanError?: string;
+    }>;
+    readonly backendSessionKind: "client" | "headless";
+    readonly ciSessionKind: "client" | "headless";
+  };
   /** R658: baseline verdicts classified `baseline-test-stopped`; see `SessionReport.baselineStopped`. */
   readonly baselineStopped?: { readonly tests: readonly string[]; readonly budgetMs: number };
+  /**
+   * PR-381 (R1197): baseline rows v3 did not run to a verdict: refused (a `NotRun: out-of-scope:` row),
+   * timed out, or stopped by us. Not a test that ran and failed. Always present here, sorted; the
+   * builder writes it to the report only for an al-runner-v3 run. A reused baseline snapshot emits the
+   * same `baseline-batch-finished`, so a resumed run's carried batches are counted too.
+   */
+  readonly notRunAtBaseline: readonly string[];
   readonly runnerDisagreementTests?: readonly string[];
   /** R403 phase C: from the `tests-discovered` event, each only when non-empty. */
   readonly testBuildSymbols?: readonly string[];
@@ -265,6 +283,7 @@ export interface FoldedReport {
       readonly source: string;
     };
     readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
+    readonly afterMainPass?: true;
   };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R896 — see `SessionReport.isolation`. */
@@ -400,7 +419,10 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     string,
     { test: string; tier: "firm" | "uncertain-write" | "uncertain-read"; firstAccess: string }
   >();
+  // PR-307: the event is emitted once per session; the last one wins
+  let sessionKindSensitive: FoldedReport["sessionKindSensitive"];
   const baselineStoppedTests = new Set<string>();
+  const v3NotRunTests = new Set<string>(); // PR-381
   let stoppedBudgetMs: number | undefined;
   // R1131: the first batch's baseline start WorkDate (ponytail: a later batch on another date, after midnight,
   // is not recorded here; its rows carry `workdate-changed` only if a batch's own answers moved).
@@ -483,6 +505,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         stoppedBySignal?: true;
         stoppedByMemory?: { usedBytes: number; boundBytes: number; source: string };
         stoppedByDaemonChurn?: { lane: number; closes: number };
+        afterMainPass?: true;
       }
     | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
@@ -583,6 +606,10 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             testPageRefusedTests.add(v.name);
           }
           if (v.classification.includes("baseline-test-stopped")) baselineStoppedTests.add(v.name);
+          // PR-381: refused (v3's NotRun text), timed out, or stopped. A fail or an error of the
+          // test's own is not here: it is red on BC too.
+          // A stopped test is `timeout` (`stoppedByUs`), so its classification needs no branch here.
+          if (isNotRunBaselineRow(v)) v3NotRunTests.add(v.name);
           if (v.durationMs !== undefined) {
             baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
@@ -607,6 +634,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           ...(e.stoppedByDaemonChurn !== undefined
             ? { stoppedByDaemonChurn: e.stoppedByDaemonChurn }
             : {}),
+          ...(e.afterMainPass === true ? { afterMainPass: true as const } : {}),
         };
         break;
       case "session-finished":
@@ -624,6 +652,14 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "tests-restrictive-default-at-risk":
         // PR-36 (R1048): a label only. The baseline and every verdict stay as al-runner gave them.
         for (const t of e.tests) restrictiveDefaultTests.set(t.test, { ...t });
+        break;
+      case "tests-session-kind-sensitive":
+        // PR-307 (R1168): a label only; no verdict reads it.
+        sessionKindSensitive = {
+          tests: e.tests.map((t) => ({ ...t })),
+          backendSessionKind: e.backendSessionKind,
+          ciSessionKind: e.ciSessionKind,
+        };
         break;
       case "tests-discovered":
         discoveredTests = e.tests;
@@ -1013,6 +1049,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           ),
         }
       : {}),
+    ...(sessionKindSensitive !== undefined ? { sessionKindSensitive } : {}),
+    notRunAtBaseline: [...v3NotRunTests].sort(),
     ...(baselineStoppedTests.size > 0
       ? {
           baselineStopped: {

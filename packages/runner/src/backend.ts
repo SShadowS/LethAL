@@ -4,6 +4,23 @@ import type { MicrosoftMode } from "./digest-inputs";
 import type { AlSource, RenamedMemberNames } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
 
+/**
+ * PR-340 §3: what a carry walk found. `killed`: test T went fail, pass, fail with complete rows and the
+ * right echoes. `walked`: all three answers were sound and no test did. `failed`: anything else, the
+ * reason named (never a verdict).
+ */
+export type CarryWalkResult =
+  | {
+      readonly kind: "killed";
+      readonly codeunitId: number;
+      readonly method: string;
+      /** The failure text of T in the first request, and in the reproducing third one. */
+      readonly failure: string | undefined;
+      readonly reproduced: string | undefined;
+    }
+  | { readonly kind: "walked" }
+  | { readonly kind: "failed"; readonly reason: string };
+
 export interface TestMethodRef {
   readonly codeunitId: number;
   readonly codeunitName: string;
@@ -375,6 +392,17 @@ export function isBcdev(kind: BackendKind): boolean {
   return kind === "bcdev";
 }
 
+/**
+ * PR-315 (GitHub #52, R1171): what the run warning and `lethal doctor` both say when the stop is
+ * off. The stop is off by default (R1064) because it ends a hung session on the user's server.
+ */
+export const STOP_HUNG_SESSIONS_OFF_TEXT =
+  "a mutant that never ends will quarantine this server's tier instead of scoring timeout-killed. " +
+  "On GitHub #52 this lost 12 of 17 mutants and needed `lethal clear-quarantine` and `lethal force-reset-lease` to recover. " +
+  'Fix: pass --stop-hung-sessions, or set "stopHungSessions": true in the config\'s bcdev section ' +
+  "(an envTool config ignores that field, so there only the flag works). " +
+  "It is off by default because it ends a hung session on the server, which is the server owner's call.";
+
 /** R586: a backend that publishes nothing and compiles the source it was given (v3, since R654). */
 export function isLocalRunner(kind: BackendKind): boolean {
   return kind === "al-runner-v3";
@@ -611,6 +639,11 @@ export interface ExecutionBackend {
    */
   closeDaemons?(): Promise<void>;
   /**
+   * PR-315: whether this backend was built with `--stop-hung-sessions` on. `runNamedMutants` (and so
+   * `lethal verify`) has no stop setting of its own, so it asks the backend. Absent: read as off.
+   */
+  stopsHungSessions?(): boolean;
+  /**
    * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
    * one-shot, static or resource selector), so a larger budget really lets the test run longer.
    * False on al-runner `--server` (and resource with `--server`): the daemon stops a test body at
@@ -639,6 +672,11 @@ export interface ExecutionBackend {
    */
   readonly isolatesTests?: boolean;
   /**
+   * PR-235: `LETHAL_V3_BASELINE_BATCHING=off` (al-runner-v3, measure-only). The baseline snapshot key does not
+   * say whether the baseline was batched, so such a run neither reuses nor records a snapshot (as R857).
+   */
+  readonly baselineBatchingKnobOff?: boolean;
+  /**
    * R907: `--no-client`, al-runner-v3 only: tests run as a session without a client
    * (`GuiAllowed()` false, as on BC's web-service path). Absent counts as false. The session puts it
    * in its fingerprint, in `runner_build` and in the report's execution context, so nothing of such
@@ -656,6 +694,12 @@ export interface ExecutionBackend {
    * call that runs tests: its path and the sha256 of its bytes. In the fingerprint and the report.
    */
   readonly license?: { readonly path: string; readonly sha256: string } | undefined;
+  /** PR-282, al-runner-v3 only: `alRunnerV3.companies`, passed as `--companies` on every call that runs tests. In the fingerprint and the report. */
+  readonly companies?: string | undefined;
+  /** PR-297, al-runner-v3 only: `alRunnerV3.refusedCutTail` is ON. In the fingerprint, the lending build and the report. Absent counts as off. */
+  readonly refusedCutTail?: boolean | undefined;
+  /** PR-256, al-runner-v3 only: `alRunnerV3.stopGroups` is ON. In the fingerprint, the lending build and the report. Absent counts as off. */
+  readonly stopGroups?: boolean | undefined;
   /**
    * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */
@@ -927,10 +971,25 @@ export interface ExecutionBackend {
   restoreCutState?(mutantId: string, state: unknown): void;
 
   /**
+   * PR-340, OPTIONAL (al-runner-v3 only): the carry walk for a SURVIVOR whose PR-327 (a) label would be
+   * added. Three batch-shaped `strictOrder` requests on the SAME lane's daemon (the mutant, none, the
+   * mutant) over the covering test codeunits run in one session, in order. `undefined`: no walk (the
+   * survivor would not be labelled). Never moves a verdict by itself; the orchestrator scores it.
+   */
+  carryWalk?(
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined>;
+
+  /**
    * R586 (I3), OPTIONAL: a tagged note for a SURVIVOR with these covering tests
    * (`[v3-refused-test-nearby] ...`), written into its `failureNote`. Never moves a verdict.
    */
-  survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
+  survivorNote?(
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): string | undefined;
 
   /**
    * R885, OPTIONAL: one line for the "no green baseline tests" note when the backend saw why
@@ -987,7 +1046,7 @@ export interface ExecutionBackend {
    * baseline (one-shot, coverage, baseline refusals) from this bracket ONLY, never from "no mutant
    * active", so the kill confirm and Decision 11's rerun are not baseline calls.
    */
-  baselinePhase?(on: boolean): void | Promise<void>;
+  baselinePhase?(on: boolean, completed?: boolean): void | Promise<void>;
 
   /**
    * R1131, OPTIONAL (bcdev outside hub mode): the start WorkDate the current batch's baseline ran under (its
