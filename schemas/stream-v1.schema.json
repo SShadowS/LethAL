@@ -326,7 +326,8 @@
             "deploy",
             "baseline",
             "mutants",
-            "teardown"
+            "teardown",
+            "recheck"
           ]
         },
         "detail": {
@@ -366,11 +367,15 @@
             "deploy",
             "baseline",
             "mutants",
-            "teardown"
+            "teardown",
+            "recheck"
           ]
         },
         "elapsedMs": {
           "type": "number"
+        },
+        "detail": {
+          "type": "string"
         },
         "seq": {
           "type": "number"

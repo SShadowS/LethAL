@@ -35,8 +35,10 @@ and c3off events and stderr).
    - `phase-left` gains an optional `detail`, the same shape `phase-entered` already has.
 3. **The TIMING banner** (`timing-summary.ts`) lists `recheck` after `teardown`, and prints the nested split under it. The
    phases then sum to the session's elapsed time, short only of the gaps between phases.
-- **Not changed:** any verdict, any recheck decision, the recheck's events or their order, the report's schema (`RunPhase`
-  is an event type, and no schema lists it; checked).
+- **Not changed:** any verdict, any recheck decision, the recheck's events or their order, the report's schema (it does not list
+  `RunPhase`).
+  - **Correction at build review:** the STREAM schema (`schemas/stream-v1.schema.json`) does list it. It is regenerated
+    with `recheck` in both phase enums and `detail` on `phase-left`; an added value, so every older stream still validates.
 
 ## Tests (red-checked each way)
 - A recheck that runs emits `phase-entered` then `phase-left` `recheck`, around `recheck-baseline-finished` and the

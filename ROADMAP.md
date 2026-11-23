@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 1157 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**63 of 1158 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1196,7 +1196,8 @@ that ordering is the priority.
 - **R1185** · Pin al-runner's login replay OFF on every al-runner child and drop an ambient ALRUNNER_LOGIN_REPLAY*: upstream ships it ON by default, so the first gated build carrying it would switch it on for every LethAL run with no DO A/B (R1182) · [R1185.md](docs/roadmap/R1185.md) · open — PR-360 (lethal/pr-360): v3ChildEnv and v3UnpinnedEnv set ALRUNNER_LOGIN_REPLAY=0; mergeChildEnv drops…
 - **R1187** · Seven baseline refusals of Field.RelationFieldNo (upstream 1bea5bc7a refuses unmeasured no-field TableRelation shapes) leave 1,504 of c3's DO mutants unscored through PR-250's cut, 182 of them y3 kills: a keep entry, after a kept-vs-fresh DO check, would recover most of them · [R1187.md](docs/roadmap/R1187.md) · open — next: a kept-vs-fresh DO check of the refusal text (PR-354's method), then a PR56_KEPT row; the same…
 - **R1188** · Three new al-runner refusal shapes on DO under current (c3), BC not yet checked: Field.RelationFieldNo for three BaseApp no-field TableRelations, Report.SaveAs as Pdf of a report whose data items are an unmeasured tree, and a conversion of Integer to Date; check each on BC before any upstream filing · [R1188.md](docs/roadmap/R1188.md) · open — PR-366: the invented probe scripts/r1188-probe reproduces three RelationFieldNo shapes and the…
-- **R1189** · The withheld-kill recheck runs after the teardown phase with no phase and no progress event: on DO about 15-17 min of a busy client with nothing reported, and only 386-438 s of it is the recheck baseline · [R1189.md](docs/roadmap/R1189.md) · open
+- **R1189** · The withheld-kill recheck runs after the teardown phase with no phase and no progress event: on DO about 15-17 min of a busy client with nothing reported, and only 386-438 s of it is the recheck baseline · [R1189.md](docs/roadmap/R1189.md) · done (68b8cfca1)
+- **R1190** · The withheld-kill recheck starts its own daemons (28 on DO) instead of reusing the main session's: at most about 100 s of wall plus the nested generate and deploy per run with a recheck; sized, not built · [R1190.md](docs/roadmap/R1190.md) · open
 - **R1191** · Format under CurrReport.FormatRegion as a generated BC differential (PR-373, #8094's family): 209 cells, 153 equal, 50 refused with BC's answers sent, 6 wrong values filed #8861 (da-DK time separator) and #8862 (fr-FR U+202F) · [R1191.md](docs/roadmap/R1191.md) · closed 2026-11-23 — measured on bc4 and filed upstream
 - **R1192** · Two more generated BC differentials (PR-374): FieldRef type conversions (#8219, 288 cells) and (language, region) pairs in a SaveAs report (144 cells); 211 refusals with BC's answers sent, 5 wrong-answer shapes filed #8867-#8871 · [R1192.md](docs/roadmap/R1192.md) · closed 2026-11-23 — measured on bc4 and filed upstream
 - **R1193** · A zip kept in a Blob through the System Application's Data Compression as a generated BC differential (PR-375): 36 cells, 13 equal, 23 refused with BC's answers sent, 0 wrong values · [R1193.md](docs/roadmap/R1193.md) · closed 2026-11-23 — measured on bc4; nothing to file, BC's answers sent to alrunner

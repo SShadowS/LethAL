@@ -3538,6 +3538,10 @@ export function v3RecheckOf(a: {
           (n, e) => (e.type === "phase-left" && e.phase === "baseline" ? n + e.elapsedMs : n),
           0,
         ),
+        // PR-370 (R1189): the nested session's phases, for the recheck phase's detail.
+        phases: events.flatMap((e) =>
+          e.type === "phase-left" ? [{ phase: e.phase, elapsedMs: e.elapsedMs }] : [],
+        ),
         identity: {
           ...(ctx?.runnerBuild !== undefined ? { version: ctx.runnerBuild } : {}),
           ...(ctx?.binarySha256 !== undefined ? { binarySha256: ctx.binarySha256 } : {}),
