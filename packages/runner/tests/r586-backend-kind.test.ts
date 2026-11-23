@@ -65,8 +65,21 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "confirm.ts": {
     'if (r.backend !== "al-runner-v3") throw new ConfirmInputNotV3Error(r.backend);': "v3",
     '(m) => m.finalVerdict === "survived" && m.measuredBy === "bcdev",': "confirmation-field",
+    // PR-381: a survivor still measured by v3 (the confirmation's own field).
+    '.filter((m) => m.measuredBy === "al-runner-v3" && SURVIVING_VERDICTS.has(m.finalVerdict))':
+      "confirmation-field",
     'if (m.measuredBy === "bcdev" && isKill(m.finalVerdict) && m.v3Verdict !== m.finalVerdict) {':
       "confirmation-field",
+  },
+  // PR-381, PR-387: the not-run field and caveat exist on al-runner-v3 and bcdev reports; each read names
+  // the backend(s) explicitly ("not recorded" for both; bcdev's own sentence and its omitted hint).
+  "explain.ts": {
+    '(report.backend === "al-runner-v3" || report.backend === "bcdev") &&': "v3-and-bcdev",
+  },
+  "not-run-survivors.ts": {
+    'return (r.backend === "al-runner-v3" || r.backend === "bcdev") &&': "v3-and-bcdev",
+    '...(coverageOff || r.backend === "bcdev"': "bcdev",
+    'scope.backend === "bcdev"': "bcdev",
   },
   "line-map.ts": {
     'case "bcdev":': "exhaustive-switch",
@@ -102,6 +115,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     "if (!r.authoritative) {": "report-field",
     'if (caps.kind === "al-runner-v3") {': "v3",
     '...(runnerBuild !== undefined && caps.kind === "al-runner-v3"': "v3",
+    // PR-381, PR-387: the field is written on al-runner-v3 and bcdev reports.
+    'input.caps.kind === "al-runner-v3" || isBcdev(input.caps.kind)': "v3-and-bcdev",
   },
   "cli.ts": {
     'if (raw !== "bcdev" && raw !== "al-runner-v3") {': "config",

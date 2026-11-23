@@ -966,8 +966,67 @@ describe("mergeConfirmation: the final-verdict rule", () => {
     expect(c.totals.byMeasuredBy.bcdev).toBe(count((m) => m.measuredBy === "bcdev"));
     expect(c.totals.score).toBeCloseTo(3 / 7);
     // survivors: rows 1, 2, 3, 6 -> 4; measured on BC: 1 and 6
-    expect(c.totals.provenance).toBe("4 survivors, 2 of them measured on BC");
+    // PR-381: v3Rows is an al-runner-v3 report with survivors and no `notRunAtBaseline`, so a reader
+    // says it was not recorded rather than staying silent.
+    expect(c.totals.provenance).toBe(
+      "4 survivors, 2 of them measured on BC; tests not run at baseline: not recorded in this report",
+    );
     expect(renderConfirmation(c).some((l) => l.includes(c.totals.provenance))).toBe(true);
+  });
+});
+
+describe("mergeConfirmation: PR-381 (R1197) survivors beside tests v3 did not run at baseline", () => {
+  const rows: Row[] = [
+    { verdict: "survived", failureNote: NOTE }, // 0 -> BC kills: settled, not counted
+    { verdict: "survived", failureNote: NOTE }, // 1 -> BC survives: measured on BC, not counted
+    { verdict: "survived", failureNote: NOTE }, // 2 -> BC error: still v3's survivor
+    { verdict: "survived" }, // 3 unconfirmed: v3's survivor
+    { verdict: "killed" }, // 4
+  ];
+  const bc = {
+    0: { verdict: "killed" as const, killingTest: "T.A", killingTestFailure: "Assert failed" },
+    1: { verdict: "survived" as const },
+    2: { verdict: "error" as const, failureNote: "TestPage unsupported" },
+  };
+  const withField = (extra: Partial<SessionReport>) => {
+    const p = pair({ v3: rows, bc });
+    // A stored whole-run result that the subset must NOT use: the merge recomputes over the survivors
+    // still measured by v3.
+    return {
+      ...p,
+      v3: {
+        ...p.v3,
+        survivorsBesideUnrunTests: { survivors: 99, notRunTests: 9 },
+        ...extra,
+      } as SessionReport,
+    };
+  };
+
+  test("only survivors still measured by v3 are counted, in the provenance and totals", () => {
+    const c = merge(withField({ notRunAtBaseline: ["X. Y Tests.Refused", "Z.T"] }));
+    expect(c.totals.survivorsBesideUnrunTests).toEqual({
+      survivors: 2,
+      notRunTests: 2,
+      sharingACodeunit: 1,
+    });
+    expect(c.totals.provenance).toBe(
+      "3 survivors, 1 of them measured on BC; 2 survivors, all in a run with 2 tests v3 did not run at baseline (refused, timed out or stopped; such a test kills nothing, so a survivor only it would kill is unknown); 1 carry the nearby tag (a hint, not a bound)",
+    );
+    expect(c.confirmationVersion).toBe(2);
+  });
+
+  test("the twin: no not-run test recorded, no text and no counts", () => {
+    const c = merge(withField({ notRunAtBaseline: [] }));
+    expect(c.totals.survivorsBesideUnrunTests).toBeUndefined();
+    expect(c.totals.provenance).toBe("3 survivors, 1 of them measured on BC");
+  });
+
+  test("a known-survivor counts as a survivor in the provenance, as the sentence counts it", () => {
+    const p = pair({
+      v3: [{ verdict: "survived", failureNote: NOTE }, { verdict: "known-survivor" }],
+    });
+    const c = merge({ ...p, v3: { ...p.v3, notRunAtBaseline: [] } as SessionReport });
+    expect(c.totals.provenance).toBe("2 survivors, 1 of them measured on BC");
   });
 });
 
@@ -1384,8 +1443,8 @@ describe("schemas: the optional confirm block and the confirmation artifact", ()
   const schemaDir = join(import.meta.dir, "..", "..", "..", "schemas");
   const load = (name: string) => JSON.parse(readFileSync(join(schemaDir, name), "utf8"));
 
-  test("a merge output validates against confirmation-v1, and a damaged one does not", () => {
-    const schema = load("confirmation-v1.schema.json");
+  test("a merge output validates against confirmation-v2, and a damaged one does not", () => {
+    const schema = load(`confirmation-v${CONFIRMATION_VERSION}.schema.json`);
     const c = merge(
       pair({
         v3: [{ verdict: "survived", failureNote: NOTE }, { verdict: "survived" }],

@@ -6592,6 +6592,12 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         name: qualifiedTestName(b.ref),
         outcome: b.verdict.outcome,
         classification,
+        // PR-387: the body never ran (an infrastructure operation row, a hub row, a line-count answer).
+        // bcdev only: on v3 an `operation` row (e.g. completed-accepted) DID run.
+        ...(isBcdev(caps.kind) &&
+        (b.verdict.operation !== undefined || b.verdict.bodyNeverRan === true || bodyNeverRan)
+          ? { notRun: true as const }
+          : {}),
         ...(b.verdict.failureMessage !== undefined
           ? { failureMessage: b.verdict.failureMessage }
           : {}),

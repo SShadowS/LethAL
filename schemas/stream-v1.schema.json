@@ -1164,6 +1164,9 @@
               },
               "flaggedUnknown": {
                 "const": true
+              },
+              "notRun": {
+                "const": true
               }
             }
           }

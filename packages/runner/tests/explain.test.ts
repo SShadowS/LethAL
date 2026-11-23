@@ -30,6 +30,7 @@ import {
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
   MARK_KEYS_STALE_INTERPRETATION,
+  NOT_RUN_NOT_RECORDED_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
@@ -170,6 +171,7 @@ function reportFixture(over: Partial<SessionReport> = {}): SessionReport {
     testFiles: { "Foo Tests": "test/Foo.Test.al" },
     backend: "bcdev",
     authoritative: true,
+    notRunAtBaseline: [], // PR-387: a fresh bcdev report always writes it
     baselineGreen: true,
     batches: 1,
     counts: {
@@ -540,6 +542,8 @@ function fullCoverageReport(): SessionReport {
     buildSymbols: ["LETHALA"],
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
     resumedFrom: { runId: 7, carriedMutants: 1, skippedStranded: 2 },
+    // PR-381: pairwise distinct counts, so a swap shows. Reaches the `score.survivorsBesideUnrunTests` leaves.
+    survivorsBesideUnrunTests: { survivors: 91, notRunTests: 17, sharingACodeunit: 53 },
     // C02-01: batch 1 published (M0001's); batch 4 (M0002) did not, and batch 6's survivor is
     // carried, so this run names no artifact for it whatever `artifacts` holds.
     artifacts: [
@@ -629,6 +633,9 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.score.excludedFromScore.errors", // [verbatim] counts.errors
   "$.score.excludedFromScore.noCoverage", // [verbatim] counts.noCoverage
   "$.score.excludedFromScore.knownSurvivors", // [verbatim] counts.knownSurvivors
+  "$.score.survivorsBesideUnrunTests.survivors", // [verbatim] survivorsBesideUnrunTests.survivors, PR-381
+  "$.score.survivorsBesideUnrunTests.notRunTests", // [verbatim] survivorsBesideUnrunTests.notRunTests
+  "$.score.survivorsBesideUnrunTests.sharingACodeunit", // [verbatim] survivorsBesideUnrunTests.sharingACodeunit
   "$.caveats[].caveat", // [enum] Caveat
   "$.caveats[].interpretation.meaning", // [registry]
   "$.caveats[].interpretation.entailedNegative", // [registry]
@@ -773,6 +780,7 @@ describe("explain — the admissibility rule, made executable", () => {
       COVERAGE_NOT_MEASURED_INTERPRETATION,
       QUARANTINE_INTERPRETATION,
       STRANDED_SKIP_INTERPRETATION,
+      NOT_RUN_NOT_RECORDED_INTERPRETATION,
       MARK_KEYS_STALE_INTERPRETATION,
     ]);
     expect(registry).toEqual(expected);
@@ -945,6 +953,12 @@ describe("explain — the admissibility rule, made executable", () => {
     expect(out.score.scoreDescribes).toBe(report.validity.scoreDescribes);
     expect(out.score.reliability).toBe(report.validity.reliability);
     expect(out.score.mutationScore).toBe(report.mutationScore);
+    // PR-381: the three counts are copied, each from its own field.
+    expect(out.score.survivorsBesideUnrunTests).toEqual({
+      survivors: 91,
+      notRunTests: 17,
+      sharingACodeunit: 53,
+    });
     // The five that were swappable. Asserted as one object so a swap between any pair shows as a
     // diff rather than as five independent equalities anyone could add four of.
     expect({

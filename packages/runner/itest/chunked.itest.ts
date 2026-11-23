@@ -89,7 +89,7 @@ import {
   printItestTarget,
   readFixtureConfig,
 } from "./config-path";
-import { CHUNKED_FIGURES } from "./gate-expected";
+import { CHUNKED_FIGURES, TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { CHUNKED_SUBLEGS } from "./gate-sublegs";
 import {
@@ -438,6 +438,27 @@ async function main(): Promise<void> {
     // GH-24: chunking is a cost knob (R208) and must not move reach either — identical
     // guardReached and reachedBy (as a SET) per mutant across the two legs.
     assertReachIdenticalAcrossLegs(control.report, chunked.report);
+    // PR-387: chunking is a cost knob, so the not-run-at-baseline list and its counts match across legs.
+    assert.deepEqual(
+      control.report.notRunAtBaseline,
+      TABLES_FIGURES.testPageRefused,
+      "PR-387: the control leg must name exactly the refused TestPage test",
+    );
+    assert.deepEqual(
+      chunked.report.notRunAtBaseline,
+      TABLES_FIGURES.testPageRefused,
+      "PR-387: the chunked leg must name exactly the refused TestPage test",
+    );
+    assert.deepEqual(
+      chunked.report.notRunAtBaseline,
+      control.report.notRunAtBaseline,
+      "PR-387: chunking moved notRunAtBaseline",
+    );
+    assert.deepEqual(
+      chunked.report.survivorsBesideUnrunTests,
+      control.report.survivorsBesideUnrunTests,
+      "PR-387: chunking moved survivorsBesideUnrunTests",
+    );
 
     // 3. The chunked leg's own counts, pre-committed.
     assert.equal(chunked.report.warmKills, CHUNKED.warmKills, "chunked: warmKills");

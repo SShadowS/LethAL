@@ -4217,6 +4217,87 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
   });
 
+  // PR-387 test 8 (against empty-vs-empty): the real session, bcdev kind, writes the list through the
+  // fold and the report builder, so a shut `caps.kind` gate in `buildReport` fails here.
+  test("PR-387: a bcdev session names the refused test in notRunAtBaseline", async () => {
+    const dirs = await project();
+    const report = await runSession({
+      backend: new RecordingBackend(FENCED),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.notRunAtBaseline).toEqual(["Sandbox Tests.UnsupportedTest"]);
+  });
+
+  test("PR-387: a green bcdev baseline writes notRunAtBaseline as [] (present, not absent)", async () => {
+    const dirs = await makeProject(PAGE_TEST_AL.replace("Card.OpenView();", ""));
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const report = await runSession({
+      backend: new RecordingBackend(FENCED, undefined, "pass"),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      ciSessionKind: "headless" as const,
+      selectorIds,
+    });
+    expect("notRunAtBaseline" in report).toBe(true);
+    expect(report.notRunAtBaseline).toEqual([]);
+  });
+
+  // PR-387 test 9: a row whose body never ran gets `notRun: true` on the event; a red test's `error` does not.
+  const baselineRowFor = async (answer: Partial<TestVerdict>, caps: BackendCapabilities = FENCED) => {
+    const dirs = await makeProject(PAGE_TEST_AL.replace("Card.OpenView();", ""));
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+    const stub = new RecordingBackend(caps, undefined, "pass");
+    const scripted = stub.run.bind(stub);
+    const backend = Object.assign(stub, {
+      run: async (ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> =>
+        ref.method === "UnsupportedTest" && (stub.activations.at(-1) ?? null) === null
+          ? { ref, outcome: "error", durationMs: 1, ...answer }
+          : scripted(ref, opts),
+    });
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      ciSessionKind: "headless" as const,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const row = events
+      .flatMap((e) => (e.type === "baseline-batch-finished" ? e.verdicts : []))
+      .find((v) => v.name === "Sandbox Tests.UnsupportedTest");
+    return { row, report };
+  };
+  test("PR-387: each body-never-ran kind sets notRun on the event and counts; a red error does not", async () => {
+    for (const answer of [
+      { bodyNeverRan: true as const, failureMessage: "tool error" },
+      { operation: "pre-dispatch-rejected" as const },
+      { operation: "completed-effect-unknown" as const },
+    ]) {
+      const { row, report } = await baselineRowFor(answer);
+      expect(row?.notRun).toBe(true);
+      expect(report.notRunAtBaseline).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    }
+    const red = await baselineRowFor({ failureMessage: "Assert.AreEqual failed." });
+    expect(red.row?.notRun).toBeUndefined();
+    expect(red.report.notRunAtBaseline).toEqual([]);
+  });
+
+  // A v3 row with an `operation` (completed-accepted: the runner-test-error row) DID run: no notRun.
+  test("PR-387: a v3 completed-accepted baseline row gets no notRun on the event", async () => {
+    const v3 = { ...FENCED, kind: "al-runner-v3" as const, authoritative: false };
+    const { row } = await baselineRowFor(
+      { operation: "completed-accepted", failureMessage: "runner test error" },
+      v3,
+    );
+    expect(row).toBeDefined();
+    expect(row?.notRun).toBeUndefined();
+  });
+
   test("a non-authoritative backend is unchanged: no scan, the test is sent", async () => {
     const dirs = await project();
     const backend = new RecordingBackend({ ...FENCED, kind: "al-runner-v3", authoritative: false });

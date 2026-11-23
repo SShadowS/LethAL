@@ -408,6 +408,9 @@ export type RunEventInput =
         readonly flagged?: true;
         /** R949: a `pass` a serve daemon answered: its flagged state is unknown. Absent otherwise. */
         readonly flaggedUnknown?: true;
+        /** PR-387: the test body never ran (a rejected or unanswered call, a line-count answer). Not
+         *  a statement about the test. Absent otherwise. */
+        readonly notRun?: true;
       }[];
     }
   | {
