@@ -1204,7 +1204,7 @@ that ordering is the priority.
 - **R1193** · A zip kept in a Blob through the System Application's Data Compression as a generated BC differential (PR-375): 36 cells, 13 equal, 23 refused with BC's answers sent, 0 wrong values · [R1193.md](docs/roadmap/R1193.md) · closed 2026-11-23 — measured on bc4; nothing to file, BC's answers sent to alrunner
 - **R1194** · DO's runs reach al-runner's .NET helper: 0 dotnet-unavailable rows in c3 and c3off, LethAL passes the exact BC build, the pinned sidecar and the service folder; the --bc-version 28 failure was the refusal-family script's own, so no product lever · [R1194.md](docs/roadmap/R1194.md) · closed 2026-11-23 — measured (PR-376): no lever; the script's ceiling is recorded
 - **R1195** · refusal-family.ts runs every family on one exact BC build (PR-377): 1 move in 3,418 cells, and it restores PR-32's measured answer; DO's own CI builds on the latest BC 28 sandbox, not 29 · [R1195.md](docs/roadmap/R1195.md) · closed 2026-11-23 — measured (PR-377); the script fix lands with this row
-- **R1196** · The v3 itest's LETHAL_ITEST_V3_REPORT_DIR writes a leg's report only AFTER its warning-set check, though its comment says "before any assertion": a leg that fails its warning set keeps no report, which hides exactly the legs where something changed · [R1196.md](docs/roadmap/R1196.md) · open
+- **R1196** · The v3 itest's LETHAL_ITEST_V3_REPORT_DIR writes a leg's report only AFTER its warning-set check, though its comment says "before any assertion": a leg that fails its warning set keeps no report, which hides exactly the legs where something changed · [R1196.md](docs/roadmap/R1196.md) · in progress (PR-384: lethal/pr-384)
 
 ---
 
