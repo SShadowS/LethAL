@@ -205,7 +205,8 @@ describe("PR-363: every keep entry is judged by a case or pinned with its reason
   // Red: add a key to V3_SERVE_SAFE_REFUSALS (or drop a name from UNJUDGED): the three sets no longer cover it.
   test("SERVE_CASES, the 47 new cases and the pinned map are exactly the keep list, with no overlap", () => {
     const pinned = new Set(UNJUDGED.keys());
-    expect(UNJUDGED.size).toBe(72); // PR-365: +3 RelationFieldNo rows (BaseApp tables) // a name listed twice would collapse in the Map and fall short
+    // a name listed twice would collapse in the Map and fall short; PR-365 added 3 RelationFieldNo rows (BaseApp tables)
+    expect(UNJUDGED.size).toBe(72);
     for (const e of fresh) expect(old.has(e)).toBe(false);
     for (const e of pinned) expect(old.has(e) || fresh.has(e)).toBe(false);
     expect([...old, ...fresh, ...pinned].sort()).toEqual([...all].sort());
