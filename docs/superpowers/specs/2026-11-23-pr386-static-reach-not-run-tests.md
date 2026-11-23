@@ -124,3 +124,14 @@ the `"unknown"` count per reason), folded in.
 ## Checks
 VERIFY (one at a time), spec-adversary review of this spec, Opus build review, selectLegs' gates, CI. The offline
 measurement reads c3's and y3's reports and DO's source read-only under `/coord`; no DO source text is committed.
+
+## Result (2026-11-23): closed before the build, a measured "no gain over the app-level caveat"
+The orchestrator's premise check came first: blanket B alone on DO (`/coord/handoff/PR-386/probe-b.md`, `probe-b.ts`,
+offline, 2.7 s). The per-test walks were not built.
+- **B falls back:** walking B1 over both apps meets "Assert.RecordIsEmpty is handed TempDOFileEDoc ..., a test-app object"
+  (in `CDO Appended EDoc Fname Tests`). By rule 3 (a fallback in B makes every test `"all"`), the closure on DO equals
+  PR-381's `ALWAYS_REACHES`.
+- **The ceiling without that fallback:** B (B1-B4) reaches the members holding 8,398 of c3's 8,618 survivors (97.4%); all
+  8,618 placed. At most 220 (2.6%) could ever read "not reached".
+- **Reopen only on a narrower B argued sound first** (for example, B1 limited to the test-app code the target app can
+  enter), with its own spec and spec-adversary review, and the same premise check run before any walk is built.
