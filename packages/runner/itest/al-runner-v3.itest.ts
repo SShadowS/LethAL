@@ -64,6 +64,7 @@ import { MEMORY_HEADROOM_GB_DEFAULT, baselineSampleIds } from "../src/al-runner-
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import {
   STOP_GROUPS_FACT,
+  type V3KeepApp,
   V3_CAPABILITY_FACTS,
   V3_CARRY_FACT,
   runV3ContractProbe,
@@ -621,7 +622,16 @@ async function legC(scratch: string): Promise<readonly string[]> {
     f.startsWith("Microsoft_Library Assert_"),
   );
   const [libraryAssert] = assertApps;
+  // PR-363: the per-family keep apps, built by `scripts/pr363-legc-keep-apps.ts` (run as a script: packages/ cannot import scripts/).
+  const keepDir = join(scratch, "pr363-keep-apps");
+  execFileSync("bun", [join(REPO, "scripts", "pr363-legc-keep-apps.ts"), "--out", keepDir], {
+    encoding: "utf8",
+  });
+  const keepApps = JSON.parse(
+    await readFile(join(keepDir, "manifest.json"), "utf8"),
+  ) as V3KeepApp[];
   const r = await runV3ContractProbe({
+    keepApps,
     alRunnerPath: BIN,
     expectedVersion: (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim(),
     packagesDir: await microsoftDeps(scratch),

@@ -16,6 +16,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isV3RefusalText } from "../packages/runner/src/al-runner-rows";
+import { mergeChildEnv, v3ChildEnv } from "../packages/runner/src/al-runner-v3-seed";
 
 /** What BC gives for one test. `message` is the whole message; `messageIncludes` a part of it. */
 export interface BcResult {
@@ -200,7 +201,8 @@ export async function runAll(
       cwd: root,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ALRUNNER_SEED: "1" },
+      // PR-360: LethAL's pins (seed, replay off), on purpose: these readings stand for what LethAL's runs see.
+      env: mergeChildEnv(v3ChildEnv()),
     });
     let timedOut = false;
     const timer = setTimeout(() => {
