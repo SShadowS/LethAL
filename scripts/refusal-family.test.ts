@@ -9,6 +9,7 @@ import {
   DOTNET_NO_OBJECT,
   FAMILIES,
   FORMAT_EVALUATE,
+  FORMAT_REGION,
   type Family,
   GET_URL,
   JSON_TEXT,
@@ -1440,10 +1441,105 @@ describe("PR-195: the y2-collation family", () => {
     expect(ctl?.call).toContain("if Result <> 'ABC 12' then Error(");
   });
 
-  test("last of FAMILIES (place 22, BC-check number 23, as 7 is skipped): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("y2-collation");
+  test("place 22 of FAMILIES (BC-check number 23, as 7 is skipped): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(21);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051023");
+  });
+});
+
+describe("PR-373: the format-region family", () => {
+  const f = FORMAT_REGION;
+
+  test("209 cells: 5 regions x (with language, region only) x 19 values, plus 19 with no region; distinct names", () => {
+    expect(f.cells).toHaveLength(209);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    const states = [...new Set(f.cells.map((c) => c.state))];
+    expect(states).toEqual([
+      "en-GB lang",
+      "en-GB only",
+      "de-DE lang",
+      "de-DE only",
+      "fr-FR lang",
+      "fr-FR only",
+      "da-DK lang",
+      "da-DK only",
+      "en-US lang",
+      "en-US only",
+      "none",
+    ]);
+    for (const s of states) expect(f.cells.filter((c) => c.state === s)).toHaveLength(19);
+  });
+
+  test("support: enum, table, holder codeunit and report all at 51000; app.json's range covers every cell", () => {
+    for (const k of ["enum", "table", "codeunit", "report"])
+      expect([...f.support.matchAll(new RegExp(`^${k} (\\d+) `, "gm"))].map((m) => m[1])).toEqual([
+        "51000",
+      ]);
+    const range = JSON.parse(emitApp(f)["app.json"] ?? "{}").idRanges[0];
+    expect(range).toEqual({ from: 51000, to: 51000 + 1 + 209 });
+    expect(f.support).toContain("SingleInstance = true;");
+  });
+
+  test("the report sets the language only when one is given, the region only when asked, then formats and hands the text on", () => {
+    const trig = /trigger OnAfterGetRecord\(\)[\s\S]*?\n {12}end;/.exec(f.support)?.[0] ?? "";
+    expect(trig).toContain("if Lang <> 0 then\n                    CurrReport.Language := Lang;");
+    expect(trig).toContain(
+      "if SetRegion then\n                    CurrReport.FormatRegion := Region;",
+    );
+    expect(trig.indexOf("CurrReport.FormatRegion")).toBeLessThan(
+      trig.indexOf("Answer := Compute();"),
+    );
+    expect(trig).toContain("Holder.Put(Answer);");
+    // an unknown kind must fail loudly, never answer an empty text
+    expect(f.support).toContain("Error('FR Report: no kind %1', Kind);");
+  });
+
+  test("every cell runs the report through SaveAs as Xml, then reports the held text with Error('V:[...]')", () => {
+    for (const c of f.cells) {
+      expect(c.setup?.[1]).toMatch(
+        /^Rep\.SetCase\(\d+, '[a-zA-Z-]*', (true|false), \d+, DMY2Date\(17, \d+, 2026\)\);$/,
+      );
+      expect(c.setup?.[2]).toBe("Rep.SaveAs('', ReportFormat::Xml, OS);");
+      expect(c.call).toBe("Error('V:[%1]', Holder.Get());");
+    }
+  });
+
+  test("the region is set exactly when one is named; the language exactly in the 'lang' cells, and only those are not locale", () => {
+    for (const c of f.cells) {
+      const m = /^Rep\.SetCase\((\d+), '([a-zA-Z-]*)', (true|false),/.exec(c.setup?.[1] ?? "");
+      expect(m).not.toBeNull();
+      const [, lang, region, set] = m ?? [];
+      expect(set).toBe(region === "" ? "false" : "true");
+      expect(region === "").toBe(c.state === "none");
+      expect(lang !== "0").toBe(c.state.endsWith(" lang"));
+      expect(c.depends === "locale").toBe(!c.state.endsWith(" lang"));
+    }
+    const langOf = (s: string) =>
+      /^Rep\.SetCase\((\d+),/.exec(f.cells.find((c) => c.state === s)?.setup?.[1] ?? "")?.[1];
+    expect(["en-GB", "de-DE", "fr-FR", "da-DK", "en-US"].map((r) => langOf(`${r} lang`))).toEqual([
+      "2057",
+      "1031",
+      "1036",
+      "1030",
+      "1033",
+    ]);
+  });
+
+  test("the long date (format 4) runs in all 12 months; every Compute kind a cell names is a case of the report", () => {
+    const months = f.cells
+      .filter((c) => c.state === "en-GB lang" && c.method.startsWith("Date f4 "))
+      .map((c) => /DMY2Date\(17, (\d+), 2026\)/.exec(c.setup?.[1] ?? "")?.[1]);
+    expect(months).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]);
+    const kinds = new Set(f.cells.map((c) => /, (\d+), DMY2Date/.exec(c.setup?.[1] ?? "")?.[1]));
+    expect([...kinds].sort()).toEqual(["0", "10", "11", "20", "30", "31", "4", "40"]);
+    for (const k of kinds) expect(f.support).toContain(`\n            ${k}:\n`);
+  });
+
+  test("last of FAMILIES (place 23, BC-check number 24, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("format-region");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(22);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051024");
   });
 });
 

@@ -5710,6 +5710,201 @@ table 51001 "Y2C Order Row"
   ],
 };
 
+/**
+ * PR-373: #8094's family, the largest open coherent one after families 1-22 under R1036's count over c3 and c3off
+ * (main-bf3a3e863; 20 standing sightings of "Format of a value (standard format N) while CurrReport.FormatRegion is <x> is not
+ * pinned"). A document report sets `CurrReport.Language` and `CurrReport.FormatRegion`, then formats a value. Here an invented
+ * report (51000) does that in its data item's OnAfterGetRecord and hands the text to a SingleInstance holder (codeunit 51000).
+ * The cell runs the report with `SaveAs` (Xml, the dataset only: no layout) and reports the text with `Error('V:[...]')`, so
+ * every cell is expected to FAIL with its answer. Cell i is codeunit BASE_ID + 1 + i; the support objects all have id 51000.
+ */
+const FR_REGIONS: readonly (readonly [string, number])[] = [
+  ["en-GB", 2057],
+  ["de-DE", 1031],
+  ["fr-FR", 1036],
+  ["da-DK", 1030],
+  ["en-US", 1033],
+];
+const FR_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+/** The report's `Kind` values (its `Compute` case) with the cell's method name. */
+const FR_KINDS: readonly (readonly [number, string])[] = [
+  [0, "Date std0"],
+  [10, "Decimal neg"],
+  [11, "Decimal big"],
+  [20, "Enum caption"],
+  [30, "DateTime"],
+  [31, "Time"],
+  [40, "Date picture"],
+];
+const frCell = (
+  state: string,
+  lang: number,
+  region: string,
+  kind: number,
+  method: string,
+  month = 1,
+): Cell => ({
+  type: "Region",
+  method,
+  state,
+  vars: [
+    'Rep: Report "FR Report";',
+    'Buf: Record "FR Buf";',
+    "OS: OutStream;",
+    'Holder: Codeunit "FR Holder";',
+  ],
+  setup: [
+    "Buf.Data.CreateOutStream(OS);",
+    `Rep.SetCase(${lang}, '${region}', ${region === "" ? "false" : "true"}, ${kind}, DMY2Date(17, ${month}, 2026));`,
+    "Rep.SaveAs('', ReportFormat::Xml, OS);",
+  ],
+  call: "Error('V:[%1]', Holder.Get());",
+  // without the report language, month names and captions follow the session's language
+  ...(lang === 0 ? { depends: "locale" as const } : {}),
+});
+const frSet = (state: string, lang: number, region: string): Cell[] => [
+  ...FR_MONTHS.map((m, i) => frCell(state, lang, region, 4, `Date f4 ${m}`, i + 1)),
+  ...FR_KINDS.map(([k, m]) => frCell(state, lang, region, k, m)),
+];
+export const FORMAT_REGION: Family = {
+  name: "format-region",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8094",
+  // the two texts #8094 itself quotes; a class is matched whole, so every other region's text stays NEW
+  known: [
+    "Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned (docs/probes-needed.md)",
+    "Format of a value (standard format 0) while CurrReport.FormatRegion is 'de-DE' is not pinned (docs/probes-needed.md)",
+  ],
+  testPermissions: "Disabled",
+  support: `enum 51000 "FR Kind"
+{
+    value(0; First) { Caption = 'First Value'; }
+    value(1; Second) { Caption = 'Second Value'; }
+}
+
+table 51000 "FR Buf"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Data; Blob) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 51000 "FR Holder"
+{
+    SingleInstance = true;
+
+    var
+        Value: Text;
+
+    procedure Put(V: Text)
+    begin
+        Value := V;
+    end;
+
+    procedure Get(): Text
+    begin
+        exit(Value);
+    end;
+}
+
+report 51000 "FR Report"
+{
+    UsageCategory = None;
+
+    dataset
+    {
+        dataitem(Row; Integer)
+        {
+            DataItemTableView = where(Number = const(1));
+
+            column(Answer; Answer) { }
+
+            trigger OnAfterGetRecord()
+            var
+                Holder: Codeunit "FR Holder";
+            begin
+                if Lang <> 0 then
+                    CurrReport.Language := Lang;
+                if SetRegion then
+                    CurrReport.FormatRegion := Region;
+                Answer := Compute();
+                Holder.Put(Answer);
+            end;
+        }
+    }
+
+    var
+        Lang: Integer;
+        Region: Text[80];
+        SetRegion: Boolean;
+        Kind: Integer;
+        D: Date;
+        Answer: Text;
+
+    procedure SetCase(NewLang: Integer; NewRegion: Text[80]; NewSetRegion: Boolean; NewKind: Integer; NewDate: Date)
+    begin
+        Lang := NewLang;
+        Region := NewRegion;
+        SetRegion := NewSetRegion;
+        Kind := NewKind;
+        D := NewDate;
+    end;
+
+    local procedure Compute(): Text
+    var
+        E: Enum "FR Kind";
+    begin
+        case Kind of
+            0:
+                exit(Format(D));
+            4:
+                exit(Format(D, 0, 4));
+            10:
+                exit(Format(-1234.5));
+            11:
+                exit(Format(1234567.891));
+            20:
+                begin
+                    E := E::Second;
+                    exit(Format(E));
+                end;
+            30:
+                exit(Format(CreateDateTime(D, 133015T)));
+            31:
+                exit(Format(133015T));
+            40:
+                exit(Format(D, 0, '<Day,2>. <Month Text> <Year4>'));
+        end;
+        Error('FR Report: no kind %1', Kind);
+    end;
+}
+`,
+  handles: {},
+  cells: [
+    ...FR_REGIONS.flatMap(([r, lang]) => [
+      ...frSet(`${r} lang`, lang, r),
+      ...frSet(`${r} only`, 0, r),
+    ]),
+    // control: no language and no region set, so the session's own formats
+    ...frSet("none", 0, ""),
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -5750,6 +5945,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [Y2_XML.name]: Y2_XML,
   // PR-195: appended (BC-check number 23): the collation refusal DO's y2 window closed on, for a keep census
   [Y2_COLLATION.name]: Y2_COLLATION,
+  // PR-373: appended (BC-check number 24): #8094, Format under CurrReport.FormatRegion, for a per-cell BC differential
+  [FORMAT_REGION.name]: FORMAT_REGION,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
