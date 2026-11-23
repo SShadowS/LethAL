@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**64 of 1162 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**65 of 1163 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1207,6 +1207,7 @@ that ordering is the priority.
 - **R1196** · The v3 itest's LETHAL_ITEST_V3_REPORT_DIR writes a leg's report only AFTER its warning-set check, though its comment says "before any assertion": a leg that fails its warning set keeps no report, which hides exactly the legs where something changed · [R1196.md](docs/roadmap/R1196.md) · done (2ebdbecc1)
 - **R1198** · PR-344's tail packing has no live exercise: on DO after PR-365 and in PR-347's TC fixture, every refused-cut mutant is covered by exactly one stable tail test, so every pack set is one test and 0 packs are sent · [R1198.md](docs/roadmap/R1198.md) · done (ec2d44a8a, coord PR-393): leg TC's fixture gains Halve with two stable tail tests (T6, T7); TC-on sends…
 - **R1199** · An R192 baseline snapshot written before PR-387 lacks bodyNeverRan on the hub's body-never-ran rows, so reused on --resume those rows miss notRunAtBaseline and the caveat can under-count · [R1199.md](docs/roadmap/R1199.md) · open
+- **R1200** · A run with any finite --time-budget turns PR-241's unit packing off (by design, R912), but the notice still prints `pack-entries 64`: PR-391's A/B passed a budget as a 'safety cap', ran every arm unpacked, and read the result as packing not engaging · [R1200.md](docs/roadmap/R1200.md) · open
 
 ---
 
