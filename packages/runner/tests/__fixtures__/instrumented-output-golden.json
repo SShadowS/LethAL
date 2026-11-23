@@ -432,6 +432,14 @@
       "sha256": "888cfb6d20752c3e6edf7f07d2f4713c17572c51ded1fb713822219161eb194e",
       "mutants": 11
     },
+    "fixtures/sandbox-tailcut-tests/src/TailcutTests.Codeunit.al": {
+      "sha256": "f342480450ab3dd9999b3871aba1ab2469806a20385b162ff2f131bb3e343ca5",
+      "mutants": 34
+    },
+    "fixtures/sandbox-tailcut/src/TailcutLogic.Codeunit.al": {
+      "sha256": "055cf4a6cdae77557d50a175974c5d974da2e7f3700266fa023ef2b5fc8a3c9c",
+      "mutants": 10
+    },
     "fixtures/sandbox-tests/src/SandboxTests.Codeunit.al": {
       "sha256": "b722f1fa17bc7c134986fd607d152f590b983cdb37ebfefe29eca9cdeed2d919",
       "mutants": 13

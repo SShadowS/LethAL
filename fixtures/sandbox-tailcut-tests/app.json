@@ -1,0 +1,35 @@
+{
+  "id": "9c3f6d12-8a5b-4e07-b1d4-62e8a0f3c751",
+  "name": "LethAL Sandbox Tailcut Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL PR-347 fixture: the tests of leg TC (the refused-cut tail).",
+  "description": "One test codeunit: a green covering test, a refused test (T0), then tests, one of which passes only after another set state. Asserts via Error(). Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "5b0e2a7c-3d41-4c8e-9a6f-1f2d7c9b4e10",
+      "name": "LethAL Sandbox Tailcut",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 76150,
+      "to": 76199
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}

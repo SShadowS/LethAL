@@ -1,0 +1,28 @@
+{
+  "id": "5b0e2a7c-3d41-4c8e-9a6f-1f2d7c9b4e10",
+  "name": "LethAL Sandbox Tailcut",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL PR-347 fixture: the target of leg TC (the refused-cut tail).",
+  "description": "Tailcut Logic: Triple, Double, IsBig and IsSmall. Run by leg TC of itest:alrunner-v3 only (v3-only, no BC server). Its OWN app and id range so no other frozen baseline moves. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 76100,
+      "to": 76149
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}

@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import type { TestVerdict } from "../src/backend";
+import { v3SectionPassThrough } from "../src/cli";
 import { lendingRunnerBuild } from "../src/orchestrator";
 import { sessionFingerprint } from "../src/resume";
 import {
@@ -40,7 +41,8 @@ type State = { phase: "baseline" | "stability" | "mutants"; cBaseline: "pass" | 
  */
 async function tailRig(
   o: {
-    flag: boolean;
+    /** `undefined`: the key is absent (PR-347: ON). */
+    flag: boolean | undefined;
     stab?: Stab;
     cBaseline?: "pass" | "fail";
     methods?: string[];
@@ -81,7 +83,7 @@ async function tailRig(
   const r = await lanesRig({
     lanes: 0,
     methods: o.methods ?? ["A", "B", "R", "C", ...(o.extraTails ?? [])],
-    refusedCutTail: o.flag,
+    ...(o.flag !== undefined ? { refusedCutTail: o.flag } : {}),
     serve: {
       honorExcludes: true,
       eofAt: (_n, req) => stab === "eof" && isStabilityRun(req.mutants[0] ?? "", req),
@@ -482,6 +484,38 @@ describe("PR-297 delta review fixes", () => {
     expect(aloneNone(r)).toEqual([]);
     expect(r.b.refusedCutTailStats().stability).toBe(0);
     expect(tailNotices(r).filter((n) => n.includes("Sleep rule"))).toHaveLength(1);
+  });
+
+  // PR-347 (the default flipped). Red for each direction: revert the getter (`refusedCutTail`) to `=== true` / to `!== false`.
+  test("PR-347: the key absent is ON (real backend): the getter, the lending tag, and the tail route runs", async () => {
+    const { r, state } = await tailRig({ flag: undefined });
+    expect(r.b.refusedCutTail).toBe(true);
+    const v3 = { version: "v", binarySha256: "s" };
+    expect(lendingRunnerBuild(r.b, v3)).toContain(" refused-cut-tail");
+    await baseline(r, state);
+    expect(r.b.refusedCutTailStats().stability).toBe(1);
+  });
+
+  test("PR-347: `false` is OFF (real backend): the getter, no lending tag, no stability run", async () => {
+    const { r, state } = await tailRig({ flag: false });
+    expect(r.b.refusedCutTail).toBe(false);
+    expect(lendingRunnerBuild(r.b, { version: "v", binarySha256: "s" })).not.toContain(
+      "refused-cut-tail",
+    );
+    await baseline(r, state);
+    expect(r.b.refusedCutTailStats().stability).toBe(0);
+  });
+
+  // Red: put `=== true` back in `v3SectionPassThrough` (cli.ts): an explicit false is then dropped and reads ON.
+  test("PR-347: the CLI passes an explicit false to the backend config, and true; absent stays absent", () => {
+    const v = (extra: object) =>
+      validateAlRunnerV3Config(
+        { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x", ...extra },
+        () => true,
+      );
+    expect(v3SectionPassThrough(v({ refusedCutTail: false })).refusedCutTail).toBe(false);
+    expect(v3SectionPassThrough(v({ refusedCutTail: true })).refusedCutTail).toBe(true);
+    expect("refusedCutTail" in v3SectionPassThrough(v({}))).toBe(false);
   });
 
   test("N-e: the 'not run' notice is printed only when a codeunit has a PR-250 cut", async () => {
