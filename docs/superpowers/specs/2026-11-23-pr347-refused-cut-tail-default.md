@@ -137,3 +137,26 @@ If a key differs on the first run, the difference is pre-committed in an amendme
 - `fixtures/README.md`: the two fixtures and their ids.
 - `docs/gates/alrunner-v3.md`: leg TC, its baseline, its three warning keys, and the flip's fingerprint and lending note.
 - `docs/gates/README.md`: the feature line, if that page lists v3 defaults.
+
+## Amendment 1 (2026-11-23, the build 6abba9995 + 605de6920, before any gate)
+- **The census matches the table:** 10 mutants, the operators as predicted. The table stands.
+- **A golden that moves (not predicted above):** `tests/v3-lane-trace.expected.json` gains one notice, the tail stats line.
+  In that scripted session `notify` is still the event emitter when the stats line prints, so it lands among the notices.
+  In real sessions notify is restored first, which is why step 1's warning sets did not move. Accepted.
+- **Departures, accepted:**
+  1. `al-runner-v3.tailcut.baseline.json` holds TC-on's table only (`assertGateBaseline` takes one report). TC-off and
+     TC-alone are frozen in code (`TC_TABLE`) and judged per mutant from it.
+  2. (d) checks the `[refused-cut tail` note on TC-on's tail kills. `selection: "alone"` is not a report field.
+  3. (a1)'s failure prints the refused tests, T0's `baseline-refused-cut` notice and `unsupportedTests`, but not T0's exact
+     row or its keep result, which the report does not carry. It still names no guessed cause.
+  4. The warning keys, predicted:
+     - TC-off: `al-runner-v3-baseline-refused-cut`;
+     - TC-on: that, `al-runner-v3-refused-cut-tail` and `alone-confirm`;
+     - TC-alone: `al-runner-v3-isolate-tests`, ISO's set. DBI's `memory-guard` and `serve-flagged-unknown` come from its
+       daemon baseline, which TC does not use.
+     If the first run differs, an amendment states it before the record run.
+  5. The resume refusal is symmetric (on to off as well as off to on), a plain `Error` prefixed
+     `refused-cut-tail-resume-refused`, like PR-209's.
+  6. The real backend's report field is not tested in a whole session: it reads the tested getter.
+- **The first live run:** TC is recorded once (R332: `LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.tailcut.baseline.json`,
+  which exits 3), then re-run to confirm a pass, then the full v3 gate on the final head.
