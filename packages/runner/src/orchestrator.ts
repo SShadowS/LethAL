@@ -15077,6 +15077,18 @@ async function runMutantsParallel(
   const budgeted = args.timeBudget !== undefined && Number.isFinite(args.timeBudget.seconds);
   const packCap = split && !budgeted ? owner.packEntryCap?.() : undefined;
   const packOn = packCap !== undefined && owner.prefetchEntryCount !== undefined;
+  // PR-395 (R1200): the pack notice is said HERE, where the decision is made. It used to be printed by the
+  // backend whenever the cap was set, so a budgeted run said "pack-entries 64" while running unpacked.
+  const askedCap = split ? owner.packEntryCap?.() : undefined;
+  if (askedCap !== undefined) {
+    if (packOn) {
+      console.warn(`[lethal] al-runner-v3 pack-entries ${askedCap} (PR-241 A/B; experimental)`);
+    } else if (budgeted) {
+      console.warn(
+        `[lethal] al-runner-v3 pack-entries ${askedCap}: off under --time-budget (PR-241: a budget clamps each prefetch deadline, so packed requests are not sent; run without --time-budget to pack)`,
+      );
+    }
+  }
   const cap = owner.affordableLanes?.(asked) ?? asked;
   const { laneWarmupMs, needsLiveCall } = owner;
   // PR-99 (§10.7): under the split R785's pacing is off; the barrier callback is the only launcher.

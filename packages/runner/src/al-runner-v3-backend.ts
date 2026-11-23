@@ -6698,11 +6698,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       l.setScratchCwd(join(resolve(this.cfg.instrumentedDir), `daemon-${l.index}`));
     }
     this.lanesBuilt = true;
-    // PR-241: said only where packing can apply (the split, which needs lanes).
-    if (this.packEntries !== undefined)
-      console.warn(
-        `[lethal] al-runner-v3 pack-entries ${this.packEntries} (PR-241 A/B; experimental)`,
-      );
+    // PR-395 (R1200): the pack notice is the orchestrator's (`runMutantsParallel`), which knows whether a time
+    // budget has switched packing off; said here, it claimed packing under a budget too.
     return this.laneList.map((l) => this.laneView(l));
   }
 
