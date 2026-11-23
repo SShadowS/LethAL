@@ -707,6 +707,14 @@ CREATE TABLE IF NOT EXISTS installed_bundle_files (
 );
 `;
 
+/**
+ * PR-392 (R1199): the format of a `baseline_snapshots` payload. 2: its rows carry `bodyNeverRan` where the test body never
+ * ran (PR-387). A row written before the column existed reads NULL and is never reused (`=` never matches NULL), so a
+ * snapshot that lacks the flag cannot hide a not-run test from `notRunAtBaseline`. Bump it whenever the payload's rows
+ * gain a field a reader depends on. 1 was never written (the rows before this column read NULL), so never reuse 1.
+ */
+export const SNAPSHOT_PAYLOAD_FORMAT = 2;
+
 export class ResultsStore {
   readonly db: Database;
   /**
@@ -754,6 +762,11 @@ export class ResultsStore {
     }>;
     if (!snapCols.some((c) => c.name === "backend_state")) {
       this.db.exec("ALTER TABLE baseline_snapshots ADD COLUMN backend_state TEXT");
+    }
+    // PR-392 (R1199): the payload's format; NULL on every row written before it, which
+    // `findBaselineSnapshot` never reuses (see `SNAPSHOT_PAYLOAD_FORMAT`).
+    if (!snapCols.some((c) => c.name === "payload_format")) {
+      this.db.exec("ALTER TABLE baseline_snapshots ADD COLUMN payload_format INTEGER");
     }
     const cols = this.db.query("PRAGMA table_info(mutants)").all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === "failure_note")) {
@@ -2161,8 +2174,8 @@ export class ResultsStore {
   }): void {
     this.db
       .query(
-        `INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload, backend_state)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload, backend_state, payload_format)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.runId,
@@ -2171,6 +2184,7 @@ export class ResultsStore {
         input.testAppHash,
         JSON.stringify(input.baseline),
         input.backendState === undefined ? null : JSON.stringify(input.backendState),
+        SNAPSHOT_PAYLOAD_FORMAT,
       );
   }
 
@@ -2225,6 +2239,7 @@ export class ResultsStore {
       .query(
         `SELECT run_id, batch_index, batch_hash, test_app_hash, payload, backend_state FROM baseline_snapshots
          WHERE batch_hash = ?1 AND test_app_hash = ?2
+           AND payload_format = ?7
            AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ?3 AND coverage_mode = ?4
              AND test_app_hash = baseline_snapshots.test_app_hash
              AND test_app_proven = 1
@@ -2242,6 +2257,7 @@ export class ResultsStore {
         coverageMode,
         testAppDeps,
         serverGeneration ?? null,
+        SNAPSHOT_PAYLOAD_FORMAT,
       ) as {
       run_id: number;
       batch_index: number;
