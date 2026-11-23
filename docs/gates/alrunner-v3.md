@@ -362,17 +362,18 @@ Pre-committed in `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.
 
 ### Leg TC: the refused-cut tail, on by default (PR-347)
 
-Pre-committed in `docs/superpowers/specs/2026-11-23-pr347-refused-cut-tail-default.md`. It is a default itest leg, after RC, and it is NOT in `V3_GATE_LEGS`. Its baseline, `al-runner-v3.tailcut.baseline.json` (TC-on's table: 8 killed, 1 survived, 1 error), is **not recorded yet**: the leg refuses to start without it (R332) and the owner records it once by the command `LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=TC LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.tailcut.baseline.json bun run itest:alrunner-v3`.
+Pre-committed in `docs/superpowers/specs/2026-11-23-pr347-refused-cut-tail-default.md`. It is a default itest leg, after RC, and it is NOT in `V3_GATE_LEGS`. Its baseline, `al-runner-v3.tailcut.baseline.json` (TC-on's table: 10 killed, 1 survived, 1 error since PR-393, which adds `Halve`; spec `docs/superpowers/specs/2026-11-23-pr393-tc-live-packing.md`), was re-recorded once on 2026-11-23 (main-bf3a3e863) by R332 and R849, equal per mutant to a pre-committed expected file built from `TC_TABLE` (the expected file is then deleted as stale). The leg refuses to start without the baseline. TC-on's first live packs: 2 sent, 0 failed (PR-344's packing, asserted by (a3)).
 
 - **Why it exists:** since PR-347 `alRunnerV3.refusedCutTail` is on unless it is `false`. Step 1 of the flip measured 0 PR-250 cuts and 0 tail alone calls in every other leg, so no other leg proves the tail route. RC cannot cut (its refused tests are kept, so the daemon is reused) and pins the flag off, explicitly.
-- **Fixture:** `fixtures/sandbox-tailcut` and `fixtures/sandbox-tailcut-tests` (runtime 17, ids 76100-76199). Codeunit "Tailcut Logic": `Triple`, `Double`, `IsBig(N) = N > 5`, `IsSmall(N) = N < 3`. "Tailcut Tests", in order: `G0_TripleTwo`, `T0_RefusedFormat` (refused, unkept), `T1_DoubleTwo`, `T2_IsBigTen`, `T3_SetsMark`, `T4_SeesTheMark` (unstable: red alone), `T5_IsSmallOne`.
+- **Fixture:** `fixtures/sandbox-tailcut` and `fixtures/sandbox-tailcut-tests` (runtime 17, ids 76100-76199). Codeunit "Tailcut Logic": `Triple`, `Double`, `IsBig(N) = N > 5`, `IsSmall(N) = N < 3`, `Halve(N) = N div 2` (PR-393). "Tailcut Tests", in order: `G0_TripleTwo`, `T0_RefusedFormat` (refused, unkept), `T1_DoubleTwo`, `T2_IsBigTen`, `T3_SetsMark`, `T4_SeesTheMark` (unstable: red alone), `T5_IsSmallOne`, `T6_HalveZero`, `T7_HalveTen` (the last two are stable tail tests that cover `Halve`, so PR-344 packs them).
 - **Three sessions** on the same build, serve-entries, `"isolation": "test"`, one worker, each in its own scratch (so three warning keys): `TC-off` (`refusedCutTail: false`), `TC-on` (the key absent) and `TC-alone` (`isolateTests`, where `refusedCut()` is undefined).
-- **The 10 mutants, per session** (`TC_TABLE` in `itest/alrunner-v3-legs.ts`):
+- **The 12 mutants, per session** (`TC_TABLE` in `itest/alrunner-v3-legs.ts`):
   - `Triple` (2): killed by `G0_TripleTwo` in all three.
   - `Double` (2), `IsBig` empty-block and return-value (2), `IsSmall` empty-block and return-value (2): `error` in TC-off (cut); killed by `T1_DoubleTwo`, `T2_IsBigTen`, `T5_IsSmallOne` in TC-on and TC-alone, TC-on's carrying the `[refused-cut tail ...]` note.
+  - `Halve` empty-block and return-value (2, PR-393): `error` in TC-off (cut); killed by `T7_HalveTen` in TC-on (a tail kill, with the note) and TC-alone. Both return 0, so T6 passes and T7 fails whichever the walk reaches first.
   - `IsBig` `N >= 5`: `error` in TC-off and TC-on (T2 passes, T4 is unstable); `survived` in TC-alone.
   - `IsSmall` `N <= 3`: `error` in TC-off; `survived` in TC-on and TC-alone.
-- **The leg fails by name** (`judgeTailcutLeg`, BEFORE the own-baseline compare), in order: `TC: no PR-250 cut` (TC-off or TC-on read 0 cut entries; it prints T0's evidence), `TC: the tail route did not run` (the stability notice does not name T1, T2, T3 and T5 stable and T4 unstable, or 0 tail alone calls under a mutant), then any row of the three tables, TC-on differing from TC-alone anywhere but `IsBig` `N >= 5`, and a tail kill without its note.
+- **The leg fails by name** (`judgeTailcutLeg`, BEFORE the own-baseline compare), in order: `TC: no PR-250 cut` (TC-off or TC-on read 0 cut entries; it prints T0's evidence), `TC: the tail route did not run` (the stability notice does not name T1, T2, T3, T5, T6 and T7 stable and T4 unstable, or 0 tail alone calls under a mutant), `TC: packing did not run as pre-committed` (PR-393, (a3): TC-on's `packs` is not exactly 2, or `failedPacks` is not 0; `servedFromPack` is recorded only), then any row of the three tables, TC-on differing from TC-alone anywhere but `IsBig` `N >= 5`, and a tail kill without its note.
 - **Warning sets** (PREDICTED, from RC's `[]` and ISO's, never observed): `al-runner-v3/TC-off` `[al-runner-v3-baseline-refused-cut]`; `TC-on` that, `al-runner-v3-refused-cut-tail` and `alone-confirm`; `TC-alone` `[al-runner-v3-isolate-tests]`. A first-run difference is pre-committed in an amendment before the record run.
 - **The flip's side effects:** every default v3 run now carries ` refused-cut-tail` in its lending build and the key `v3RefusedCutTail` in its fingerprint, so rows lent by older builds no longer match and a `--resume` of an older run is refused by name (`refused-cut-tail-resume-refused`, naming `"refusedCutTail": false` as the way to resume it). Per-test, method-isolation and one-shot runs are tagged too, though no cut acts there.
 
@@ -722,7 +723,7 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
     "al-runner-v3.multiobject.baseline.json": { "killed": 7, "survived": 1, "no-coverage": 6 },
     "al-runner-v3.wrapped.baseline.json": { "killed": 64, "survived": 39, "no-coverage": 13 },
     "al-runner-v3.recheck.baseline.json": { "killed": 4, "error": 4 },
-    "al-runner-v3.tailcut.baseline.json": { "killed": 8, "survived": 1, "error": 1 }
+    "al-runner-v3.tailcut.baseline.json": { "killed": 10, "survived": 1, "error": 1 }
   }
 }
 ```

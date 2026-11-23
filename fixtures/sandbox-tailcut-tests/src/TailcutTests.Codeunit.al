@@ -62,4 +62,18 @@ codeunit 76150 "Tailcut Tests"
         if not Logic.IsSmall(1) then
             Error('IsSmall(1) must be true');
     end;
+
+    [Test]
+    procedure T6_HalveZero()
+    begin
+        if Logic.Halve(0) <> 0 then
+            Error('Halve(0) must be 0');
+    end;
+
+    [Test]
+    procedure T7_HalveTen()
+    begin
+        if Logic.Halve(10) <> 5 then
+            Error('Halve(10) must be 5');
+    end;
 }

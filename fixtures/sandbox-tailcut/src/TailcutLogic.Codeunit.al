@@ -19,4 +19,9 @@ codeunit 76100 "Tailcut Logic"
     begin
         exit(N < 3);
     end;
+
+    procedure Halve(N: Integer): Integer
+    begin
+        exit(N div 2);
+    end;
 }

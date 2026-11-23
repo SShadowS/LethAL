@@ -36,11 +36,11 @@ const rowsOf = (s: TcSession, edit?: (r: TcRow & { key: string }) => TcRow): TcR
     return edit === undefined ? r : edit(r);
   });
 const STABILITY =
-  "[lethal] al-runner-v3-refused-cut-tail: codeunit 76150: tail tests measured alone at the end of the baseline (5 green of 5 cut): stable: T1_DoubleTwo, T2_IsBigTen, T3_SetsMark, T5_IsSmallOne; unstable: T4_SeesTheMark (PR-297)";
+  "[lethal] al-runner-v3-refused-cut-tail: codeunit 76150: tail tests measured alone at the end of the baseline (7 green of 7 cut): stable: T1_DoubleTwo, T2_IsBigTen, T3_SetsMark, T5_IsSmallOne, T6_HalveZero, T7_HalveTen; unstable: T4_SeesTheMark (PR-297)";
 const green = (): TcInput => ({
   rows: { "TC-off": rowsOf("TC-off"), "TC-on": rowsOf("TC-on"), "TC-alone": rowsOf("TC-alone") },
   cutEntries: { off: 6, on: 6 },
-  tailCalls: { stability: 5, mutant: 6 },
+  tailCalls: { stability: 7, mutant: 8, packs: 2, failedPacks: 0, servedFromPack: 1 },
   tailNotices: [STABILITY],
   t0Evidence: { off: "T0_RefusedFormat off", on: "T0_RefusedFormat on" },
   notRun: {
@@ -59,8 +59,8 @@ const edited = (s: TcSession, edit: (r: TcRow & { key: string }) => TcRow): TcIn
 };
 
 describe("PR-347 leg TC: the judge", () => {
-  test("the pre-committed table passes, and has the spec's 10 rows", () => {
-    expect(TC_TABLE).toHaveLength(10);
+  test("the pre-committed table passes, and has the spec's 12 rows", () => {
+    expect(TC_TABLE).toHaveLength(12);
     expect(judgeTailcutLeg(green())).toEqual([]);
   });
 
@@ -91,17 +91,48 @@ describe("PR-347 leg TC: the judge", () => {
     });
     expect(skipped[0]).toStartWith("TC: the tail route did not run");
     expect(skipped[0]).toContain("stability pass was not run (a stop signal came)");
-    expect(judgeTailcutLeg({ ...g, tailCalls: { stability: 5, mutant: 0 } })[0]).toStartWith(
+    expect(judgeTailcutLeg({ ...g, tailCalls: { ...g.tailCalls, mutant: 0 } })[0]).toStartWith(
       "TC: the tail route did not run",
     );
     // T4 read stable: the notice names the wrong sets
     const wrong = STABILITY.replace(
-      "stable: T1_DoubleTwo, T2_IsBigTen, T3_SetsMark, T5_IsSmallOne; unstable: T4_SeesTheMark",
-      "stable: T1_DoubleTwo, T2_IsBigTen, T3_SetsMark, T4_SeesTheMark, T5_IsSmallOne; unstable: none",
+      "stable: T1_DoubleTwo, T2_IsBigTen, T3_SetsMark, T5_IsSmallOne, T6_HalveZero, T7_HalveTen; unstable: T4_SeesTheMark",
+      "stable: T1_DoubleTwo, T2_IsBigTen, T3_SetsMark, T4_SeesTheMark, T5_IsSmallOne, T6_HalveZero, T7_HalveTen; unstable: none",
     );
     expect(judgeTailcutLeg({ ...g, tailNotices: [wrong] })[0]).toStartWith(
       "TC: the tail route did not run",
     );
+    // T6 or T7 missing from the stable list
+    const short = STABILITY.replace(", T7_HalveTen;", ";");
+    expect(judgeTailcutLeg({ ...g, tailNotices: [short] })[0]).toStartWith(
+      "TC: the tail route did not run",
+    );
+  });
+
+  // Red: drop the (a3) check, or its `packs !== TC_PACKS` / `failedPacks !== 0` half.
+  test("(a3) packs other than 2, or a failed pack, fails first and names the counts", () => {
+    const g = green();
+    for (const [patch, text] of [
+      [{ packs: 0 }, "packs 0 (pre-committed 2)"],
+      [{ packs: 1 }, "packs 1 (pre-committed 2)"],
+      [{ packs: 3 }, "packs 3 (pre-committed 2)"],
+      [{ failedPacks: 1 }, "failedPacks 1 (pre-committed 0)"],
+    ] as const) {
+      const fails = judgeTailcutLeg({ ...g, tailCalls: { ...g.tailCalls, ...patch } });
+      expect(fails).toHaveLength(1);
+      expect(fails[0]).toStartWith("TC: packing did not run as pre-committed");
+      expect(fails[0]).toContain(text);
+      expect(fails[0]).toContain("servedFromPack 1 (recorded only)");
+    }
+    // servedFromPack is recorded, never judged
+    expect(judgeTailcutLeg({ ...g, tailCalls: { ...g.tailCalls, servedFromPack: 0 } })).toEqual([]);
+    // (a3) comes before (b): a moved row alongside packs 0 reports only the packing failure
+    const moved = edited("TC-on", (r) =>
+      r.key === "Halve lethal.empty-block" ? { ...r, verdict: "survived" } : r,
+    );
+    const both = judgeTailcutLeg({ ...moved, tailCalls: { ...moved.tailCalls, packs: 0 } });
+    expect(both).toHaveLength(1);
+    expect(both[0]).toStartWith("TC: packing did not run");
   });
 
   // Red: skip the per-mutant table loop in judgeTailcutLeg.
@@ -133,7 +164,7 @@ describe("PR-347 leg TC: the judge", () => {
         verdict: "killed",
       };
       const fails = judgeTailcutLeg({ ...g, rows: { ...g.rows, [s]: [...g.rows[s], extra] } });
-      expect(fails.some((f) => f.startsWith(`${s}: 11 mutants, pre-committed 10`))).toBe(true);
+      expect(fails.some((f) => f.startsWith(`${s}: 13 mutants, pre-committed 12`))).toBe(true);
     }
   });
 
@@ -222,7 +253,7 @@ describe("PR-347 leg TC: the judge", () => {
 describe("PR-347 leg TC: the fixture and the wiring", () => {
   test("the fixture's tests and logic have the spec's shape", () => {
     const logic = read("fixtures/sandbox-tailcut/src/TailcutLogic.Codeunit.al");
-    for (const p of ["Triple", "Double", "IsBig", "IsSmall"])
+    for (const p of ["Triple", "Double", "IsBig", "IsSmall", "Halve"])
       expect(logic).toContain(`procedure ${p}(`);
     const tests = read("fixtures/sandbox-tailcut-tests/src/TailcutTests.Codeunit.al");
     const order = [
@@ -233,6 +264,8 @@ describe("PR-347 leg TC: the fixture and the wiring", () => {
       "T3_SetsMark",
       "T4_SeesTheMark",
       "T5_IsSmallOne",
+      "T6_HalveZero",
+      "T7_HalveTen",
     ].map((n) => tests.indexOf(`procedure ${n}(`));
     expect(order.every((i, k) => i > 0 && (k === 0 || i > (order[k - 1] ?? 0)))).toBe(true);
     expect(tests).toContain("Format(8, 2, '<Integer,2>')");
