@@ -330,8 +330,9 @@
   },
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit, <test>, changed number sequence <x> that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.In",
-    "state": "fixed",
-    "note": "PR-142: fixed in current (edge-4ebfe7913 contains both closing commits): #8002's and #6638's repros run every later test after a test that advanced an existing number sequence, with and without --isolation test (/coord/handoff/PR-142/repros/8002/, 6638/) (was: PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
+    "state": "open",
+    "repro": "/coord/handoff/PR-389",
+    "note": "PR-389: open, not fixed. It is al-runner's deliberate narrowed rule (crates/al-testrun isolation.rs after_test): under TestIsolation = Function a later test that touches a pre-existing sequence an earlier test advanced is refused; other tests run. Seen on current main-bf3a3e863 and on edge (both carry the closing commits; PR-142's repros pass because their later tests do not reuse the sequence). y3 refused 180 tests with it, c3 198: not a regression. BC 29 on bc4 (bcdev's runner): a pre-existing sequence is never rolled back across tests or calls (C took 1, D took 2; alone: 3, then 4); a Function-isolation runner could not be measured (BC refuses nested test runners). LethAL's lever is DO's isolation, ruled by R1102 (stays test). BC answers sent to alrunner (was: PR-142: fixed in current (edge-4ebfe7913 contains both closing commits): #8002's and #6638's repros run every later test after a test that advanced an existing number sequence, with and without --isolation test (/coord/handoff/PR-142/repros/8002/, 6638/) (was: PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))))",
     "issue": "#8002, #6638"
   },
   {
