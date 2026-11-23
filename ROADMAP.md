@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**64 of 1160 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**65 of 1161 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1205,6 +1205,7 @@ that ordering is the priority.
 - **R1194** · DO's runs reach al-runner's .NET helper: 0 dotnet-unavailable rows in c3 and c3off, LethAL passes the exact BC build, the pinned sidecar and the service folder; the --bc-version 28 failure was the refusal-family script's own, so no product lever · [R1194.md](docs/roadmap/R1194.md) · closed 2026-11-23 — measured (PR-376): no lever; the script's ceiling is recorded
 - **R1195** · refusal-family.ts runs every family on one exact BC build (PR-377): 1 move in 3,418 cells, and it restores PR-32's measured answer; DO's own CI builds on the latest BC 28 sandbox, not 29 · [R1195.md](docs/roadmap/R1195.md) · closed 2026-11-23 — measured (PR-377); the script fix lands with this row
 - **R1196** · The v3 itest's LETHAL_ITEST_V3_REPORT_DIR writes a leg's report only AFTER its warning-set check, though its comment says "before any assertion": a leg that fails its warning set keeps no report, which hides exactly the legs where something changed · [R1196.md](docs/roadmap/R1196.md) · done (2ebdbecc1)
+- **R1198** · PR-344's tail packing has no live exercise: on DO after PR-365 and in PR-347's TC fixture, every refused-cut mutant is covered by exactly one stable tail test, so every pack set is one test and 0 packs are sent · [R1198.md](docs/roadmap/R1198.md) · open
 
 ---
 

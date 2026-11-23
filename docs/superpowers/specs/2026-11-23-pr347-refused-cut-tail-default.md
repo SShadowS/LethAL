@@ -203,3 +203,26 @@ baseline in every session. Derived from the fixture and the table above:
   quoted from the record run; it is not judged.
 - **The order:** merge (done, 6ccd98950), (f) built and red-checked, VERIFY, then TC's record run, its confirm run, the full v3
   gate and the carry gate on the final head, and the BC legs.
+
+## Amendment 4 (2026-11-23, the first record attempt; before the record run that writes)
+- **The record was refused by R810/R849.** `current` (main-bf3a3e863) carries a per-build pin, and on a pinned build a record
+  may write only rows committed at HEAD. TC's baseline is new, so the route is R849's: a pre-committed EXPECTED file at
+  `packages/runner/itest/expected/al-runner-v3.tailcut.baseline.json`, in its own commit to master, before the run.
+- **The expected file is the table above, not a copy of a run.** `/coord/handoff/PR-347/build-expected.ts` takes each row's
+  identity (key, mutatedTextSha256, errorClass) from the itest's normalizer over TC-on's report of the refused attempt. It takes
+  every VERDICT and KILLING TEST from the pre-committed `TC_TABLE`, and STOPS on any disagreement, a missing or doubled site,
+  or a coverage-filtered row. All 10 rows agreed. The one error row (IsBig `N >= 5`) has errorClass `runner-refused`, the PR-250
+  cut's class.
+- **The refused attempt's judge passed (a1)-(f):**
+  - the cut fired in TC-off and TC-on;
+  - the stability pass read T1, T2, T3 and T5 stable and T4 unstable, with 14 tail alone calls under a mutant;
+  - the three tables as pre-committed;
+  - TC-on and TC-alone differ only at IsBig `N >= 5`;
+  - the notes;
+  - (f): TC-on 1 survivor and TC-alone 2 survivors beside T0.
+  - Recorded (not judged): `sharingACodeunit` TC-on 1, TC-alone 2, TC-off absent.
+- **A prediction miss: TC-on's pack stats read 0 packs (amendment 2 predicted above 0).** Each TC mutant is covered by exactly
+  one stable tail test (Double by T1, IsBig by T2, IsSmall by T5; T3 covers no mutant), and a pack's mates are the walked
+  mutant's other covering tail tests. So every pack set is one test, as on DO. **TC does not exercise PR-344's packing live
+  either.** Packing's live exercise needs a mutant covered by two or more stable tail tests: filed as a roadmap item, not
+  built here (a fixture change would move this table).
