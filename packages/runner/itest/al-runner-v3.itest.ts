@@ -2041,7 +2041,7 @@ async function legTC(scratch: string): Promise<SessionReport> {
       off: off.b.entriesStats().refusedCutEntries,
       on: on.b.entriesStats().refusedCutEntries,
     },
-    tailCalls: on.b.refusedCutTailStats(),
+    tailCalls: packs,
     tailNotices: on.tailNotices,
     t0Evidence: {
       off: t0Evidence(off),
