@@ -1,0 +1,85 @@
+{
+  "identityScheme": 48,
+  "entries": [
+    {
+      "key": "08b5df0c6213325221a366d8032c0fe4713b3b1fe95a37656c29cc9ef9b8dc65|Tailcut Logic|Triple|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "G0_TripleTwo",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Tailcut Logic|Double|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "T1_DoubleTwo",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "a75c8d5c57533c2919fb66da9ae2c5d5a15b02f9e5dea53154756d69ced184a2|Tailcut Logic|Triple|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "G0_TripleTwo",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "bb7f5eca1388f30c3ae46287d4fa66dce0918bce58dbacf9b05adeb2d79dc909|Tailcut Logic|IsSmall|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "T5_IsSmallOne",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "cb1ff4e70b580a36f55a8073df250d5ecc46bcb9883e95c70e3bbd2b14905ab6|Tailcut Logic|IsSmall|lethal.conditional-boundary|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "cf79e059ddd1701bb88dc59eabd990bdba913e22d92e8d10435f70b43cb5bfab"
+    },
+    {
+      "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Tailcut Logic|Double|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "T1_DoubleTwo",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "513f58774a41965262e45053648c2e188744d13f4cc62a5ba918e95be6d410b8"
+    },
+    {
+      "key": "ed2fa8a3e6af59a97c9da7d0b611469c269023ed0c05c110ac25dac23c118010|Tailcut Logic|IsBig|lethal.conditional-boundary|1",
+      "verdict": "error",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": "runner-refused",
+      "mutatedTextSha256": "8eb997ef833c78dfaa46675f51424a0aea2c4a0bb130bcaccadf596b20243f42"
+    },
+    {
+      "key": "f2f1cead4445bcb27606e0ba4d07813f7c5247f10b1da9450d680240b8f55557|Tailcut Logic|IsSmall|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "T5_IsSmallOne",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "9c0194fb026fe73a3dd1cf622a526e01079b8ac598860e510553f619b1ab4e58"
+    },
+    {
+      "key": "f79e9e1ca7285329fa952a1c982d5b5324bba389d4253ef32d7f83b340a3e1b1|Tailcut Logic|IsBig|lethal.return-value|1",
+      "verdict": "killed",
+      "killingTest": "T2_IsBigTen",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "f3a718c47db79c04d1bf31f80b465b7e6bae7fb70118f3914c87ce6d5a287eee"
+    },
+    {
+      "key": "fc7175c7ff059ccfdd8c01d0af14699802ff238a0fc942b81cd15dcd48680182|Tailcut Logic|IsBig|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "T2_IsBigTen",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    }
+  ]
+}
