@@ -30,7 +30,9 @@
  *   one-shot): `LETHAL_ITEST_V3_TRANSPORT=one-shot|serve-entries`,
  *   `LETHAL_ITEST_V3_SECOND_ECHO=0|1` (serve-entries only), refused by name otherwise
  *   (`v3ItestTransport`); `LETHAL_ITEST_V3_REPORT_DIR=<dir>` writes each session's report as
- *   `<dir>/<leg>.report.json` before any assertion; `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first
+ *   `<dir>/<leg>.report.json` before any assertion on it (the warning set, the control compare, the leg's tables: R1196,
+ *   `writeReportThenCheck`), so a failing leg keeps its report; a session that throws has none to write;
+ *   `LETHAL_ITEST_V3_CONTROL_DIR=<dir>` first
  *   compares each session per mutant with `<dir>/<leg>.report.json` (the edge one-shot control).
  * - R586c: a build with a per-build pin (`al-runner-v3-pins.ts`, matched on the exact version line
  *   AND sha256) is judged against it; the first line says so. `LETHAL_ITEST_V3_K_ON_CANDIDATE=1`
@@ -238,6 +240,7 @@ import {
   assertLayoutRun,
   printLayoutTable,
 } from "./layout-fixture";
+import { writeReportThenCheck } from "./leg-report";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { assertSymbolBuild, printSymbolTable } from "./symbol-fixture";
 import {
@@ -459,17 +462,6 @@ async function session(
   // R785: a `LETHAL_ITEST_V3_WORKERS > 1` D-leg run also says how many lanes started; that one code is
   // expected on top of the leg's N = 1 set. Unset (the gate), the pinned set is checked unchanged.
   const pinned = GATE_WARNINGS[`al-runner-v3/${leg}`];
-  if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested()) {
-    assertGateWarnings(
-      "al-runner-v3",
-      leg,
-      gateWarnings.codes(),
-      pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
-      gateWarnings.examples(),
-    );
-    // PR-98: the notice must also report as many lanes as asked, or the leg fails by name.
-    assertLanesStarted(gateWarnings.examples()["al-runner-v3-lanes-started"], V3_WORKERS);
-  } else checkGateWarnings("al-runner-v3", leg, gateWarnings);
   const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
   if (serveLeg) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);
@@ -478,10 +470,25 @@ async function session(
   if (serveLeg || REPORT_DIR !== undefined) {
     console.log(`  ${leg}: timings ${JSON.stringify(r.timings)}`);
   }
-  if (REPORT_DIR !== undefined) {
-    await mkdir(REPORT_DIR, { recursive: true });
-    await writeFile(join(REPORT_DIR, `${leg}.report.json`), `${JSON.stringify(r, null, 2)}\n`);
-  }
+  // R1196: the report first, then the warning set, so a leg that fails its warnings still keeps its report.
+  await writeReportThenCheck({
+    leg,
+    report: r,
+    reportDir: REPORT_DIR,
+    check: () => {
+      if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested()) {
+        assertGateWarnings(
+          "al-runner-v3",
+          leg,
+          gateWarnings.codes(),
+          pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
+          gateWarnings.examples(),
+        );
+        // PR-98: the notice must also report as many lanes as asked, or the leg fails by name.
+        assertLanesStarted(gateWarnings.examples()["al-runner-v3-lanes-started"], V3_WORKERS);
+      } else checkGateWarnings("al-runner-v3", leg, gateWarnings);
+    },
+  });
   if (CONTROL_DIR !== undefined) {
     const control = join(CONTROL_DIR, `${leg}.report.json`);
     must(

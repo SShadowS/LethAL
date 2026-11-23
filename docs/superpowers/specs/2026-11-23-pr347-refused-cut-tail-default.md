@@ -179,5 +179,10 @@ If a key differs on the first run, the difference is pre-committed in an amendme
   - (a1)'s evidence comes from the session that failed;
   - the fixture test ties the `IsBig(5)` check to T4;
   - the resume message says "with refusedCutTail off" or "on", not "the default".
+- **Packing flips with the flag** (orchestrator, 2026-11-23). PR-344's tail packing has no switch of its own: it runs
+  wherever `refusedCutTail` is on, so this flip makes it the default too. The evidence: PR-344's DO re-check (175 of 175
+  mutants equal packed vs unpacked, 0 moves; packing never engaged there, with 1 stable tail test after PR-365), and TC-on's
+  real packs (4 stable tail tests in one codeunit). TC's first run quotes its pack stats: packs sent > 0 is predicted. A
+  separate knob would only add a fingerprint dimension with no measured need.
 - **NITs accepted:** about 18 un-awaited `baselinePhase(false)` calls in one test file (production awaits); PR-209's generic
   message for runs from before PR-209 (still refused); the flag message coming first on `--resume-run` (still refused).

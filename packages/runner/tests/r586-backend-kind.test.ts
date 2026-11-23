@@ -65,8 +65,16 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "confirm.ts": {
     'if (r.backend !== "al-runner-v3") throw new ConfirmInputNotV3Error(r.backend);': "v3",
     '(m) => m.finalVerdict === "survived" && m.measuredBy === "bcdev",': "confirmation-field",
+    // PR-381: a survivor still measured by v3 (the confirmation's own field).
+    '.filter((m) => m.measuredBy === "al-runner-v3" && SURVIVING_VERDICTS.has(m.finalVerdict))':
+      "confirmation-field",
     'if (m.measuredBy === "bcdev" && isKill(m.finalVerdict) && m.v3Verdict !== m.finalVerdict) {':
       "confirmation-field",
+  },
+  // PR-381: the not-run field and caveat exist only on an al-runner-v3 report; each names v3 explicitly.
+  "explain.ts": { 'report.backend === "al-runner-v3" &&': "v3" },
+  "not-run-survivors.ts": {
+    'return r.backend === "al-runner-v3" &&': "v3",
   },
   "line-map.ts": {
     'case "bcdev":': "exhaustive-switch",
@@ -102,6 +110,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     "if (!r.authoritative) {": "report-field",
     'if (caps.kind === "al-runner-v3") {': "v3",
     '...(runnerBuild !== undefined && caps.kind === "al-runner-v3"': "v3",
+    // PR-381: the field is written on an al-runner-v3 report only.
+    'input.caps.kind === "al-runner-v3" ? { notRunAtBaseline: input.notRunAtBaseline } : {};': "v3",
   },
   "cli.ts": {
     'if (raw !== "bcdev" && raw !== "al-runner-v3") {': "config",

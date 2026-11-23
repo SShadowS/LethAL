@@ -74,3 +74,64 @@ first quiet speed reference. Otherwise the BLOCKs are the finding, and the orche
 ## The compare's self-test (done before this commit)
 - c3 against itself: 0 moves, and every R1187 claim blocks (c3 lacks the rows).
 - c3 with one planted verdict outside the 1,504: exactly one move-BLOCK, naming the planted mutant.
+
+## Amendment 1 (2026-11-23, before the run): survivors a refused test covers are not confirmed; c4 is held
+- **Why (the orchestrator):** preproc found on bc4 that in codeunit 68874, 9 of 47 v3 survivors are FALSE survivors. Their BC
+  killer is a test v3 refuses at baseline. PR-365's keep rows have the same shape in 68975 and 68984: the refused tests stay unrun,
+  and the other tests of the codeunit now run. The owner is asked how such survivors are scored.
+- **Held:** c4 does not start until the owner's answer is in, and this spec is amended for it.
+- **In the compare:** a survivor of the 1,504 that a refused test covers is counted as UNCONFIRMED, not as a recovered survivor.
+  The refused tests leave no coverage in c3 or c4, so it is read from y3's report, where they ran (PR-365's reach). The rows go
+  to `unconfirmed-survivors.tsv`.
+  - Kills are unaffected (the gained- and lost-kill checks stand).
+  - R1187's "at least 1,493 leave `error`" still holds as a count. Its survivors are reported as confirmed or unconfirmed, and only
+    the confirmed ones count as recovered.
+- **Positive control:** with every cut mutant forced to `survived` on c3's report, 808 count as unconfirmed. That is exactly
+  PR-365's `reach.tsv`, where 775 are covered by a refused test and a later one, and 33 by a refused test and others.
+
+## Amendment 2 (2026-11-23, before the run): PR-381's interface, and the headline check
+- **Why (the orchestrator):** the owner's ruling is in, and PR-381 implements it: a survivor whose only possible killer is a
+  test that did not run at baseline is unknown. The interim form is an app-level caveat with the count, shown wherever a
+  survivor count or score is shown. No verdict changes. The owner's condition is that the headline carries it. The interface
+  is PR-381's spec with its amendments 1-3 (ae6f7d607 and after) and PR-387's spec:
+  - the report field `notRunAtBaseline` (qualified test names);
+  - the caveat `survivors-beside-unrun-tests`, with `survivorsBesideUnrunTests` = `{ survivors, notRunTests,
+    sharingACodeunit }`;
+  - the sentence `notRunSentence` prints on the line after `score:`, in the error-range line and in the withheld-kills line.
+  - PR-386 closed with no gain, so the caveat stays app-level. PR-387 changes only bcdev's wording; c4 is al-runner-v3.
+- **When:** c4 starts only after PR-381 lands, and on the orchestrator's word. `arm.sh` now stops unless PR-381's merge is in
+  the head, and it logs whether PR-387's merge is.
+- **The compare stays verdict-based.** `compare.py` and claims 1-8 are unchanged. Amendment 1's confirmed/unconfirmed split is
+  a reported view. PR-381's caveat is a reported figure, checked by a new script that runs after the compare:
+  `/coord/handoff/PR-379/amend2/headline-check.ts` (rc 0 OK, 1 BLOCK).
+- **c3's figures, under PR-381's final classifier** (`isNotRunBaselineRow`, round 3; `amend2/c3-notrun.ts`, read from c3's
+  `baseline-batch-finished` events; c3 predates the field):
+  - 237 tests not run at baseline: 209 cascades after an earlier refusal (198 of them after a number-sequence refusal),
+    20 other refusals, 7 `Field.RelationFieldNo` refusals and 1 cascade after one. None is a timeout, stop, deadline or
+    transport failure.
+  - The caveat: survivors 8618, notRunTests 237, sharingACodeunit 4886. These equal PR-381's own c3 prediction.
+- **Predictions for c4, by name:**
+  9. **The not-run list** is c3's 237 minus `CDO Variant Setup UI Tests.U_ChainThroughTwoCompositeKeys_AsksOnceAndFillsTheSameKindOfValue`:
+     **236 tests** (`amend2/c4-notrun-predicted.txt`). Under PR-365's keep rows that test runs and fails its own assertion at
+     baseline (PR-365's result, rows 11-15: "red on both"), so it is no longer counted. The 7 RelationFieldNo tests stay refused.
+     No other change since c3 touches the baseline: PR-354's claim is verdicts equal, and the SaveAs texts in c3's two
+     second-order cascades are reach notes after a number-sequence refusal.
+     - Any extra or missing name is a BLOCK, explained by name.
+     - If PR-347 is in the head, its amendment states its effect on this list first.
+  10. **The caveat:** `validity.caveats` holds `survivors-beside-unrun-tests`. `survivorsBesideUnrunTests` equals the head's
+      `notRunSurvivors` recomputed on c4's report, with:
+      - `notRunTests` **236**;
+      - `survivors` **8618 + S**, where S is the number of the 1,504 that read `survived` or `known-survivor` in c4. c3 has none
+        among them, and claim 1 leaves no other move. It must also equal c4's survivor rows.
+      - `sharingACodeunit`: 4886 plus the tagged survivors among the S. It is a hint, so a different figure is reported, not a BLOCK.
+  11. **The headline carries it (the owner's condition):** in `stdout.txt` (renderConsole):
+      - the line right after `score:` is exactly `notRunSentence(caveat)` + ` (validity.caveats "survivors-beside-unrun-tests", R1197)`;
+      - the error-range line holds ` Its survivors: <sentence>.` (c3 has `some-errors`), and the withheld-kills line holds
+        ` The score's survivors: <sentence>.` when there are withheld kills;
+      - the sentence opens literally with `<survivors> survivors, all in a run with 236 tests v3 did not run at baseline`, so
+        a wording change or an empty value cannot pass.
+- **The check's self-test** (`amend2/selftest.ts` on c3, built with PR-381's own `notRunSurvivors` and `renderConsole` at its
+  round-3 head 9420617d2; `amend2/selftest.txt`): the good case passes. Each planted fault blocks: the headline line removed,
+  an extra test, the field absent.
+- **What it becomes:** the c4 result reports the caveat's figures and the not-run list beside the verdict claims. A survivor
+  count or score quoted from c4 always carries the sentence.
