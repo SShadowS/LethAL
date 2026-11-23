@@ -5712,7 +5712,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(34);
+    expect(out.explainSchemaVersion).toBe(35);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -6876,6 +6876,73 @@ describe("R658 D5: a baseline holding a stopped test records no snapshot", () =>
     expect(backend.baselineRuns).toBeGreaterThan(0);
     expect(report.baselineStopped?.tests.length).toBe(backend.baselineRuns);
     expect(snapshots(stopped)).toBe(0);
+  });
+});
+
+describe("PR-381 (R1197): --resume with a REUSED baseline snapshot holding a refused row", () => {
+  const REFUSAL = "NotRun: out-of-scope: the test needs a thing";
+  /** An al-runner-v3 shape whose baseline refuses `BSlow` (a notRun row); every other test passes. */
+  class RefusingBaseline extends CountingBackend {
+    private active: string | null = null;
+    refusedRuns = 0;
+    constructor(abortAfter?: number) {
+      super("pass", abortAfter);
+      (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
+    }
+    override capabilities(): BackendCapabilities {
+      return { ...super.capabilities(), kind: "al-runner-v3", authoritative: false };
+    }
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-test", binarySha256: "b".repeat(64) };
+    }
+    override async activate(id: string | null): Promise<void> {
+      this.active = id;
+      await super.activate(id);
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      if (this.active === null && ref.method === "BSlow") {
+        this.refusedRuns += 1;
+        return {
+          ref,
+          outcome: "error",
+          durationMs: 5,
+          failureMessage: REFUSAL,
+          runnerRow: "runner-refused",
+        };
+      }
+      return super.run(ref, opts);
+    }
+  }
+
+  test("run 2 re-runs no refused baseline test, and its carried survivors carry the caveat", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), TWO_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new RefusingBaseline(1),
+      store,
+      ...dirs,
+      selectorIds,
+      stopHungSessions: true,
+    });
+    expect(first.quarantined).toBeDefined();
+    expect(first.notRunAtBaseline).toEqual(["Sandbox Tests.BSlow"]);
+    const second = new RefusingBaseline();
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      stopHungSessions: true,
+      resume: "last",
+      retryStranded: true,
+    });
+    // The snapshot is reused: the refused test was not run again, yet the report still names it.
+    expect(second.refusedRuns).toBe(0);
+    expect(report.notRunAtBaseline).toEqual(["Sandbox Tests.BSlow"]);
+    expect(report.mutants.some((m) => m.carried === true && m.verdict === "survived")).toBe(true);
+    expect(report.validity.caveats).toContain("survivors-beside-unrun-tests");
+    expect(report.survivorsBesideUnrunTests?.notRunTests).toBe(1);
   });
 });
 

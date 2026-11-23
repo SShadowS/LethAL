@@ -3,6 +3,7 @@
 import { ACCEPT_LIST_FILENAME } from "./accept-list";
 import type { AcceptResult } from "./accept-list";
 import { SURVIVING_VERDICTS } from "./equivalence-marks";
+import { notRunLine } from "./not-run-survivors";
 import { mutantRef } from "./report";
 import type { MutantOutcome, SessionReport } from "./report";
 
@@ -37,6 +38,8 @@ export interface ChangedLineSurvivors {
   readonly unknownFlagCount: number;
   /** Set when the run stopped early (quarantine or time budget): the lists are not complete. */
   readonly partial?: string;
+  /** PR-381 (R1197): `notRunLine` of the run, shown under the counted survivors; absent when nothing to say. */
+  readonly notRun?: string;
 }
 
 // Only `validity` is required: `exitCodeForReport` is also called with a bare validity in tests, and a
@@ -53,6 +56,9 @@ export type ReportView = {
     | "restrictiveDefault"
     | "resumedFrom"
     | "quarantined"
+    | "notRunAtBaseline"
+    | "survivorsBesideUnrunTests"
+    | "testsOnly"
   >
 >;
 
@@ -128,12 +134,15 @@ export function changedLineSurvivors(
       : report.validity.caveats.includes("time-budget-reached")
         ? "the run was stopped by its time budget"
         : undefined;
+  const notRun =
+    report.backend !== undefined ? notRunLine({ ...report, backend: report.backend }) : undefined;
   return {
     counted: counted.sort(byFileLineCode),
     accepted: accepted.sort(byFileLineCode),
     apart: apart.sort(byFileLineCode),
     unknownFlagCount,
     ...(stopped !== undefined ? { partial: stopped } : {}),
+    ...(notRun !== undefined ? { notRun } : {}),
   };
 }
 
@@ -150,6 +159,8 @@ export function renderChangedLineSurvivors(s: ChangedLineSurvivors, accept?: Acc
       ? `SURVIVORS ON THE CHANGED LINES (partial: ${s.partial}; the counts are not a full list)`
       : "SURVIVORS ON THE CHANGED LINES";
   const lines = ["", head, `counted: ${s.counted.length}`];
+  // The sentence counts the whole run's survivors, not only the counted ones above.
+  if (s.notRun !== undefined) lines.push(`of the whole run: ${s.notRun}`);
   for (const m of s.counted) {
     lines.push(row(m));
     const ready = accept?.ready.get(mutantRef(m.batchIndex, m.mutantCode));
