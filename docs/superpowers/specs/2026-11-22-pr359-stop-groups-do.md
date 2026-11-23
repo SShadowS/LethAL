@@ -89,15 +89,36 @@ From B's `serve-entries (R635)` line:
 ## Void rules (either arm void: speed is INCONCLUSIVE; V is still judged)
 - the BOOTTIME - MONOTONIC gap grew during the arm (the box slept);
 - the mean busy share of CPUs 12-21 in `box.tsv` above 0.20 (2 of 10 cores), i.e. outside work beside the run;
-- **outside load on CPUs 0-11** (review SERIOUS 3), which the 12-21 share cannot see. A has no cgroup `usage_usec`
-  reading, so both arms are compared on `box.tsv` over each mutant phase: void if B's mean load1 differs from A's by more
-  than 15% of A's, or B's mean CPU pressure (`some avg10`) differs from A's by more than 15% of A's or 1.0 point, whichever
-  is larger (c3's pressure runs near 1.2, so a bare 15% would void on noise);
+- **outside load on CPUs 0-11** (review SERIOUS 3, as amended by amendment 1 below);
 - B's memory-guard time (`bound` ms) exceeds A's by more than 1% of A's mutant-phase wall;
 - B printed a decision unlike c3's (the driver's rc 4, above);
 - the watchdog stopped it, R948's guard stopped it, or the run did not end rc 0 with a complete report.
 - A void arm B is re-run once, as B2, under the same rules. A void arm A cannot be re-run here (c3 is PR-357's); then speed
   is INCONCLUSIVE.
+
+## Amendment 1 (2026-11-23, before arm B runs): load averages withdrawn, per-core shares instead
+- **Why:** lethal-code's own work on CPUs 12-21 (nice 19) during c3: `bun test scripts/` at about 23:20Z and
+  23:28-23:31Z, and four PR-360 VERIFYs (verify-ledger: 23:34:46-23:39:19, 23:40:19-23:44:09, 23:44:49-23:51:38,
+  23:52:07-23:54:42Z). In c3's `box.tsv` the 12-21 share reads 0.68-1.0 there, load1 up to 253, and CPU pressure up to 83.
+  `/proc/loadavg` and `/proc/pressure/cpu` are box-wide, so c3's load1 and pressure are contaminated, and the rule above
+  would void B for being quieter. Load averages prove nothing per core (the orchestrator, 2026-11-23).
+- **The load1 and pressure comparison is withdrawn.**
+- **CPUs 0-11, measured:** B's `box.tsv` now also records the busy share of CPUs 0-11 from `/proc/stat` (column
+  `cpu0_11_busy`, beside `cpu12_21_busy`).
+  - B's outside load on 0-11 = its mean `cpu0_11_busy` over the run minus its own CPU (`time.txt` user plus system) ÷
+    (12 × the elapsed wall). **Void if above 0.10** (about 1.2 cores).
+  - **A cannot be measured this way:** c3's `box.tsv` has no 0-11 column. Its own CPU ÷ (12 × wall) is reported, and the
+    result states that A's 0-11 outside load is unmeasured.
+- **CPUs 12-21:** the 0.20 mean-share rule stands for both arms, over each arm's mutant phase.
+- **The contamination's bias favours B** (A was slowed in those windows, so its wall is longer). So S1 must ALSO hold
+  with A's mutant-phase wall reduced by its measured excess in them:
+  - the windows: every 30 s sample of A's `box.tsv` with `cpu12_21_busy` > 0.5 inside the mutant phase;
+  - A's rate: mutants scored per second (from `mutant-scored` events) inside those windows, against A's rate in the rest
+    of its mutant phase;
+  - the excess: the windows' total length × (1 − rate in them ÷ rate outside), counted only when positive.
+  - S1 passes only if it holds both with and without that correction. The windows, both rates and the excess are
+    reported.
+- The driver change (`arm.sh`, the `cpu0011` sampler) is in place and its syntax is checked.
 
 ## What follows
 - **V, S1 and S2 hold:** R1146 records the saving seen in one pair. The next step is a task with an interleaved series of
