@@ -187,6 +187,8 @@
     "upstream-repros.ts",
     "refusal-family.test.ts",
     "refusal-family.ts",
+    "pr363-legc-keep-apps.test.ts",
+    "pr363-legc-keep-apps.ts",
     "keep-census.test.ts",
     "keep-census.ts",
     "automation-api-guard.test.ts",
