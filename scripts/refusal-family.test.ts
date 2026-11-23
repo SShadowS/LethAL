@@ -32,6 +32,7 @@ import {
   Y1_REFUSALS,
   Y2_COLLATION,
   Y2_XML,
+  ZIP_BLOB,
   bcCheckApp,
   bcCheckFamily,
   cellName,
@@ -1666,10 +1667,109 @@ describe("PR-374: the language-region family", () => {
     expect(trig).toContain("Holder.Put(Answer);");
   });
 
-  test("last of FAMILIES (place 25, BC-check number 26): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("language-region");
+  test("place 25 of FAMILIES (BC-check number 26): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(24);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051026");
+  });
+});
+
+describe("PR-375: the zip-blob family", () => {
+  const f = ZIP_BLOB;
+  const scenarios = [...new Set(f.cells.map((c) => c.method))];
+
+  test("36 cells: 12 scenarios x 3 entry texts; distinct names", () => {
+    expect(f.cells).toHaveLength(36);
+    expect(scenarios).toHaveLength(12);
+    expect([...new Set(f.cells.map((c) => c.state))]).toEqual(["hello", "empty", "long"]);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("every <payload> is substituted, with the entry text the cell's state names", () => {
+    const expr: Record<string, string> = {
+      hello: "'hello'",
+      empty: "''",
+      long: "PadStr('', 2000, 'x')",
+    };
+    // PR-375 review: the text goes into exactly one statement, the one that writes or zips the entry text, and ends it
+    for (const c of f.cells) {
+      const setup = c.setup ?? [];
+      expect(setup.join("\n")).not.toContain("<payload>");
+      const e = expr[c.state] ?? "?";
+      const hits = setup.filter(
+        (s) =>
+          s.endsWith(`, ${e});`) &&
+          (s.startsWith("P.PutText(R, ") || s.startsWith("P.MakeZip(R, 2, 'a.txt', ")),
+      );
+      expect(hits).toHaveLength(1);
+    }
+  });
+
+  test("each Describe reads the Blob its scenario writes: B for 'to other blob', the read-only add, extract and close; A otherwise", () => {
+    const targetOf = (c: (typeof f.cells)[number]) => /P\.Describe\(R, (\d)\)/.exec(c.call)?.[1];
+    for (const c of f.cells) {
+      if (c.method.startsWith("IsZip")) continue;
+      const writesB = (c.setup ?? []).includes("R.B.CreateOutStream(OS);");
+      expect(targetOf(c)).toBe(writesB ? "3" : "2");
+    }
+  });
+
+  test("the two shapes an app's code takes: a new archive saved into its source Blob through a copy, an open archive saved back after Clear", () => {
+    const copy = f.cells.find((c) => c.method === "new to source via copy")?.setup ?? [];
+    expect(copy.indexOf("Copy.A := R.A;")).toBeLessThan(copy.indexOf("Clear(R.A);"));
+    expect(copy.indexOf("Clear(R.A);")).toBeLessThan(copy.indexOf("DC.SaveZipArchive(OS);"));
+    const back = f.cells.find((c) => c.method === "update to source cleared")?.setup ?? [];
+    expect(back.indexOf("DC.OpenZipArchive(IS, true);")).toBeLessThan(back.indexOf("Clear(R.A);"));
+    expect(back.indexOf("Clear(R.A);")).toBeLessThan(back.indexOf("R.A.CreateOutStream(OS);"));
+    expect(back.at(-1)).toBe("DC.SaveZipArchive(OS);");
+    // its control saves into another Blob, and the variant skips the Clear
+    expect(f.cells.find((c) => c.method === "update to other blob")?.setup).toContain(
+      "R.B.CreateOutStream(OS);",
+    );
+    expect(f.cells.find((c) => c.method === "update to source not cleared")?.setup).not.toContain(
+      "Clear(R.A);",
+    );
+  });
+
+  test("the probe reads a zip by its first two bytes (not IsZip, which has cells of its own) and answers by entry, never by bytes", () => {
+    const describe = /procedure Describe[\s\S]*?\n {4}end;/.exec(f.support)?.[0] ?? "";
+    expect(describe).not.toContain(".IsZip(");
+    expect(describe).toContain("if not ((B1 = 80) and (B2 = 75)) then begin");
+    expect(describe).toContain("DC.GetEntryList(Names);");
+    expect(f.cells.filter((c) => c.call.includes("DC.IsZip(IS)")).map((c) => c.method)).toEqual([
+      "IsZip of a zip",
+      "IsZip of a zip",
+      "IsZip of a zip",
+      "IsZip of the text",
+      "IsZip of the text",
+      "IsZip of the text",
+    ]);
+  });
+
+  test("the run passes the exact BC build and the .NET helper, and the app depends on the System Application", () => {
+    expect(f.args).toEqual([
+      "--bc-version",
+      "28.4.53241.56646",
+      "--dotnet-sidecar",
+      "/work/tools/al-runner-v3/current/dotnet-sidecar/AlDotNetSidecar.dll",
+      "--dotnet-assembly-dir",
+      "/coord/cache/bc28-service-windows",
+    ]);
+    const app = JSON.parse(emitApp(f)["app.json"] ?? "{}");
+    expect(app.dependencies).toEqual([
+      {
+        id: "63ca2fa4-4f03-4f2b-a480-172fef340d3f",
+        name: "System Application",
+        publisher: "Microsoft",
+        version: "28.0.0.0",
+      },
+    ]);
+  });
+
+  test("last of FAMILIES (place 26, BC-check number 27): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("zip-blob");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(25);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051027");
   });
 });
 

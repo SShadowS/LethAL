@@ -47,6 +47,8 @@ const FULL_APP_SHA256: Readonly<Record<string, string>> = {
   // PR-374: the apps bc4 and main-bf3a3e863 ran (each emitted AL equals /coord/handoff/PR-374/<family>/bc-check/src)
   "fieldref-convert": "19d1cd234c7cd4b5a1f1460f817e3e1375ae66c896aab3eb6641e6c07b0a43fc",
   "language-region": "333844813808aa878779a1116f79dea0a0a4c000fa9c85f84191c907cb1f3e51",
+  // PR-375: the app bc4 and main-bf3a3e863 ran (the emitted AL equals /coord/handoff/PR-375/bc-check/src)
+  "zip-blob": "6a2d30155dd6fee92991184e7c262e1e1a72139fe8e4ef785a6bfe424ab89b0e",
 };
 
 describe("PR-363: emitApp's subset option", () => {
