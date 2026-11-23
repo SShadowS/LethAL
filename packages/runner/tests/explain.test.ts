@@ -171,6 +171,7 @@ function reportFixture(over: Partial<SessionReport> = {}): SessionReport {
     testFiles: { "Foo Tests": "test/Foo.Test.al" },
     backend: "bcdev",
     authoritative: true,
+    notRunAtBaseline: [], // PR-387: a fresh bcdev report always writes it
     baselineGreen: true,
     batches: 1,
     counts: {

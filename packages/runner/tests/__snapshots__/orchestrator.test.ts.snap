@@ -9147,6 +9147,7 @@ Refusing to measure: every mutant covered only by these would be recorded no-cov
             ],
             "failureMessage": "RunMutant returned 0 test lines, expected exactly 1; server: expected exactly one method UnsupportedTest, found 0",
             "name": "Sandbox Tests.UnsupportedTest",
+            "notRun": true,
             "outcome": "error",
           },
         ],

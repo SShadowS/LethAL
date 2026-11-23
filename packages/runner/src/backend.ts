@@ -165,6 +165,11 @@ export interface TestVerdict {
    */
   readonly cpuStop?: true;
   /**
+   * PR-387: the test body never ran (bcdev's hub tool-error and no-result rows). Never read from
+   * message text. Internal; the orchestrator copies it to the baseline event's `notRun`.
+   */
+  readonly bodyNeverRan?: true;
+  /**
    * R534: on a `timeout`, where the runner's stop fired. `body`: the test's own figure
    * (`measuredDurationMs`) is on the stop's clock. `onrun`: the test codeunit's OnRun trigger; no
    * pass row reports the OnRun's time (measured: 66 ms body beside a 4 s OnRun). Absent (bcdev,

@@ -1,4 +1,4 @@
-// PR-381 (R1197): survivors in an al-runner-v3 run that had tests v3 did not run at baseline.
+// PR-381 (R1197), PR-387: survivors in an al-runner-v3 or bcdev run that had tests not run at baseline.
 // Spec: docs/superpowers/specs/2026-11-23-pr381-refused-test-survivors-caveat.md
 // A test v3 refused, timed out or stopped at baseline kills nothing, so a survivor only it would kill
 // is unknown. No verdict changes: this is the count and the words that go beside every survivor count.
@@ -32,10 +32,37 @@ export function isNotRunBaselineRow(v: {
   );
 }
 
+/**
+ * PR-387: a bcdev baseline row (a `baseline-batch-finished` verdict) whose test BC could not run:
+ * a refusal, a timeout or stop, a skip of any origin, or a body that never ran (`notRun`).
+ * NOT counted: a test that ran and failed on its own, and `stale-test-app` (the session stops first).
+ */
+export function isBcdevNotRunBaselineRow(v: {
+  readonly outcome: string;
+  readonly classification: readonly string[];
+  readonly notRun?: true;
+}): boolean {
+  // `stale-test-app` wins over every other sign (a skip, a body that never ran): it is a refusal of the whole session.
+  if (v.classification.includes("stale-test-app")) return false;
+  return (
+    v.notRun === true ||
+    v.outcome === "timeout" ||
+    v.outcome === "deadline-exceeded" ||
+    v.outcome === "skip" ||
+    v.classification.some(
+      (c) =>
+        c === "tests-testpage-refused" ||
+        c === "tests-testpage-unsupported" ||
+        c === "tests-permission-refused" ||
+        c === "baseline-test-stopped",
+    )
+  );
+}
+
 /** The report as this module reads it. A `SessionReport` fits; so does a bare test fixture. */
 export interface NotRunView {
   readonly backend: string;
-  /** Written on every al-runner-v3 report (`[]` when none); absent on bcdev (until PR-387) and on older reports. */
+  /** Written on every al-runner-v3 and bcdev report (`[]` when none); absent on older reports. */
   readonly notRunAtBaseline?: readonly string[];
   /** The stored result: readers print from it when present. */
   readonly survivorsBesideUnrunTests?: NotRunSurvivors;
@@ -48,7 +75,7 @@ export interface NotRunView {
 export interface NotRunSurvivors {
   /** `survived` and `known-survivor` rows. */
   readonly survivors: number;
-  /** Tests v3 refused, timed out or stopped at baseline. */
+  /** Tests not run at baseline (v3 or BC refused, timed out or stopped them). */
   readonly notRunTests: number;
   /** Survivors carrying `[v3-refused-test-nearby]`. Omitted with coverage off. */
   readonly sharingACodeunit?: number;
@@ -62,8 +89,7 @@ const survivorRows = (r: NotRunView) =>
 
 /**
  * The rule, pure, on ANY backend: `undefined` unless `notRunAtBaseline` is non-empty and the report has at
- * least one `survived` or `known-survivor` row. (This PR fills the field for al-runner-v3 only; bcdev is
- * PR-387.) confirm-merge passes a view holding only the survivors still measured by v3.
+ * least one `survived` or `known-survivor` row. (Both al-runner-v3 and bcdev fill the field.) confirm-merge passes a view holding only the survivors still measured by v3.
  */
 export function notRunSurvivors(r: NotRunView): NotRunSurvivors | undefined {
   const tests = r.notRunAtBaseline ?? [];
@@ -74,7 +100,8 @@ export function notRunSurvivors(r: NotRunView): NotRunSurvivors | undefined {
   return {
     survivors: rows.length,
     notRunTests: tests.length,
-    ...(coverageOff
+    // bcdev has no `[v3-refused-test-nearby]` tag, so it has no such count.
+    ...(coverageOff || r.backend === "bcdev"
       ? {}
       : {
           sharingACodeunit: rows.filter((m) =>
@@ -90,7 +117,7 @@ export function notRunSurvivors(r: NotRunView): NotRunSurvivors | undefined {
  */
 export function notRunSentence(
   n: NotRunSurvivors,
-  scope: { readonly testsOnly?: readonly string[] } = {},
+  scope: { readonly testsOnly?: readonly string[]; readonly backend?: string } = {},
 ): string {
   const tests =
     scope.testsOnly !== undefined && scope.testsOnly.length > 0
@@ -100,7 +127,11 @@ export function notRunSentence(
     n.sharingACodeunit === undefined
       ? ""
       : `; ${n.sharingACodeunit} carry the nearby tag (a hint, not a bound)`;
-  return `${n.survivors} survivors, all in a run with ${tests} v3 did not run at baseline (refused, timed out or stopped; such a test kills nothing, so a survivor only it would kill is unknown)${hint}`;
+  const who =
+    scope.backend === "bcdev"
+      ? "BC could not run at baseline in LethAL's session (TestPage or permission refusals, timed out or stopped"
+      : "v3 did not run at baseline (refused, timed out or stopped";
+  return `${n.survivors} survivors, all in a run with ${tests} ${who}; such a test kills nothing, so a survivor only it would kill is unknown)${hint}`;
 }
 
 /**
@@ -113,9 +144,12 @@ export function notRunLine(r: NotRunView): string | undefined {
   // confirm-merge's subset, which strips it first.
   const n = r.survivorsBesideUnrunTests ?? notRunSurvivors(r);
   if (n !== undefined) {
-    return notRunSentence(n, r.testsOnly !== undefined ? { testsOnly: r.testsOnly } : {});
+    return notRunSentence(n, {
+      backend: r.backend,
+      ...(r.testsOnly !== undefined ? { testsOnly: r.testsOnly } : {}),
+    });
   }
-  return r.backend === "al-runner-v3" &&
+  return (r.backend === "al-runner-v3" || r.backend === "bcdev") &&
     r.notRunAtBaseline === undefined &&
     survivorRows(r).length > 0
     ? NOT_RECORDED_TEXT

@@ -1,5 +1,5 @@
 import { compareCodeUnits } from "@lethal/schemata";
-import type { BackendCapabilities, TestMethodRef } from "./backend";
+import { type BackendCapabilities, type TestMethodRef, isBcdev } from "./backend";
 import type { ConfirmGiven, ConfirmRecord } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { EquivalenceMark } from "./equivalence-marks";
@@ -13,7 +13,7 @@ import {
 } from "./excluded-sites";
 import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
-import { isNotRunBaselineRow } from "./not-run-survivors";
+import { isBcdevNotRunBaselineRow, isNotRunBaselineRow } from "./not-run-survivors";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
   type CostlyTestRow,
@@ -423,6 +423,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let sessionKindSensitive: FoldedReport["sessionKindSensitive"];
   const baselineStoppedTests = new Set<string>();
   const v3NotRunTests = new Set<string>(); // PR-381
+  const bcdevNotRunTests = new Set<string>(); // PR-387
   let stoppedBudgetMs: number | undefined;
   // R1131: the first batch's baseline start WorkDate (ponytail: a later batch on another date, after midnight,
   // is not recorded here; its rows carry `workdate-changed` only if a batch's own answers moved).
@@ -610,6 +611,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           // test's own is not here: it is red on BC too.
           // A stopped test is `timeout` (`stoppedByUs`), so its classification needs no branch here.
           if (isNotRunBaselineRow(v)) v3NotRunTests.add(v.name);
+          if (isBcdevNotRunBaselineRow(v)) bcdevNotRunTests.add(v.name); // PR-387
           if (v.durationMs !== undefined) {
             baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
@@ -1050,7 +1052,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         }
       : {}),
     ...(sessionKindSensitive !== undefined ? { sessionKindSensitive } : {}),
-    notRunAtBaseline: [...v3NotRunTests].sort(),
+    notRunAtBaseline: [...(isBcdev(statics.caps.kind) ? bcdevNotRunTests : v3NotRunTests)].sort(),
     ...(baselineStoppedTests.size > 0
       ? {
           baselineStopped: {
