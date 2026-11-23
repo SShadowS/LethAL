@@ -23,3 +23,11 @@ lethal-bugs, 2026-11-22, on the orchestrator's word (queued after PR-357's c3 an
   that their own pre-commitments named.
 - **current does not change** (the same build). The gated-builds row and `.gated` take the new lethalCommit.
 - **Anything else** (a failed or held leg, a moved reading not named above): BLOCK. Nothing is recorded, and it is reported.
+
+## Amendment 1 (2026-11-23, before the run; lethal-code's request for PR-359)
+- **The commit is pinned:** `--regate 5b3f27102` (contains a0c38f5d2 and 12d3fdfd6, checked by ancestry), not "origin/master at
+  the time of the run".
+- **Why:** code's PR-363 adds leg C `serve-keep-reasons` cases that can move that warnFact's reading (today "diverged").
+  PR-359's arm-B driver stops unless the re-gated `.gated` equals c3's record plus `stop-groups: matches`, with the warnFacts
+  unchanged (`/coord/handoff/PR-359/gated-check.jq`).
+- **The prediction tightens:** the warnFacts are unchanged, `serve-keep-reasons` included.
