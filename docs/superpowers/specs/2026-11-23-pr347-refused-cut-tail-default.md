@@ -137,3 +137,47 @@ If a key differs on the first run, the difference is pre-committed in an amendme
 - `fixtures/README.md`: the two fixtures and their ids.
 - `docs/gates/alrunner-v3.md`: leg TC, its baseline, its three warning keys, and the flip's fingerprint and lending note.
 - `docs/gates/README.md`: the feature line, if that page lists v3 defaults.
+
+## Amendment 1 (2026-11-23, the build 6abba9995 + 605de6920, before any gate)
+- **The census matches the table:** 10 mutants, the operators as predicted. The table stands.
+- **A golden that moves (not predicted above):** `tests/v3-lane-trace.expected.json` gains one notice, the tail stats line.
+  In that scripted session `notify` is still the event emitter when the stats line prints, so it lands among the notices.
+  In real sessions notify is restored first, which is why step 1's warning sets did not move. Accepted.
+- **Departures, accepted:**
+  1. `al-runner-v3.tailcut.baseline.json` holds TC-on's table only (`assertGateBaseline` takes one report). TC-off and
+     TC-alone are frozen in code (`TC_TABLE`) and judged per mutant from it.
+  2. (d) checks the `[refused-cut tail` note on TC-on's tail kills. `selection: "alone"` is not a report field.
+  3. (a1)'s failure prints the refused tests, T0's `baseline-refused-cut` notice and `unsupportedTests`, but not T0's exact
+     row or its keep result, which the report does not carry. It still names no guessed cause.
+  4. The warning keys, predicted:
+     - TC-off: `al-runner-v3-baseline-refused-cut`;
+     - TC-on: that, `al-runner-v3-refused-cut-tail` and `alone-confirm`;
+     - TC-alone: `al-runner-v3-isolate-tests`, ISO's set. DBI's `memory-guard` and `serve-flagged-unknown` come from its
+       daemon baseline, which TC does not use.
+     If the first run differs, an amendment states it before the record run.
+  5. The resume refusal is symmetric (on to off as well as off to on), a plain `Error` prefixed
+     `refused-cut-tail-resume-refused`, like PR-209's.
+  6. The real backend's report field is not tested in a whole session: it reads the tested getter.
+- **The first live run:** TC is recorded once (R332: `LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.tailcut.baseline.json`,
+  which exits 3), then re-run to confirm a pass, then the full v3 gate on the final head.
+
+## Amendment 2 (2026-11-23, the Opus build review of 6abba9995: no BLOCK, 3 SHOULD-FIXes; before any gate)
+- **The carry gate is in scope (S1).** `itest:alrunner-v3-carry` builds the real backend without the key, so the flip turns
+  the flag on there. Step 1 did not measure it. It runs on the final head with PR-347's gates. **Prediction: unchanged**,
+  because `fixtures/sandbox-carry` has no baseline refusal: 0 cuts, 0 tail calls, and its committed figures and warning sets
+  pass as today.
+- **`compile:fixtures` and the new fixtures (S2):** the pinned symbol tar does not hold the two new fixtures, so
+  `compile:fixtures` SKIPs them on a fresh worktree. That corrects "compiles it like every fixture" above. The skip is
+  recorded in R1128 by name (the orchestrator's ruling). Leg TC is unaffected: it takes its Microsoft symbols as RC does.
+- **A golden that grows (S3, the orchestrator's ruling: keep):** `tests/__fixtures__/instrumented-output-golden.json` gains
+  two entries, `TailcutLogic` (10 mutants, equal to the census and the table above) and `TailcutTests` (34). They are additions
+  only: no existing entry's bytes change, and the result shows the diff.
+- **Merge order:** TC is a default leg, so the update gate refuses at preflight until `al-runner-v3.tailcut.baseline.json` is
+  committed. The baseline is recorded and committed in the branch before the merge.
+- **NITs fixed in round 2:**
+  - the judge's extra-row and duplicate-row guards get red-going tests;
+  - (a1)'s evidence comes from the session that failed;
+  - the fixture test ties the `IsBig(5)` check to T4;
+  - the resume message says "with refusedCutTail off" or "on", not "the default".
+- **NITs accepted:** about 18 un-awaited `baselinePhase(false)` calls in one test file (production awaits); PR-209's generic
+  message for runs from before PR-209 (still refused); the flag message coming first on `--resume-run` (still refused).
