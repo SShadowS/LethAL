@@ -177,6 +177,21 @@ symbols, and, when you set `alcPath`, that it is an executable file. A run print
 `[lethal] al-runner: <path> (<version>)`, naming the al-runner it used. A full walk-through on the gift
 card demo is in [examples/gift-card/README.md](examples/gift-card/README.md#run-it-with-no-bc-server-the-al-runner-v3-backend).
 
+**Two behaviours that changed on 2026-11-23:**
+- **Tests after a refused test now run alone, by default** (`alRunnerV3.refusedCutTail`, PR-347).
+  - **The problem:** when al-runner refuses a test at baseline, LethAL stops that test codeunit's run before it. Before this
+    change, every mutant that needed a later test of that codeunit then read `error`.
+  - **What happens now:** those later tests (the "tail") run alone, each from a fresh state, and only tail tests that pass
+    alone at baseline are used. A kill found this way carries a `[refused-cut tail ...]` note.
+  - **How it was measured:** on one customer project, checked on BC: 0 false kills, 7 confirmed. 9 survivors were wrong (a
+    refused test would have killed them), and the not-run caveat flags them (see [Reading the report](#reading-the-report)).
+    6 could not be judged.
+  - **To turn it off,** set `"refusedCutTail": false`. A `--resume` across the change, in either direction, is refused by
+    name: start a fresh run.
+- **al-runner's login replay is always off under LethAL** (PR-360). LethAL sets `ALRUNNER_LOGIN_REPLAY=0` for every al-runner
+  it starts, and ignores any `ALRUNNER_LOGIN_REPLAY*` variable in your own environment. The replay is an al-runner speed-up
+  that LethAL has not yet measured for correctness.
+
 ## Quick start
 
 Four steps from a checkout to a first result. Do them against a **sandbox or dev container**, never
@@ -473,6 +488,22 @@ On a real 148-mutant run this was **19 exact against 88 object**. Reading all 10
 have meant roughly 87 pointless tests. `lethal explain` exists to make that distinction impossible
 to miss.
 
+**When some tests could not run at baseline, the score line says so.** A test that the runner refused,
+that timed out or that LethAL stopped at baseline cannot kill anything. So a mutant that only it would
+kill reads `survived`. When a run has such tests and has survivors, a line beside the score says how
+many survivors that could affect. For example:
+
+```text
+12 survivors, all in a run with 3 tests v3 did not run at baseline (refused, timed out or stopped; such a test kills nothing, so a survivor only it would kill is unknown); 4 carry the nearby tag (a hint, not a bound)
+```
+
+On `bcdev` the reason reads "BC could not run at baseline in LethAL's session" (for example a TestPage
+or a permission refusal). The report names those tests in `notRunAtBaseline` and adds the caveat
+`survivors-beside-unrun-tests`. The count is an upper bound: it flags every survivor of the run, not
+only the ones those tests reach. No verdict or score changes. To narrow it, run those survivors where
+the tests can run (see the next section). Measured on one customer project: 9 of 47 such survivors
+were killed on BC by a test v3 had refused (PR-381, PR-387).
+
 Two more fields worth knowing. `operatorName` names the rule that produced a change. For example,
 `lethal.conditional-boundary` turns `>` into `>=`. `basis` values like `R29` point at a numbered
 entry under [`docs/roadmap/`](docs/roadmap/) holding the evidence for a claim, so nothing in the
@@ -578,6 +609,12 @@ If a run aborts partway, continue it instead of starting over:
 ```bash
 lethal run ... --resume
 ```
+
+**After an upgrade, the first `--resume` of an older run is slower once.** A saved baseline written by
+a LethAL from before 2026-11-23 is not reused. That LethAL did not record which bcdev baseline tests
+never ran their body, so reusing its baseline would make the not-run count too low (see [Reading the report](#reading-the-report)). So each
+batch runs its baseline again, once. No verdict changes, and later resumes reuse the new saved baseline
+(R1199).
 
 `lethal run` discovers a stopped environment, a stale control app, a quarantined server, or a
 missing `alc`/`altool` one at a time, each only after whatever ran before it. Check all of them at
@@ -1033,7 +1070,7 @@ a LethAL feature or a mode.
   on [docs/gates/alrunner.md](docs/gates/alrunner.md).
 - **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** A gated build only (R586c, R814), and
   configured in an `alRunnerV3` section (`packagesDir` and the four-number `bcVersion` required, and `environment` (`"onprem"` or `"saas"`) unless the target's `.vscode/launch.json` names one, R938;
-  `coverage`, `path`, `alcPath`, `cacheDir`, `downloadDemoData` optional (R885: al-runner downloads the CRONUS demo data of `bcVersion` into `cacheDir` unless `downloadDemoData` is `false`; with it on, the feed's copy replaces an older Microsoft app in `.alpackages`), `dotnetSidecar` optional (R886: a path to al-runner's .NET helper, passed as `--dotnet-sidecar`; absent: the pinned build's own, when the update script built one; `false`: none), `license` optional (R956: a path to a `.bclicense` file, passed as al-runner's license switch on every al-runner call that runs tests, one-shot and serve; refused by name when the file is missing; its path and sha256 (never its contents) are in the report's `executionContexts[]` and its hash is in the run fingerprint, so a run under another license is not resumed; a test al-runner refuses with "no license file loaded" is reported with a pointer to this setting), `memoryHeadroomGb` optional (R948: default 4, `0` = off; no new test call starts while the container's memory, read from its cgroup, is over `memory.max` less this many GiB; if it stays over for five minutes the run stops by name and the report says `timeBudget.stoppedByMemory`), `recheckWithheldKills` optional (PR-144: ON by default since PR-182; `false` opts out and saves about 10% of a run with many withheld rows, nothing when a run has none. Evidence (PR-170): of 58 sampled recovered kills, BC confirmed 42 and found 0 false; 16 could not be measured (9 TestPage-only killers, 7 killers red at BC's baseline). A row the recheck does not recover stays `error`, unmeasured, never a kill. The recheck re-runs the "withheld kill" `error` rows (a covering test failed, but v3 did not trust the failure after an earlier test of its codeunit was refused) alone, one test per session, after the main pass, as its own step with its own `recheckBudgetSeconds` (default 3600). Serve transport only, and not with `"isolation": "method"`. A row becomes `killed` only when the kill reproduced, the killing test passed alone at the recheck baseline, the same al-runner binary and source ran, and every test of the killing test's codeunit that passed in the main baseline still passes alone in the recheck (the recheck runs them all; one that fails, is refused or has no result keeps `error`). That rule cannot judge tests v3 refused at baseline, so it does not answer whether a refused test's state mattered; only a BC comparison does. Every other outcome keeps `error`. Warning: kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC. The recheck is exercised live by the al-runner-v3 gate's leg RC (PR-162) on a fixture built to withhold a kill, and measured against BC on a DO sample (PR-170: 42 of 58 recovered kills confirmed, 0 false). The report names them in the caveat `isolated-recheck-kills` and each row's `isolatedRecheck`; `--resume` does not carry them), `recheckBudgetSeconds` optional (PR-144: whole seconds, default 3600). A serve-entries session also records ` baseline-daemon` in its lending build (its baseline comes from one serve daemon), so runs stored before R948 are not lent to or resumed by a new serve-entries session, nor the other way round: start a fresh run; the section alone is a complete config, see
+  `coverage`, `path`, `alcPath`, `cacheDir`, `downloadDemoData` optional (R885: al-runner downloads the CRONUS demo data of `bcVersion` into `cacheDir` unless `downloadDemoData` is `false`; with it on, the feed's copy replaces an older Microsoft app in `.alpackages`), `dotnetSidecar` optional (R886: a path to al-runner's .NET helper, passed as `--dotnet-sidecar`; absent: the pinned build's own, when the update script built one; `false`: none), `license` optional (R956: a path to a `.bclicense` file, passed as al-runner's license switch on every al-runner call that runs tests, one-shot and serve; refused by name when the file is missing; its path and sha256 (never its contents) are in the report's `executionContexts[]` and its hash is in the run fingerprint, so a run under another license is not resumed; a test al-runner refuses with "no license file loaded" is reported with a pointer to this setting), `memoryHeadroomGb` optional (R948: default 4, `0` = off; no new test call starts while the container's memory, read from its cgroup, is over `memory.max` less this many GiB; if it stays over for five minutes the run stops by name and the report says `timeBudget.stoppedByMemory`), `recheckWithheldKills` optional (PR-144: ON by default since PR-182; `false` opts out and saves about 10% of a run with many withheld rows, nothing when a run has none. Evidence (PR-170): of 58 sampled recovered kills, BC confirmed 42 and found 0 false; 16 could not be measured (9 TestPage-only killers, 7 killers red at BC's baseline). A row the recheck does not recover stays `error`, unmeasured, never a kill. The recheck re-runs the "withheld kill" `error` rows (a covering test failed, but v3 did not trust the failure after an earlier test of its codeunit was refused) alone, one test per session, after the main pass, as its own step with its own `recheckBudgetSeconds` (default 3600). Serve transport only, and not with `"isolation": "method"`. A row becomes `killed` only when the kill reproduced, the killing test passed alone at the recheck baseline, the same al-runner binary and source ran, and every test of the killing test's codeunit that passed in the main baseline still passes alone in the recheck (the recheck runs them all; one that fails, is refused or has no result keeps `error`). That rule cannot judge tests v3 refused at baseline, so it does not answer whether a refused test's state mattered; only a BC comparison does. Every other outcome keeps `error`. Warning: kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC. The recheck is exercised live by the al-runner-v3 gate's leg RC (PR-162) on a fixture built to withhold a kill, and measured against BC on a DO sample (PR-170: 42 of 58 recovered kills confirmed, 0 false). The report names them in the caveat `isolated-recheck-kills` and each row's `isolatedRecheck`; `--resume` does not carry them), `recheckBudgetSeconds` optional (PR-144: whole seconds, default 3600), `refusedCutTail` optional (PR-347: ON unless `false`; a stable test after a baseline-refusal cut runs alone under a mutant, see [Running without a BC server](#running-without-a-bc-server-the-al-runner-v3-backend)). The recheck shows as its own `recheck` phase in progress output and in the TIMING line (PR-370). A serve-entries session also records ` baseline-daemon` in its lending build (its baseline comes from one serve daemon), so runs stored before R948 are not lent to or resumed by a new serve-entries session, nor the other way round: start a fresh run; the section alone is a complete config, see
   [Running without a BC server](#running-without-a-bc-server-the-al-runner-v3-backend)). Measured on alpha.2 and re-read on alpha.5 and its edge build (the same readings), it
   differs from BC in ways that change
   verdicts:

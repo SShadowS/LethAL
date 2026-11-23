@@ -252,7 +252,18 @@ rows) and `"recheckBudgetSeconds"` (default 3600) control and bound the recheck 
 pass (PR-144; README, al-runner-v3 config list). Kills it recovers are not measured against BC and may be false where an
 earlier test that al-runner refused would have set state on BC. A row the recheck does not recover stays `error`:
 unmeasured, never a kill. Evidence (PR-170): 42 of 58 recovered kills confirmed on BC, 0 false, 16 unmeasurable (9
-TestPage-only killers, 7 killers red at BC's baseline).
+TestPage-only killers, 7 killers red at BC's baseline). The recheck is its own phase, `recheck`, after `teardown`: a
+`phase-left` event with `phase: "recheck"` carries the nested session's split in `detail`, and the TIMING line prints it
+(PR-370).
+`"refusedCutTail"` (default ON since PR-347; only `false` turns it off) runs the stable later tests of a test codeunit
+alone under a mutant after a baseline refusal cut that codeunit's run (PR-250, PR-297). Without it those mutants read
+`error`. A kill found this way carries a `[refused-cut tail ...]` note, and the run warns `al-runner-v3-refused-cut-tail`.
+Several tail tests of one mutant may go in one request (PR-344's packing, inside the same switch). The flag is part of
+the run's fingerprint and lending build, so a `--resume` across a change of it is refused by name. Evidence (PR-347, one
+customer project, against BC): 0 false kills, 7 confirmed, 9 false survivors (flagged by the
+`survivors-beside-unrun-tests` caveat), 6 not judgeable.
+LethAL also sets `ALRUNNER_LOGIN_REPLAY=0` on every al-runner child and drops any ambient `ALRUNNER_LOGIN_REPLAY*`
+variable (PR-360): al-runner's login replay stays off until it is measured.
 **Runs stored before this change.** A serve-entries session now records ` baseline-daemon` in its lending build
 (`runs.runner_build`), because its baseline comes from a daemon, not from one process per codeunit, and a verdict or
 baseline snapshot should be lent only to a session whose baseline came the same way. So a run stored by an earlier
@@ -497,6 +508,19 @@ code.
 `validity.scoreDescribes` and `validity.caveats` say what the number covers. A score from a
 narrowed run describes the slice, not the project. A run whose baseline was red could not score
 some mutants at all, and they read `no-coverage` rather than `survived`.
+
+**Survivors beside tests that did not run at baseline (PR-381, PR-387).**
+- **Where it shows:** an al-runner-v3 or bcdev report lists the tests that could not reach a verdict at baseline in
+  `notRunAtBaseline`. These are tests the runner refused, that timed out or that LethAL stopped; on bcdev also TestPage and
+  permission refusals and tests whose body never ran.
+- **When the caveat is added:** when that list is not empty and the run has survivors, `validity.caveats` carries
+  `survivors-beside-unrun-tests`, and `survivorsBesideUnrunTests` holds the counts (`survivors`, `notRunTests` and, on v3,
+  `sharingACodeunit`). The score line prints one sentence about it as well.
+- **How to read the count:** it is an UPPER BOUND on the survivors at risk, because every `survived` and `known-survivor`
+  row is flagged. No verdict and no score changes.
+- **The v3 hint:** `sharingACodeunit` counts the survivors carrying the `[v3-refused-test-nearby]` note. It is a hint, not
+  a bound.
+- **Before quoting a survivor as a test gap, check this caveat.**
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
@@ -1147,7 +1171,10 @@ now is not skipped; it reads `no-coverage`. On `--resume` the same two cases war
 deploy any more: `resume-batch-carried` is no longer emitted. Each batch is deployed, and its
 baseline is reused from a saved snapshot when one matches (`resume-baseline-reused`), or run again
 when none does. That costs one deploy per fully scored batch per resume (about 40 s on a hosted
-server), plus a baseline when no snapshot matches (R643 tracks the cost). The one exception: a batch
+server), plus a baseline when no snapshot matches (R643 tracks the cost). A snapshot saved before PR-392
+(2026-11-23) has no `payload_format` and is never reused: it lacks PR-387's body-never-ran marks, so reusing it would
+under-count `notRunAtBaseline`. So the first `--resume` of such a store re-runs each batch's baseline once (R1199).
+No verdict moves. The one exception: a batch
 whose every mutant stranded the tier in a prior run (R53) has nothing to run and is not deployed.
 A stranded mutant is skipped before coverage, so it keeps its skip note even when nothing covers it
 now.
