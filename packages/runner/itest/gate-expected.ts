@@ -437,6 +437,18 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/K": ["al-runner-v3-memory-guard"],
   // PR-144 amendment 3 (master fd8570ce): RC's session is a plain serve session; the recheck reports through its caveat.
   "al-runner-v3/RC": [],
+  // PR-347 (pre-commitment 2026-11-23-pr347-refused-cut-tail-default.md, "GATE_WARNINGS, three keys"): each starts from
+  // RC's set (a plain serve session, no daemon baseline). TC-off adds the PR-250 cut line; TC-on adds that, the tail's
+  // stability notice and R1067's alone-confirm; TC-alone runs --isolate-tests (ISO's notice) and has no cut at all.
+  // PREDICTED, never observed: the first live run may move a key, and the difference is pre-committed in an amendment
+  // before the record run.
+  "al-runner-v3/TC-off": ["al-runner-v3-baseline-refused-cut"],
+  "al-runner-v3/TC-on": [
+    "al-runner-v3-baseline-refused-cut",
+    "al-runner-v3-refused-cut-tail",
+    "alone-confirm",
+  ],
+  "al-runner-v3/TC-alone": ["al-runner-v3-isolate-tests"],
   // R866: leg ISO's own session runs under --isolate-tests, which says so.
   "al-runner-v3/ISO": ["al-runner-v3-isolate-tests"],
   "al-runner-v3/S1E": [],

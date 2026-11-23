@@ -4822,6 +4822,14 @@ function olderDefaultResumeMessage(subject: string): string {
   return `${subject} was recorded by a default run made BEFORE PR-209, whose default set did not hold lethal.condition-true and lethal.blank-argument. This run's default set does, so it measures more mutants and cannot carry that run's verdicts. Resume it with --profile slim (the older default set), or drop the resume flag to run from scratch.`;
 }
 
+/**
+ * PR-347: why a resume across a change of `alRunnerV3.refusedCutTail` is refused. Since PR-347 the flag is on unless
+ * `false`; a run recorded with it the other way has another digest and lending build, so its rows are not carried.
+ */
+function refusedCutTailResumeMessage(subject: string, nowOn: boolean): string {
+  return `refused-cut-tail-resume-refused: ${subject} was recorded with alRunnerV3.refusedCutTail ${nowOn ? "off (the default before PR-347)" : "on (the default since PR-347)"}, and this session has it ${nowOn ? "on" : "off"}. A test measured alone after a baseline-refusal cut (PR-250) must never be carried into a run without that route as an ordinary kill, nor the other way round. Resume it with "refusedCutTail": ${nowOn ? "false" : "true"} in the alRunnerV3 config section (as that run had it), or drop the resume flag to run from scratch.`;
+}
+
 function resolveResume(
   cfg: SessionConfig,
   backendName: string,
@@ -4852,6 +4860,12 @@ function resolveResume(
   carryFlag?: { readonly otherCarryFingerprint: string; readonly carryWalk: boolean },
   /** R1179: this session's discovered tests, to count the carried kills that may seed R197's ledger. */
   sessionTests: readonly TestMethodRef[] = [],
+  /** PR-347: the digest with `refusedCutTail` the other way, and this session's state of it; set only on al-runner-v3. */
+  cutTailFlag?: {
+    readonly otherFingerprint: string;
+    readonly otherRunnerBuild: string;
+    readonly on: boolean;
+  },
 ):
   | {
       runId: number;
@@ -4946,6 +4960,20 @@ function resolveResume(
         if (other !== null)
           throw new CarryWalkError(
             carryWalkResumeMessage(`--resume found run ${other}`, carryFlag.carryWalk),
+          );
+      }
+      // PR-347: likewise for an unfinished run recorded with `refusedCutTail` the other way (the default flipped).
+      if (cutTailFlag !== undefined) {
+        const other = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: cutTailFlag.otherFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          runnerBuild: cutTailFlag.otherRunnerBuild, // the lending tag moves with the flag
+        });
+        if (other !== null)
+          throw new Error(
+            refusedCutTailResumeMessage(`--resume found run ${other}`, cutTailFlag.on),
           );
       }
       // PR-209 (M6): an unfinished run of the OLDER default set has another digest, so the search
@@ -5085,6 +5113,10 @@ function resolveResume(
       );
     }
     const id = cfg.resume;
+    // PR-347: named BEFORE the lend step, whose "another build" refusal would hide the real reason (the build tag moves with the flag).
+    if (cutTailFlag !== undefined && row.configFingerprint === cutTailFlag.otherFingerprint) {
+      throw new Error(refusedCutTailResumeMessage(`--resume-run ${id}`, cutTailFlag.on));
+    }
     lend(row, `--resume-run ${id}`, "resume-run", () => {
       // R325: checked BEFORE the fingerprint, so the refusal names the real reason. The
       // fingerprint carries the scheme too and would refuse this run anyway, as "scoped
@@ -7595,7 +7627,6 @@ async function runSessionBody(
       : {}), // R938
     ...(cfg.backend.license !== undefined ? { v3License: cfg.backend.license.sha256 } : {}), // R956
     ...(cfg.backend.companies !== undefined ? { v3Companies: cfg.backend.companies } : {}), // PR-282
-    ...(cfg.backend.refusedCutTail === true ? { v3RefusedCutTail: true } : {}), // PR-297
     ...(cfg.backend.stopGroups === true ? { v3StopGroups: true } : {}), // PR-256
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
@@ -7647,9 +7678,17 @@ async function runSessionBody(
   // PR-340: the carry-walk knob is in the digest only when OFF on al-runner-v3 (default on), so a walk-on
   // run keeps every digest; the same digest with the knob the other way names the store a change must refuse.
   const carryApplies = isLocalRunner(caps.kind);
-  const fingerprintWith = (prune: boolean, carryOn: boolean = carryWalk) =>
+  // PR-347: `refusedCutTail` (PR-297) is on unless `false`; the key is in the digest only when on. A backend with no such
+  // getter (every other backend) has `undefined` here and never gets the key or the cross-flag search.
+  const cutTailOn = cfg.backend.refusedCutTail === true;
+  const fingerprintWith = (
+    prune: boolean,
+    carryOn: boolean = carryWalk,
+    cutTail: boolean = cutTailOn,
+  ) =>
     sessionFingerprint({
       ...fingerprintBase,
+      ...(cutTail ? { v3RefusedCutTail: true as const } : {}), // PR-297
       ...(prune ? { v3ReachPrune: true as const } : {}),
       ...(carryApplies && !carryOn ? { v3CarryWalkOff: true as const } : {}),
       ...(resolvedOperators === undefined ? { defaultOperators: 2 as const } : {}),
@@ -7661,6 +7700,7 @@ async function runSessionBody(
     resolvedOperators === undefined
       ? sessionFingerprint({
           ...fingerprintBase,
+          ...(cutTailOn ? { v3RefusedCutTail: true as const } : {}),
           ...(reachPrune ? { v3ReachPrune: true as const } : {}),
           ...(carryApplies && !carryWalk ? { v3CarryWalkOff: true as const } : {}),
         })
@@ -7687,6 +7727,14 @@ async function runSessionBody(
     { otherPruneFingerprint, reachPrune },
     carryApplies ? { otherCarryFingerprint, carryWalk } : undefined,
     tests,
+    // PR-347: only al-runner-v3 (the getter exists there and only there), and only with a recorded build.
+    cfg.backend.refusedCutTail !== undefined && v3Build !== undefined
+      ? {
+          otherFingerprint: fingerprintWith(reachPrune, carryWalk, !cutTailOn),
+          otherRunnerBuild: lendingRunnerBuild(cfg.backend, v3Build, !cutTailOn),
+          on: cutTailOn,
+        }
+      : undefined,
   );
 
   const runId = cfg.store.createRun({
@@ -15276,8 +15324,11 @@ function assertSameResumeInputs(
 export function lendingRunnerBuild(
   backend: ExecutionBackend,
   v3Build: { readonly version: string; readonly binarySha256: string },
+  /** PR-347: the tag as it would read with `refusedCutTail` set this way; absent: the backend's own state. */
+  refusedCutTailAs?: boolean,
 ): string {
-  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${backend.refusedCutTail === true ? " refused-cut-tail" : ""}${backend.stopGroups === true ? " stop-groups" : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
+  const cutTail = refusedCutTailAs ?? backend.refusedCutTail === true;
+  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${cutTail ? " refused-cut-tail" : ""}${backend.stopGroups === true ? " stop-groups" : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
 }
 
 /**

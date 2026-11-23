@@ -1405,7 +1405,7 @@ export interface ExecutionContext {
   readonly license?: { readonly path: string; readonly sha256: string };
   /** PR-282: the `alRunnerV3.companies` this run passed as `--companies`. Only on directly measured al-runner-v3 entries, and only when set. */
   readonly companies?: string;
-  /** PR-297: `alRunnerV3.refusedCutTail` was ON: a green test after a baseline-refusal cut was measured alone. Only when on. */
+  /** PR-297: `alRunnerV3.refusedCutTail` was ON (the default since PR-347): a green test after a baseline-refusal cut, if one happened, was measured alone. The key does not say a cut happened. Only when on. */
   readonly refusedCutTail?: true;
   /** PR-256: `alRunnerV3.stopGroups` was ON: mutant requests carried per-entry stop groups. Only when on. */
   readonly stopGroups?: true;

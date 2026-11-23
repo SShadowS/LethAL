@@ -12,7 +12,7 @@ figures, what they mean, and how they came to be.
 | bcdev | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | [bcdev.md](bcdev.md) | `bcdev.baseline.json` |
 | bcdev-names | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-names` | [bcdev-names.md](bcdev-names.md) | `bcdev.names.baseline.json` |
 | bcdev-wrapped | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev-wrapped` | [bcdev-wrapped.md](bcdev-wrapped.md) | `bcdev.wrapped.baseline.json` |
-| alrunner-v3 | `LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3` | [alrunner-v3.md](alrunner-v3.md) | `al-runner-v3.tables.baseline.json`; the `al-runner-v3.layout` and `al-runner-v3.symbols-lethala`/`-lethalb` baselines (R654 S2) |
+| alrunner-v3 | `LETHAL_ITEST_ALRUNNER_V3=1 bun run itest:alrunner-v3` | [alrunner-v3.md](alrunner-v3.md) | `al-runner-v3.tables.baseline.json`; the `al-runner-v3.layout` and `al-runner-v3.symbols-lethala`/`-lethalb` baselines (R654 S2); `al-runner-v3.tailcut.baseline.json` (leg TC, PR-347; not recorded yet) |
 | alrunner-v3-carry | `LETHAL_ITEST_ALRUNNER_V3_CARRY=1 bun run itest:alrunner-v3-carry` | [alrunner-v3-carry.md](alrunner-v3-carry.md) | `al-runner-v3.carry.baseline.json` (PR-340; not recorded yet) |
 | envtool | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | [envtool.md](envtool.md) | `envtool.baseline.json` |
 | tables | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | [tables.md](tables.md) | `tables.baseline.json` |

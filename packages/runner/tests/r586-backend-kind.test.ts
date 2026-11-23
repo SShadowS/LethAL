@@ -516,6 +516,32 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  // Red: drop `cutTailFlag` from resolveResume's calls (the search and the --resume-run check), or the key from
+  // `fingerprintWith`: the first resume then reads "another build" or finds nothing.
+  test("PR-347: a --resume across a change of refusedCutTail is refused by name, both ways, as last and by id; the same value resumes", async () => {
+    for (const [first, second] of [
+      [true, false],
+      [false, true],
+    ] as const) {
+      await inProject(async (root) => {
+        const store = new ResultsStore(":memory:");
+        const mk = (tail: boolean) =>
+          Object.assign(withProbe(new V3KindStub([]), []), { refusedCutTail: tail });
+        await v3Session(root, store, mk(first));
+        store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+        for (const resume of ["last", 1] as const) {
+          const refused = await v3Session(root, store, mk(second), { resume }).catch(
+            (e: unknown) => e,
+          );
+          expect(String(refused)).toContain("refused-cut-tail-resume-refused");
+          expect(String(refused)).toContain(`"refusedCutTail": ${first}`);
+        }
+        const resumed = await v3Session(root, store, mk(first), { resume: 1 });
+        expect(resumed.resumedFrom?.runId).toBe(1);
+      });
+    }
+  });
+
   test("PR-256: stopGroups goes in the lending build, the fingerprint and the report; off, none moves", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
