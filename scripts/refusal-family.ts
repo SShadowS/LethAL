@@ -6105,6 +6105,361 @@ report 51000 "LR Report"
   ],
 };
 
+/**
+ * PR-375: the largest open coherent cause after families 1-25 under R1036's count over c3 and c3off (main-bf3a3e863): "DotNet
+ * System.IO.Compression.ZipArchive.Dispose: a .NET write over the bytes an AL OutStream held before the call (what the Blob then
+ * holds is not pinned)" (6 sightings, all at baseline). It is met where an app keeps a zip in a Blob and adds a file to it through
+ * the System Application's "Data Compression" codeunit: it opens the archive from the Blob's InStream, clears the Blob, and saves
+ * the archive back into the same Blob through an OutStream. Each cell runs one such sequence on an invented table's Blob fields
+ * (A = 2, B = 3, C = 4; the record is never inserted) and reports what the target Blob then holds, through codeunit 51000's
+ * Describe: `empty`, `notzip:<text>`, or `zip|<entry>:<length>:<first 12 characters>|...`. Compressed bytes are never compared.
+ * Cell i is codeunit BASE_ID + 1 + i; the support objects are at 51000.
+ */
+const ZC_PAYLOADS: readonly (readonly [string, string])[] = [
+  ["hello", "'hello'"],
+  ["empty", "''"],
+  ["long", "PadStr('', 2000, 'x')"],
+];
+/** The scenario's name, its statements (`<payload>` is the entry text) and the field its result is read from. */
+const ZC_SCENARIOS: readonly (readonly [string, readonly string[], number])[] = [
+  [
+    "new to other blob",
+    [
+      "P.PutText(R, 2, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.CreateZipArchive();",
+      "DC.AddEntry(IS, 'a.txt');",
+      "R.B.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    3,
+  ],
+  [
+    "new to source via copy",
+    [
+      "P.PutText(R, 2, <payload>);",
+      "Copy.A := R.A;",
+      "Copy.A.CreateInStream(IS);",
+      "Clear(R.A);",
+      "R.A.CreateOutStream(OS);",
+      "DC.CreateZipArchive();",
+      "DC.AddEntry(IS, 'a.txt');",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "new to source same blob",
+    [
+      "P.PutText(R, 2, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "Clear(R.A);",
+      "R.A.CreateOutStream(OS);",
+      "DC.CreateZipArchive();",
+      "DC.AddEntry(IS, 'a.txt');",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "update to other blob",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "R.B.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    3,
+  ],
+  [
+    "update to source cleared",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "Clear(R.A);",
+      "R.A.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "update to source not cleared",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "R.A.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "read only then add",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, false);",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "R.B.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    3,
+  ],
+  [
+    "remove and add to source",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "DC.RemoveEntry('a.txt');",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "Clear(R.A);",
+      "R.A.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "extract entry",
+    [
+      "P.MakeZip(R, 2, 'a.txt', <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, false);",
+      "R.B.CreateOutStream(OS);",
+      "Len := DC.ExtractEntry('a.txt', OS);",
+      "DC.CloseZipArchive();",
+    ],
+    3,
+  ],
+  [
+    "close then save",
+    [
+      "P.MakeZip(R, 2, 'a.txt', <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "DC.CloseZipArchive();",
+      "R.B.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    3,
+  ],
+  // IsZip itself (target 0: the answer is Format(DC.IsZip(IS)) of the InStream the statements leave)
+  ["IsZip of a zip", ["P.MakeZip(R, 2, 'a.txt', <payload>);", "R.A.CreateInStream(IS);"], 0],
+  ["IsZip of the text", ["P.PutText(R, 2, <payload>);", "R.A.CreateInStream(IS);"], 0],
+];
+export const ZIP_BLOB: Family = {
+  name: "zip-blob",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  known: [],
+  testPermissions: "Disabled",
+  // Data Compression wraps .NET's ZipArchive: al-runner needs its .NET helper, and the exact BC build (the last --bc-version
+  // wins over the script's `28`), as LethAL's own serve runs pass them.
+  // ponytail: box paths (the pinned build's sidecar, the cached service tier); take them from the run's config when a second box needs this.
+  args: [
+    "--bc-version",
+    "28.4.53241.56646",
+    "--dotnet-sidecar",
+    "/work/tools/al-runner-v3/current/dotnet-sidecar/AlDotNetSidecar.dll",
+    "--dotnet-assembly-dir",
+    "/coord/cache/bc28-service-windows",
+  ],
+  dependencies: [
+    {
+      id: "63ca2fa4-4f03-4f2b-a480-172fef340d3f",
+      name: "System Application",
+      publisher: "Microsoft",
+      version: "28.0.0.0",
+    },
+  ],
+  support: `table 51000 "ZC Buf"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; A; Blob) { }
+        field(3; B; Blob) { }
+        field(4; C; Blob) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 51000 "ZC Probe"
+{
+    procedure PutText(var R: Record "ZC Buf"; Which: Integer; T: Text)
+    var
+        OS: OutStream;
+    begin
+        ClearField(R, Which);
+        OpenOut(R, Which, OS);
+        OS.WriteText(T);
+    end;
+
+    // a zip with one entry, built from its own record so the target Blob holds nothing else
+    procedure MakeZip(var R: Record "ZC Buf"; Which: Integer; EntryName: Text; Content: Text)
+    var
+        Src: Record "ZC Buf";
+        DC: Codeunit "Data Compression";
+        IS: InStream;
+        OS: OutStream;
+    begin
+        PutText(Src, 4, Content);
+        Src.C.CreateInStream(IS);
+        DC.CreateZipArchive();
+        DC.AddEntry(IS, EntryName);
+        ClearField(R, Which);
+        OpenOut(R, Which, OS);
+        DC.SaveZipArchive(OS);
+        DC.CloseZipArchive();
+    end;
+
+    procedure Describe(var R: Record "ZC Buf"; Which: Integer): Text
+    var
+        Tmp: Record "ZC Buf";
+        DC: Codeunit "Data Compression";
+        IS: InStream;
+        EntryIS: InStream;
+        OS: OutStream;
+        Names: List of [Text];
+        EntryName: Text;
+        T: Text;
+        Res: Text;
+        B1: Byte;
+        B2: Byte;
+    begin
+        if not HasData(R, Which) then
+            exit('empty');
+        // a zip starts with 'PK' (80, 75); read as bytes, so the probe does not lean on IsZip (it has cells of its own)
+        OpenIn(R, Which, IS);
+        IS.Read(B1);
+        IS.Read(B2);
+        if not ((B1 = 80) and (B2 = 75)) then begin
+            OpenIn(R, Which, IS);
+            exit('notzip:' + ReadAll(IS));
+        end;
+        OpenIn(R, Which, IS);
+        DC.OpenZipArchive(IS, false);
+        DC.GetEntryList(Names);
+        Res := 'zip';
+        foreach EntryName in Names do begin
+            Clear(Tmp.B);
+            Tmp.B.CreateOutStream(OS);
+            DC.ExtractEntry(EntryName, OS);
+            Tmp.B.CreateInStream(EntryIS);
+            T := ReadAll(EntryIS);
+            Res += '|' + EntryName + ':' + Format(StrLen(T)) + ':' + CopyStr(T, 1, 12);
+        end;
+        DC.CloseZipArchive();
+        exit(Res);
+    end;
+
+    local procedure ReadAll(var IS: InStream): Text
+    var
+        Line: Text;
+        Res: Text;
+    begin
+        while not IS.EOS() do begin
+            IS.ReadText(Line);
+            Res += Line;
+        end;
+        exit(Res);
+    end;
+
+    local procedure HasData(var R: Record "ZC Buf"; Which: Integer): Boolean
+    begin
+        case Which of
+            2:
+                exit(R.A.HasValue());
+            3:
+                exit(R.B.HasValue());
+            4:
+                exit(R.C.HasValue());
+        end;
+        Error('ZC Probe: no field %1', Which);
+    end;
+
+    local procedure ClearField(var R: Record "ZC Buf"; Which: Integer)
+    begin
+        case Which of
+            2:
+                Clear(R.A);
+            3:
+                Clear(R.B);
+            4:
+                Clear(R.C);
+            else
+                Error('ZC Probe: no field %1', Which);
+        end;
+    end;
+
+    local procedure OpenIn(var R: Record "ZC Buf"; Which: Integer; var IS: InStream)
+    begin
+        case Which of
+            2:
+                R.A.CreateInStream(IS);
+            3:
+                R.B.CreateInStream(IS);
+            4:
+                R.C.CreateInStream(IS);
+            else
+                Error('ZC Probe: no field %1', Which);
+        end;
+    end;
+
+    local procedure OpenOut(var R: Record "ZC Buf"; Which: Integer; var OS: OutStream)
+    begin
+        case Which of
+            2:
+                R.A.CreateOutStream(OS);
+            3:
+                R.B.CreateOutStream(OS);
+            4:
+                R.C.CreateOutStream(OS);
+            else
+                Error('ZC Probe: no field %1', Which);
+        end;
+    end;
+}
+`,
+  handles: {},
+  cells: ZC_SCENARIOS.flatMap(([scenario, statements, target]) =>
+    ZC_PAYLOADS.map(([payload, expr]) => ({
+      type: "Zip",
+      method: scenario,
+      state: payload,
+      vars: [
+        'R: Record "ZC Buf";',
+        'Copy: Record "ZC Buf";',
+        'DC: Codeunit "Data Compression";',
+        'P: Codeunit "ZC Probe";',
+        "IS: InStream;",
+        "IS2: InStream;",
+        "OS: OutStream;",
+        "Len: Integer;",
+      ],
+      setup: statements.map((s) => s.replace("<payload>", expr)),
+      call:
+        target === 0
+          ? "Error('V:[%1]', Format(DC.IsZip(IS)));"
+          : `Error('V:[%1]', P.Describe(R, ${target}));`,
+    })),
+  ),
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -6151,6 +6506,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [FIELDREF_CONVERT.name]: FIELDREF_CONVERT,
   // PR-374: appended (BC-check number 26): (language, region) pairs in a report not started by Run, for a per-cell BC differential
   [LANGUAGE_REGION.name]: LANGUAGE_REGION,
+  // PR-375: appended (BC-check number 27): a zip kept in a Blob, through the System Application's Data Compression
+  [ZIP_BLOB.name]: ZIP_BLOB,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */

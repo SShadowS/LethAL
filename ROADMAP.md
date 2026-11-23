@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 1154 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**63 of 1155 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1199,6 +1199,7 @@ that ordering is the priority.
 - **R1189** · The withheld-kill recheck runs after the teardown phase with no phase and no progress event: on DO about 15-17 min of a busy client with nothing reported, and only 386-438 s of it is the recheck baseline · [R1189.md](docs/roadmap/R1189.md) · open
 - **R1191** · Format under CurrReport.FormatRegion as a generated BC differential (PR-373, #8094's family): 209 cells, 153 equal, 50 refused with BC's answers sent, 6 wrong values filed #8861 (da-DK time separator) and #8862 (fr-FR U+202F) · [R1191.md](docs/roadmap/R1191.md) · closed 2026-11-23 — measured on bc4 and filed upstream
 - **R1192** · Two more generated BC differentials (PR-374): FieldRef type conversions (#8219, 288 cells) and (language, region) pairs in a SaveAs report (144 cells); 211 refusals with BC's answers sent, 5 wrong-answer shapes filed #8867-#8871 · [R1192.md](docs/roadmap/R1192.md) · closed 2026-11-23 — measured on bc4 and filed upstream
+- **R1193** · A zip kept in a Blob through the System Application's Data Compression as a generated BC differential (PR-375): 36 cells, 13 equal, 23 refused with BC's answers sent, 0 wrong values · [R1193.md](docs/roadmap/R1193.md) · closed 2026-11-23 — measured on bc4; nothing to file, BC's answers sent to alrunner
 
 ---
 
