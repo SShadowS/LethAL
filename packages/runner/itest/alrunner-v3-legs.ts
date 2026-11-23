@@ -751,6 +751,282 @@ export function judgeRecheckLeg(
   return fails;
 }
 
+/**
+ * PR-347, leg TC: `sandbox-tailcut` (codeunit 76100 "Tailcut Logic", tests 76150 "Tailcut Tests") on serve-entries,
+ * `"isolation": "test"`, three sessions on `current`: TC-off (`refusedCutTail: false`), TC-on (the key absent, the new
+ * default) and TC-alone (`isolateTests`, where `refusedCut()` is undefined). Pre-commitment:
+ * `docs/superpowers/specs/2026-11-23-pr347-refused-cut-tail-default.md` (the table, and the judge's order (a1)-(e)).
+ * Not in `V3_GATE_LEGS` (a build gated before this leg stays gated), as RC is not.
+ */
+export const V3_TC_LEG = "TC";
+export const TC_SESSIONS = ["TC-off", "TC-on", "TC-alone"] as const;
+export type TcSession = (typeof TC_SESSIONS)[number];
+
+/** The report row's fields the TC judge reads. */
+export interface TcRow {
+  readonly procedureName: string;
+  readonly operatorName?: string;
+  readonly verdict: string;
+  readonly killingTest?: string;
+  readonly killingTestFailure?: string;
+}
+
+/** The test codeunit, the test T0 whose Format is refused, and the unstable test T4. */
+export const TC_CODEUNIT_ID = 76150;
+export const TC_STABLE_TAIL = [
+  "T1_DoubleTwo",
+  "T2_IsBigTen",
+  "T3_SetsMark",
+  "T5_IsSmallOne",
+  "T6_HalveZero",
+  "T7_HalveTen",
+];
+export const TC_UNSTABLE_TAIL = ["T4_SeesTheMark"];
+/** (a3) PR-393: TC-on sends exactly one pack per Halve mutant. */
+export const TC_PACKS = 2;
+/** The note the tail kills carry (`al-runner-v3-backend.ts`, `[refused-cut tail: ...]`). */
+export const TC_TAIL_NOTE = "[refused-cut tail";
+
+interface TcExpect {
+  readonly verdict: "killed" | "survived" | "error";
+  readonly killingTest?: string;
+}
+interface TcSite {
+  readonly procedureName: string;
+  readonly operator: string;
+  /** The row under TC-off, TC-on, TC-alone (the spec's table). */
+  readonly expect: Readonly<Record<TcSession, TcExpect>>;
+  /** Under TC-on the kill is a tail kill (alone, noted). */
+  readonly tailKillOn: boolean;
+}
+const cut: TcExpect = { verdict: "error" };
+const killedBy = (t: string): TcExpect => ({ verdict: "killed", killingTest: t });
+const sameKill = (t: string, off: TcExpect = cut): Record<TcSession, TcExpect> => ({
+  "TC-off": off,
+  "TC-on": killedBy(t),
+  "TC-alone": killedBy(t),
+});
+
+/** The ten mutants of codeunit 76100, as the offline census gave them (empty-block, return-value, boundary). */
+export const TC_TABLE: readonly TcSite[] = [
+  ...["lethal.empty-block", "lethal.return-value"].map((operator) => ({
+    procedureName: "Triple",
+    operator,
+    expect: sameKill("G0_TripleTwo", killedBy("G0_TripleTwo")),
+    tailKillOn: false,
+  })),
+  ...["lethal.empty-block", "lethal.return-value"].map((operator) => ({
+    procedureName: "Double",
+    operator,
+    expect: sameKill("T1_DoubleTwo"),
+    tailKillOn: true,
+  })),
+  ...["lethal.empty-block", "lethal.return-value"].map((operator) => ({
+    procedureName: "IsBig",
+    operator,
+    expect: sameKill("T2_IsBigTen"),
+    tailKillOn: true,
+  })),
+  {
+    // T4 covers it and passes only after T3: the tail never measures T4, so under TC-on it stays a cut `error`.
+    procedureName: "IsBig",
+    operator: "lethal.conditional-boundary",
+    expect: {
+      "TC-off": cut,
+      "TC-on": cut,
+      "TC-alone": { verdict: "survived" },
+    },
+    tailKillOn: false,
+  },
+  ...["lethal.empty-block", "lethal.return-value"].map((operator) => ({
+    procedureName: "IsSmall",
+    operator,
+    expect: sameKill("T5_IsSmallOne"),
+    tailKillOn: true,
+  })),
+  {
+    procedureName: "IsSmall",
+    operator: "lethal.conditional-boundary",
+    expect: {
+      "TC-off": cut,
+      "TC-on": { verdict: "survived" },
+      "TC-alone": { verdict: "survived" },
+    },
+    tailKillOn: false,
+  },
+  // PR-393: Halve returns 0 under both; T6 passes, so T7 kills whichever the walk reaches first (a pack of [T, mate]).
+  ...["lethal.empty-block", "lethal.return-value"].map((operator) => ({
+    procedureName: "Halve",
+    operator,
+    expect: sameKill("T7_HalveTen"),
+    tailKillOn: true,
+  })),
+];
+
+/** What the judge reads: the three sessions' rows, the cut counts, the tail's alone calls and its notices. */
+export interface TcInput {
+  readonly rows: Readonly<Record<TcSession, readonly TcRow[]>>;
+  /** The stats line's `cut before a baseline-refused test (PR-250)` of TC-off and TC-on. */
+  readonly cutEntries: { readonly off: number; readonly on: number };
+  /** TC-on's `refusedCutTailStats()`: alone calls of the stability pass and under a mutant. */
+  readonly tailCalls: {
+    readonly stability: number;
+    readonly mutant: number;
+    /** PR-393: the pack stats of the same call (PR-344). */
+    readonly packs: number;
+    readonly failedPacks: number;
+    readonly servedFromPack: number;
+  };
+  /** TC-on's `al-runner-v3-refused-cut-tail` notices (messages). */
+  readonly tailNotices: readonly string[];
+  /** What T0 showed in TC-off and TC-on: the refused tests and the `baseline-refused-cut` notice, printed on (a1). */
+  readonly t0Evidence: { readonly off: string; readonly on: string };
+  /** Each session's report: `notRunAtBaseline` and `survivorsBesideUnrunTests` (PR-381), judged by (f). */
+  readonly notRun: Readonly<
+    Record<
+      TcSession,
+      {
+        readonly notRunAtBaseline: readonly string[] | undefined;
+        readonly caveat: { readonly survivors: number; readonly notRunTests: number } | undefined;
+      }
+    >
+  >;
+}
+
+/** (f): T0, qualified as the report names it, is the one test not run at baseline in every session. */
+export const TC_NOT_RUN_TEST = "Tailcut Tests.T0_RefusedFormat";
+/** (f): the caveat's counts per session; TC-off has none (no survivor). */
+export const TC_CAVEAT: Readonly<
+  Record<TcSession, { readonly survivors: number; readonly notRunTests: number } | undefined>
+> = {
+  "TC-off": undefined,
+  "TC-on": { survivors: 1, notRunTests: 1 },
+  "TC-alone": { survivors: 2, notRunTests: 1 },
+};
+
+/** The names after `<label>: ` up to `;` or the end of the list, from the stability notice (`none` is empty). */
+function tcNoticeList(notice: string, label: "stable" | "unstable"): string[] | undefined {
+  const m = (
+    label === "stable" ? /(?:^|[ ;(])stable: ([^;]*?);/ : /unstable: ([^;(]*?)(?: \(|$)/
+  ).exec(notice);
+  const text = m?.[1];
+  if (text === undefined) return undefined;
+  return text === "none" ? [] : text.split(", ").map((s) => s.trim());
+}
+
+const sameSet = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
+
+/**
+ * TC's judge, in the pre-committed order. Returns every failure, each starting `TC:`, in order:
+ * (a1) the cut fired, (a2) the tail ran, (a3) TC-on sent exactly 2 packs and none failed (PR-393), (b) the three tables per mutant, (c) TC-on equals TC-alone but for the one
+ * T4-only mutant, (d) tail kills carry the note, (f) PR-381's not-run field and caveat per session. (e), the frozen
+ * baseline, is the caller's (R332). (a1), (a2) and (a3) return early; (b), (c), (d) and (f) all report together.
+ * Pure, so it is red-checked offline.
+ */
+export function judgeTailcutLeg(input: TcInput): readonly string[] {
+  const fails: string[] = [];
+  for (const [s, n, evidence] of [
+    ["TC-off", input.cutEntries.off, input.t0Evidence.off],
+    ["TC-on", input.cutEntries.on, input.t0Evidence.on],
+  ] as const)
+    if (n <= 0)
+      fails.push(
+        `TC: no PR-250 cut: ${s} read "cut before a baseline-refused test (PR-250)" ${n}, pre-committed above 0 for codeunit ${TC_CODEUNIT_ID}. T0's evidence (${s}): ${evidence || "none"}`,
+      );
+  if (fails.length > 0) return fails;
+  const stabilityNotice = input.tailNotices.find((n) => n.includes(`codeunit ${TC_CODEUNIT_ID}:`));
+  const notRun = input.tailNotices.filter(
+    (n) => n.includes("stability pass was not run") || n.includes("stability pass failed"),
+  );
+  const stable =
+    stabilityNotice === undefined ? undefined : tcNoticeList(stabilityNotice, "stable");
+  const unstable =
+    stabilityNotice === undefined ? undefined : tcNoticeList(stabilityNotice, "unstable");
+  if (
+    stable === undefined ||
+    unstable === undefined ||
+    !sameSet(stable, TC_STABLE_TAIL) ||
+    !sameSet(unstable, TC_UNSTABLE_TAIL) ||
+    input.tailCalls.mutant <= 0
+  )
+    fails.push(
+      `TC: the tail route did not run: stability notice ${stabilityNotice === undefined ? "absent" : `"${stabilityNotice.slice(0, 400)}"`}, pre-committed stable ${TC_STABLE_TAIL.join(", ")} and unstable ${TC_UNSTABLE_TAIL.join(", ")}; tail alone calls under a mutant ${input.tailCalls.mutant}, pre-committed above 0${notRun.length > 0 ? `; ${notRun.map((n) => n.slice(0, 300)).join(" | ")}` : ""}`,
+    );
+  if (fails.length > 0) return fails;
+  // (a3) PR-393: PR-344's packing ran live: one pack per Halve mutant, none failed. servedFromPack is recorded only.
+  if (input.tailCalls.packs !== TC_PACKS || input.tailCalls.failedPacks !== 0)
+    fails.push(
+      `TC: packing did not run as pre-committed: packs ${input.tailCalls.packs} (pre-committed ${TC_PACKS}), failedPacks ${input.tailCalls.failedPacks} (pre-committed 0), servedFromPack ${input.tailCalls.servedFromPack} (recorded only)`,
+    );
+  if (fails.length > 0) return fails;
+  const find = (s: TcSession, site: TcSite): TcRow[] =>
+    input.rows[s].filter(
+      (r) => r.procedureName === site.procedureName && r.operatorName === site.operator,
+    );
+  for (const s of TC_SESSIONS) {
+    if (input.rows[s].length !== TC_TABLE.length)
+      fails.push(`${s}: ${input.rows[s].length} mutants, pre-committed ${TC_TABLE.length}`);
+    for (const site of TC_TABLE) {
+      const rows = find(s, site);
+      const want = site.expect[s];
+      const [row] = rows;
+      if (
+        rows.length !== 1 ||
+        row === undefined ||
+        row.verdict !== want.verdict ||
+        row.killingTest !== want.killingTest
+      )
+        fails.push(
+          `${s}: ${site.procedureName} ${site.operator} is ${rows.map((r) => `${r.verdict} by ${r.killingTest ?? "no test"}`).join("; ") || "absent"}, pre-committed ${want.verdict} by ${want.killingTest ?? "no test"}`,
+        );
+    }
+  }
+  // (c) the equality TC-on = TC-alone, but for the one mutant only T4 covers (error vs survived): by name, exactly 1.
+  const moved = TC_TABLE.filter((site) => {
+    const [on] = find("TC-on", site);
+    const [alone] = find("TC-alone", site);
+    return on?.verdict !== alone?.verdict || on?.killingTest !== alone?.killingTest;
+  });
+  if (
+    moved.length !== 1 ||
+    moved[0]?.operator !== "lethal.conditional-boundary" ||
+    moved[0]?.procedureName !== "IsBig"
+  )
+    fails.push(
+      `TC: TC-on differs from TC-alone at ${moved.map((s) => `${s.procedureName} ${s.operator}`).join(", ") || "no mutant"}, pre-committed exactly IsBig lethal.conditional-boundary (error, never survived)`,
+    );
+  // (d)
+  for (const site of TC_TABLE.filter((x) => x.tailKillOn)) {
+    for (const r of find("TC-on", site))
+      if (r.verdict === "killed" && r.killingTestFailure?.includes(TC_TAIL_NOTE) !== true)
+        fails.push(
+          `TC: TC-on ${site.procedureName} ${site.operator} was killed without the "${TC_TAIL_NOTE} ..." note`,
+        );
+  }
+  // (f) PR-381's not-run field and caveat (amendment 3), checked even when (b)-(d) failed (only (a1) and (a2) return
+  // early). `sharingACodeunit` is recorded, never judged.
+  for (const s of TC_SESSIONS) {
+    const got = input.notRun[s];
+    const names = got.notRunAtBaseline;
+    if (names === undefined || names.length !== 1 || names[0] !== TC_NOT_RUN_TEST)
+      fails.push(
+        `TC: ${s} notRunAtBaseline is ${names === undefined ? "absent" : JSON.stringify(names)}, pre-committed exactly ["${TC_NOT_RUN_TEST}"]`,
+      );
+    const want = TC_CAVEAT[s];
+    const c = got.caveat;
+    const ok =
+      want === undefined
+        ? c === undefined
+        : c !== undefined && c.survivors === want.survivors && c.notRunTests === want.notRunTests;
+    if (!ok)
+      fails.push(
+        `TC: ${s} survivors-beside-unrun-tests is ${c === undefined ? "absent" : `survivors ${c.survivors}, notRunTests ${c.notRunTests}`}, pre-committed ${want === undefined ? "absent" : `survivors ${want.survivors}, notRunTests ${want.notRunTests}`}`,
+      );
+  }
+  return fails;
+}
+
 /** The legs the itest runs when `LETHAL_ITEST_V3_LEGS` is unset, in run order. */
 export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boolean }): string[] {
   return [
@@ -777,6 +1053,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "MOE",
     "WRE",
     V3_RC_LEG, // PR-144: the withheld-kill recheck; not in V3_GATE_LEGS, as ISO and DB are not
+    V3_TC_LEG, // PR-347: the refused-cut tail, off / default / alone; not in V3_GATE_LEGS, as RC is not
     V3_K_LEG,
     ...(o.cdo ? ["D1", "D1c"] : []),
     ...(o.tables ? ["T"] : []),

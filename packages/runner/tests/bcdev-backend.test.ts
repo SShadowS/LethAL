@@ -28,6 +28,7 @@ import {
   BcDevAloneUnsupportedError,
   PublishFailedError,
   BcDevMcpBackend as RealBcDevMcpBackend,
+  NO_RESULT_FOR_METHOD,
   controlLeftoverWarning,
 } from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
@@ -1132,6 +1133,40 @@ describe("BcDevMcpBackend.run", () => {
     const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("NST unreachable");
+  });
+
+  // PR-387: both hub rows below answered without the test body running; the orchestrator reads the flag.
+  test("PR-387: a thrown hub handler (isError result) carries bodyNeverRan", async () => {
+    const backend = makeBackend(() => {
+      throw new Error("NST unreachable");
+    });
+    const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+    expect(v.outcome).toBe("error");
+    expect(v.bodyNeverRan).toBe(true);
+  });
+
+  test("PR-387: a hub payload with no result for the method carries bodyNeverRan", async () => {
+    const backend = makeBackend(() => ({ results: [] }));
+    const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toBe(NO_RESULT_FOR_METHOD);
+    expect(v.bodyNeverRan).toBe(true);
+  });
+
+  test("a red hub test (status failed) does not carry bodyNeverRan", async () => {
+    const backend = makeBackend(() => ({
+      results: [
+        {
+          codeunitId: 79100,
+          method: "PostingUpdatesTotal",
+          status: "failed",
+          durationMs: 1,
+          output: "x",
+        },
+      ],
+    }));
+    const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+    expect(v.bodyNeverRan).toBeUndefined();
   });
 
   test("run() deadline is in-flight-unknown (server may still be executing)", async () => {

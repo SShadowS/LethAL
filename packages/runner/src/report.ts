@@ -294,7 +294,7 @@ export type Caveat =
   | "isolated-recheck-kills"
   // R1131: at least one row was not scored because its start WorkDate moved from the batch's baseline.
   | "workdate-changed"
-  // PR-381 (R1197): survivors in an al-runner-v3 run with tests v3 did not run at baseline.
+  // PR-381 (R1197), PR-387: survivors in an al-runner-v3 or bcdev run with tests not run at baseline.
   | "survivors-beside-unrun-tests";
 
 /**
@@ -830,14 +830,15 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "survivors-beside-unrun-tests": {
     meaning:
       "Some tests of this run could not be run to a verdict at baseline: the runner refused them, they " +
-      "timed out or LethAL stopped them (`notRunAtBaseline` names them; today it is filled for " +
-      "al-runner-v3 runs). Such a test kills nothing here, and there is no coverage for it, so a mutant that only it would kill reads " +
+      "timed out or LethAL stopped them (`notRunAtBaseline` names them; it is filled for " +
+      "al-runner-v3 and bcdev runs). Such a test kills nothing here, and there is no coverage for it, so a mutant that only it would kill reads " +
       "`survived`. Every `survived` and `known-survivor` row of the run is flagged, and the " +
       "`survivorsBesideUnrunTests` count is an UPPER BOUND on the survivors at risk. " +
-      "`sharingACodeunit` counts the survivors that carry the `[v3-refused-test-nearby]` note, a hint " +
+      "`sharingACodeunit` (al-runner-v3 runs only) counts the survivors that carry the `[v3-refused-test-nearby]` note, a hint " +
       "and not a bound (omitted when coverage is off). Evidence: on one DO run, 9 of 47 survivors " +
       "were killed on BC by a test v3 had refused at baseline. To narrow the count, run the " +
-      "survivors on BC (`lethal run --confirm-from`). A static call-graph reach that names the " +
+      "survivors where those tests can run: in BC's client session for TestPage tests, on BC " +
+      "(`lethal run --confirm-from`) for v3 refusals. A static call-graph reach that names the " +
       "survivors a refused test can reach was measured as no gain (PR-386, closed).",
     entailedNegative:
       "Not a wrong verdict, and not a claim that any one survivor is killable: no verdict moved and " +
@@ -1426,7 +1427,7 @@ export interface ExecutionContext {
   readonly license?: { readonly path: string; readonly sha256: string };
   /** PR-282: the `alRunnerV3.companies` this run passed as `--companies`. Only on directly measured al-runner-v3 entries, and only when set. */
   readonly companies?: string;
-  /** PR-297: `alRunnerV3.refusedCutTail` was ON: a green test after a baseline-refusal cut was measured alone. Only when on. */
+  /** PR-297: `alRunnerV3.refusedCutTail` was ON (the default since PR-347): a green test after a baseline-refusal cut, if one happened, was measured alone. The key does not say a cut happened. Only when on. */
   readonly refusedCutTail?: true;
   /** PR-256: `alRunnerV3.stopGroups` was ON: mutant requests carried per-entry stop groups. Only when on. */
   readonly stopGroups?: true;
@@ -1826,10 +1827,11 @@ export interface SessionReport {
     readonly budgetMs: number;
   };
   /**
-   * PR-381 (R1197): the baseline tests al-runner v3 did not run to a verdict: refused (NotRun), timed
-   * out or stopped by LethAL. Not a test that ran and failed (those are in `unsupportedTests`). Written
-   * on every al-runner-v3 report (`[]` when there are none), absent on bcdev: a v3 report without it
-   * predates it, and a reader says "not recorded in this report". Sorted qualified test names.
+   * PR-381 (R1197), PR-387: the baseline tests the backend did not run to a verdict: refused (v3
+   * NotRun, or a BC TestPage or permission refusal), timed out or stopped by LethAL, skipped, or a body
+   * that never ran. Not a test that ran and failed (those are in `unsupportedTests`). Written on every
+   * al-runner-v3 and bcdev report (`[]` when there are none): a report without it predates it, and a
+   * reader says "not recorded in this report". Sorted qualified test names.
    */
   readonly notRunAtBaseline?: readonly string[];
   /**
@@ -2397,12 +2399,12 @@ export const STRANDED_SKIP_INTERPRETATION: Interpretation = {
 };
 
 /**
- * PR-381 (R1197): an al-runner-v3 report with survivors that has no `notRunAtBaseline`: written before the
- * field existed. Nothing is known about which baseline tests v3 did not run.
+ * PR-381 (R1197), PR-387: an al-runner-v3 or bcdev report with survivors that has no `notRunAtBaseline`:
+ * written before the field existed. Nothing is known about which baseline tests the backend did not run.
  */
 export const NOT_RUN_NOT_RECORDED_INTERPRETATION: Interpretation = {
   meaning:
-    "This al-runner-v3 report was written before it recorded which baseline tests v3 did not run " +
+    "This report was written before it recorded which baseline tests its backend did not run " +
     "(refused, timed out or stopped), so the `survivors-beside-unrun-tests` question is not answered " +
     "for its survivors: tests not run at baseline are not recorded in this report. The count is the " +
     "report's survivors.",
@@ -3521,10 +3523,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
   // PR-381 (R1197) - see CAVEAT_INTERPRETATIONS["survivors-beside-unrun-tests"]. After the coverage-off
   // push above: the count's hint part reads it.
-  // The field is filled for al-runner-v3 only in this PR (bcdev is PR-387): the fold's list is not read
-  // on bcdev, so a bcdev report prints and writes nothing new.
+  // The field is filled for al-runner-v3 and bcdev (PR-387); the fold picks each backend's own list.
   const notRunField =
-    input.caps.kind === "al-runner-v3" ? { notRunAtBaseline: input.notRunAtBaseline } : {};
+    input.caps.kind === "al-runner-v3" || isBcdev(input.caps.kind)
+      ? { notRunAtBaseline: input.notRunAtBaseline }
+      : {};
   const notRun = notRunSurvivors({
     backend: input.caps.kind,
     ...notRunField,

@@ -419,7 +419,7 @@ export async function lanesRig(
       coverage: "none",
       transport: "serve-entries",
       ...(o.packEntries !== undefined ? { packEntries: o.packEntries } : {}),
-      ...(o.refusedCutTail === true ? { refusedCutTail: true } : {}),
+      ...(o.refusedCutTail !== undefined ? { refusedCutTail: o.refusedCutTail } : {}), // PR-347: `false` is passed too
       ...(o.stopGroups !== undefined ? { stopGroups: o.stopGroups } : {}),
     },
     one.spawn,

@@ -159,6 +159,7 @@ import {
   O1_PLAN,
   O1_SEED_CODEUNIT,
   O1_SEED_TEST,
+  type TcSession,
   type V3RowFacts,
   V3_DBI_LEG,
   V3_DBM_LEG,
@@ -172,6 +173,7 @@ import {
   V3_O1_LEG,
   V3_RC_LEG,
   V3_S1E_LEG,
+  V3_TC_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
   combineO1Sets,
@@ -187,6 +189,7 @@ import {
   judgeRecheckBaseline,
   judgeRecheckLeg,
   judgeStateNotes,
+  judgeTailcutLeg,
   judgeWrArms,
   legKSection,
   moWrTransportRefusal,
@@ -271,6 +274,8 @@ const MULTIOBJECT_BASELINE_PATH = join(HERE, "al-runner-v3.multiobject.baseline.
 const WRAPPED_BASELINE_PATH = join(HERE, "al-runner-v3.wrapped.baseline.json");
 // PR-144: leg RC (the withheld-kill recheck), recorded once under R332 by the owner of the live gate.
 const RECHECK_BASELINE_PATH = join(HERE, "al-runner-v3.recheck.baseline.json");
+// PR-347: leg TC (the refused-cut tail), TC-on's table, recorded once under R332 by the owner of the live gate.
+const TAILCUT_BASELINE_PATH = join(HERE, "al-runner-v3.tailcut.baseline.json");
 // R814: resolved once, so `current` moving during a gate cannot swap the binary under it.
 const BIN = resolveV3Binary(process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH);
 const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
@@ -1916,6 +1921,7 @@ async function legRC(scratch: string): Promise<SessionReport> {
         sourceProjectDir: projectDir,
         transport: "serve-entries",
         isolation,
+        refusedCutTail: false, // PR-347: RC measures PR-144's recheck on a cut it cannot make; the tail route is TC's
       }),
     );
   const mainConfig = {
@@ -1961,6 +1967,94 @@ async function legRC(scratch: string): Promise<SessionReport> {
     `  RC: ${r.mutants.filter((m) => m.isolatedRecheck !== undefined).length} recovered (the Sevens mutants), ${r.mutants.filter((m) => m.withheldKill !== undefined).length} still withheld (the SevensB mutants), as pre-committed`,
   );
   return r;
+}
+
+/**
+ * PR-347, leg TC: `sandbox-tailcut` on serve-entries, three sessions on the same build (spec
+ * `docs/superpowers/specs/2026-11-23-pr347-refused-cut-tail-default.md`): off (`refusedCutTail: false`), on (the key
+ * absent: the default) and alone (`isolateTests`). Each has its own scratch directory, so GATE_WARNINGS keys on
+ * `TC-off`, `TC-on` and `TC-alone`. `judgeTailcutLeg` runs FIRST, by name; the own-baseline compare (TC-on's table) follows.
+ * Returns TC-on's report.
+ */
+async function legTC(scratch: string): Promise<SessionReport> {
+  const projectDir = fixture("sandbox-tailcut");
+  const testDir = fixture("sandbox-tailcut-tests");
+  const ids = { selectorId: 76149, controlId: 76148, tableId: 76147 };
+  const packagesDir = await microsoftDeps(scratch);
+  const run = async (name: TcSession) => {
+    const dir = join(scratch, name);
+    await mkdir(dir, { recursive: true });
+    const b = new AlRunnerV3Backend(
+      backendCfg({
+        instrumentedDir: join(dir, "backend"),
+        testDir,
+        packagesDir,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: ids.selectorId,
+        sourceProjectDir: projectDir,
+        transport: "serve-entries",
+        ...(name === "TC-off" ? { refusedCutTail: false } : {}),
+        ...(name === "TC-alone" ? { isolateTests: true } : {}),
+      }),
+    );
+    const tailNotices: string[] = [];
+    const t0Notices: string[] = [];
+    const r = await session(dir, b, { projectDir, testDir, selectorIds: ids, workers: 1 }, (e) => {
+      if (e.type !== "warning") return;
+      if (e.code === "al-runner-v3-refused-cut-tail") tailNotices.push(e.message);
+      if (e.code === "al-runner-v3-baseline-refused-cut") t0Notices.push(e.message);
+    });
+    return { r, b, tailNotices, t0Notices };
+  };
+  const off = await run("TC-off");
+  const on = await run("TC-on");
+  const alone = await run("TC-alone");
+  const t0Evidence = (s: { r: SessionReport; t0Notices: string[] }): string =>
+    `refused at baseline: ${s.r.unsupportedTests.join(", ") || "none"}; ${s.t0Notices.join(" | ") || "no baseline-refused-cut notice"}`;
+  // Recorded, never judged (amendment 3): TC-on's pack stats (PR-344) and each session's `sharingACodeunit`.
+  const packs = on.b.refusedCutTailStats();
+  console.log(
+    `  TC recorded: TC-on pack stats packs ${packs.packs}, failedPacks ${packs.failedPacks}, servedFromPack ${packs.servedFromPack}`,
+  );
+  for (const [name, s] of [
+    ["TC-off", off],
+    ["TC-on", on],
+    ["TC-alone", alone],
+  ] as const)
+    console.log(
+      `  TC recorded: ${name} sharingACodeunit ${s.r.survivorsBesideUnrunTests?.sharingACodeunit ?? "absent"}`,
+    );
+  const notRunOf = (s: { r: SessionReport }) => ({
+    notRunAtBaseline: s.r.notRunAtBaseline,
+    caveat:
+      s.r.survivorsBesideUnrunTests === undefined
+        ? undefined
+        : {
+            survivors: s.r.survivorsBesideUnrunTests.survivors,
+            notRunTests: s.r.survivorsBesideUnrunTests.notRunTests,
+          },
+  });
+  const fails = judgeTailcutLeg({
+    notRun: { "TC-off": notRunOf(off), "TC-on": notRunOf(on), "TC-alone": notRunOf(alone) },
+    rows: { "TC-off": off.r.mutants, "TC-on": on.r.mutants, "TC-alone": alone.r.mutants },
+    cutEntries: {
+      off: off.b.entriesStats().refusedCutEntries,
+      on: on.b.entriesStats().refusedCutEntries,
+    },
+    tailCalls: packs,
+    tailNotices: on.tailNotices,
+    t0Evidence: {
+      off: t0Evidence(off),
+      on: t0Evidence(on),
+    },
+  });
+  for (const f of fails) console.log(`    - ${f}`);
+  const [first] = fails;
+  if (first !== undefined) throw new LegFailure(first);
+  console.log(
+    `  TC: off ${off.r.mutants.filter((m) => m.verdict === "killed").length} killed, on ${on.r.mutants.filter((m) => m.verdict === "killed").length} killed (tail alone calls ${JSON.stringify(on.b.refusedCutTailStats())}), alone ${alone.r.mutants.filter((m) => m.verdict === "killed").length} killed, as pre-committed`,
+  );
+  return on.r;
 }
 
 /** R918: the serve legs' counters, pre-committed in
@@ -2985,6 +3079,9 @@ async function main(): Promise<void> {
   // PR-144: leg RC refuses at start while its baseline is missing (R332).
   if (LEGS.includes(V3_RC_LEG))
     preflightGateBaseline(RECHECK_BASELINE_PATH, "al-runner-v3 itest leg RC");
+  // PR-347: leg TC refuses at start while its baseline is missing (R332).
+  if (LEGS.includes(V3_TC_LEG))
+    preflightGateBaseline(TAILCUT_BASELINE_PATH, "al-runner-v3 itest leg TC");
   // R918: MOE and WRE compare with the same two files, so they refuse at start without them too.
   if (LEGS.includes("MOE"))
     preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MOE");
@@ -3029,6 +3126,7 @@ async function main(): Promise<void> {
     ["MO", MULTIOBJECT_BASELINE_PATH],
     ["WR", WRAPPED_BASELINE_PATH],
     [V3_RC_LEG, RECHECK_BASELINE_PATH],
+    [V3_TC_LEG, TAILCUT_BASELINE_PATH],
   ]);
   const recordPaths = LEGS.flatMap((l) => {
     const p = recordBaselines.get(l);
@@ -3157,6 +3255,22 @@ async function main(): Promise<void> {
           } catch (e) {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`RC: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === V3_TC_LEG) {
+          // PR-347: the pre-committed three tables ran inside the leg (nothing is written on a difference); then
+          // the own-baseline compare (TC-on's table), which a record run writes (R332).
+          const r = await legTC(scratch);
+          try {
+            await assertGateBaseline(
+              r,
+              TAILCUT_BASELINE_PATH,
+              "al-runner-v3 itest leg TC",
+              process.env,
+              pinnedRecord(),
+            );
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`TC: ${e instanceof Error ? e.message : String(e)}`);
           }
         } else if (leg === "MOE") {
           // R918: the serve legs, compared with the ONE-SHOT legs' frozen baselines and never

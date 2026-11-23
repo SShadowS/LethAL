@@ -261,7 +261,8 @@ describe("R332: a frozen baseline never records itself", () => {
   // R602: thirteen, with v3's multi-object and wrapped legs (pending their record run).
   // PR-144: fourteen, with leg RC's (recorded 2026-11-18).
   // PR-340: fifteen, with the carry gate's (pending its record run).
-  test("the registry names fifteen gate baselines and their record commands", () => {
+  // PR-347: sixteen, with leg TC's (pending its record run).
+  test("the registry names sixteen gate baselines and their record commands", () => {
     expect(Object.keys(GATE_BASELINES).sort()).toEqual([
       "al-runner-v3.carry.baseline.json",
       "al-runner-v3.layout.baseline.json",
@@ -270,6 +271,7 @@ describe("R332: a frozen baseline never records itself", () => {
       "al-runner-v3.symbols-lethala.baseline.json",
       "al-runner-v3.symbols-lethalb.baseline.json",
       "al-runner-v3.tables.baseline.json",
+      "al-runner-v3.tailcut.baseline.json",
       "al-runner-v3.wrapped.baseline.json",
       "bcdev.baseline.json",
       "bcdev.names.baseline.json",

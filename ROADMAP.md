@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 1160 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 1163 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1179,7 +1179,7 @@ that ordering is the priority.
 - **R1157** · VERIFY's longer per-test timeout reads only io pressure: under CPU contention, R917 and other near-limit tests time out at 5 s · [R1157.md](docs/roadmap/R1157.md) · done (8c09923f4)
 - **R1158** · A SIGTERM-stopped v3 run still runs the withheld-kill recheck (a second SIGTERM is ignored; SIGKILL needed), and a recheck baseline of 0 tests took 547 s · [R1158.md](docs/roadmap/R1158.md) · done (db7eb59a5)
 - **R1159** · Three findings from moving `current` to upstream main ccd0f823d: a new RelationFieldNo refusal (the largest DO coverage loss; BC measured 0, edge-4ebfe7913 answered 1), the repro gate's .NET repros refused for BC build 53758, and a repro control that was never measured · [R1159.md](docs/roadmap/R1159.md) · open — trigger: al-runner pins the RelationFieldNo cell (asked, q-20261120T172525-254a31af); then re-measure…
-- **R1160** · On v3, one test codeunit's BASELINE refusals make 301 DO mutants `error` through PR-250's cut (89% of the error test time, ~11,600 lane-s, ~28% of all mutant test time in perf10c); a covering test after the cut is never measured, so the mutant gets no verdict · [R1160.md](docs/roadmap/R1160.md) · open — flag built (coord PR-297, `alRunnerV3.refusedCutTail`, option 2: a stable tail test runs alone)…
+- **R1160** · On v3, one test codeunit's BASELINE refusals make 301 DO mutants `error` through PR-250's cut (89% of the error test time, ~11,600 lane-s, ~28% of all mutant test time in perf10c); a covering test after the cut is never measured, so the mutant gets no verdict · [R1160.md](docs/roadmap/R1160.md) · done (999e4c870, coord PR-347; merged only after the owner's answer on R1160): refusedCutTail is ON by…
 - **R1161** · Retire LethAL's O1 known-loss rule (partner OnAfterLogin memos, upstream #8239) when al-runner's runtime fix is on edge, and re-measure the 16 O1 rows and the set-aside DO mutants · [R1161.md](docs/roadmap/R1161.md) · done (6e567baa4) — the known-loss pin is dropped on `current` main-ef9f6a222 (O1's 16 rows match BC), and…
 - **R1162** · Keep the serve daemon after ANY notRun refusal once al-runner's #8180 promise is on edge (one rule for every refusal kind, proved on DO kept-vs-fresh); revisit PR-244's declined option 4 · [R1162.md](docs/roadmap/R1162.md) · blocked — on edge: upstream #8180's documented promise…
 - **R1163** · PR-289's al-runner bug hunt over every refusal and timeout left on DO: 81 texts classified; five shapes measured on BC and posted upstream (#8267, #8219, #7908, #8652, #8668) · [R1163.md](docs/roadmap/R1163.md) · open — shape 4 (#8652, DO's `<Integer>` form) is FIXED on current main-ef9f6a222 (re-checked 2026-11-22)…
@@ -1205,6 +1205,9 @@ that ordering is the priority.
 - **R1194** · DO's runs reach al-runner's .NET helper: 0 dotnet-unavailable rows in c3 and c3off, LethAL passes the exact BC build, the pinned sidecar and the service folder; the --bc-version 28 failure was the refusal-family script's own, so no product lever · [R1194.md](docs/roadmap/R1194.md) · closed 2026-11-23 — measured (PR-376): no lever; the script's ceiling is recorded
 - **R1195** · refusal-family.ts runs every family on one exact BC build (PR-377): 1 move in 3,418 cells, and it restores PR-32's measured answer; DO's own CI builds on the latest BC 28 sandbox, not 29 · [R1195.md](docs/roadmap/R1195.md) · closed 2026-11-23 — measured (PR-377); the script fix lands with this row
 - **R1196** · The v3 itest's LETHAL_ITEST_V3_REPORT_DIR writes a leg's report only AFTER its warning-set check, though its comment says "before any assertion": a leg that fails its warning set keeps no report, which hides exactly the legs where something changed · [R1196.md](docs/roadmap/R1196.md) · done (2ebdbecc1)
+- **R1198** · PR-344's tail packing has no live exercise: on DO after PR-365 and in PR-347's TC fixture, every refused-cut mutant is covered by exactly one stable tail test, so every pack set is one test and 0 packs are sent · [R1198.md](docs/roadmap/R1198.md) · done (ec2d44a8a, coord PR-393): leg TC's fixture gains Halve with two stable tail tests (T6, T7); TC-on sends…
+- **R1199** · An R192 baseline snapshot written before PR-387 lacks bodyNeverRan on the hub's body-never-ran rows, so reused on --resume those rows miss notRunAtBaseline and the caveat can under-count · [R1199.md](docs/roadmap/R1199.md) · open
+- **R1200** · A run with any finite --time-budget turns PR-241's unit packing off (by design, R912), but the notice still prints `pack-entries 64`: PR-391's A/B passed a budget as a 'safety cap', ran every arm unpacked, and read the result as packing not engaging · [R1200.md](docs/roadmap/R1200.md) · open
 
 ---
 

@@ -88,3 +88,51 @@ Every leg `selectLegs` names, on the final head.
 - **§3's serving assertion was missing from the first build (review SF1).** It is added: after the packed prefetch the 4
   killed mutants are scored and each pair is served with no send (`pairBatchServed` 4, `pairBatchRefused` 0), and a
   mutant that was not killed has no pair. It is red-checked: pairs stamped with an old `seq` turn it red.
+
+## 7. Amendment 2 (2026-11-23, coord PR-391: lethal-bugs takes over the A/B; before any arm)
+- **Why:** no arm has finished:
+  - the first was killed for memory (rc 137, at 42 min, 367 mutants scored);
+  - the second waited 4.5 h for a heavy slot and was then stopped by a signal (rc 7);
+  - the third stopped after 39 s with no baseline (rc 7). That matches `SessionKindUnsetError`: since PR-307 a DO config needs
+    `ciSessionKind`.
+- **The head:** lethal/pr-267 with origin/master merged in (merge 9a75c8233, or the final head after VERIFY and the gates).
+  **P is the new merge base, master b521dd2b7** (PR-381 included), in its own checkout. M is the branch head.
+- **al-runner:** `current` main-bf3a3e863 (sha256 `b3e1d255…`, `al-runner 3.0.0-alpha.15+main.20261122 (bf3a3e863)`), the
+  same for both arms. It is pinned in the config copy, not read through the `current` link.
+- **The config:** `/coord/handoff/PR-391/v3.json` is PR-67's `v3.json` plus `"ciSessionKind": "client"`, the binary path
+  pinned, and its own `cacheDir`. The original is not edited.
+- **The driver:** `/coord/handoff/PR-391/ab.sh <label> <checkout> [budget]`. It keeps §4's slice: the same 4 `--only` files,
+  `--workers 3`, `LETHAL_V3_PACK_ENTRIES=64`, a fresh store per arm, CPUs 12-21, and a heavy slot of `--peak 18`.
+  - **A time budget of 10,800 s,** as a safety cap only (the killed arm projects to about 2 h). An arm whose stdout says
+    `time-budget-reached`, or `STOPPED BY SIGNAL`, is VOID and is run again, never compared.
+  - No `--wait` on the slot: a refused admission exits 75 and is retried later. A lease or slot is never held while waiting.
+- **The scorer:** `/coord/handoff/PR-391/ab-compare.py <P> <M>` joins on the full site key (file, line, operator, start,
+  end), not on `mutantCode`. Amendment 1's BLOCK rules are unchanged. Exit 0 PASS, 1 BLOCK, 2 VOID.
+- **A smoke test first:** both arms on ONE `--only` file (`CDOEDocumentResponse.Codeunit.al`) with a short budget. It checks
+  that each arm writes its report, the counters line is present, and the scorer runs. It is not part of the A/B.
+- **Order:** P then M, one after the other. §4 claims request counts, which are deterministic, and treats the wall as
+  indicative. If a speed figure is to be claimed, the arms are interleaved P, M, P, M with an untouched control first, and the claim is pre-committed in a further amendment.
+
+## 8. Amendment 3 (2026-11-23, PR-391: the first round is void; before the re-run)
+- **Amendment 2's time budget was wrong.** Any finite `--time-budget` turns PR-241's packing OFF
+  (`orchestrator.ts`, `packCap = split && !budgeted ? ...`, R912), while the backend still prints `pack-entries 64` (R1200).
+  - The original driver passed no budget for exactly this reason.
+  - So the first round's arms (P1 and offP on b521dd2b7, M1 and a probe on 9a75c8233) all ran unpacked.
+  - Their equal counts (49 pair requests each) measure nothing about §1's lever, which needs packed calls.
+  - **The first round is VOID for §4.** Its verdict equality stands only as a fact about unpacked calls. R1151 stays open.
+- **The re-run:** `/coord/handoff/PR-391/ab.sh` passes NO `--time-budget`. The only cap is the outer
+  `timeout --foreground -k 300 <cap>` (default 10,800 s), and an arm it kills is void.
+  - Three arms, one after the other, on CPUs 0-11, after PR-394 and before PR-359:
+    - **offP2:** b521dd2b7 with `LETHAL_V3_PACK_ENTRIES` unset;
+    - **P2:** b521dd2b7 at 64;
+    - **M2:** lethal/pr-267's head at 64.
+  - Everything else is §4's slice: the same 4 `--only` files, `--workers 3`, fresh stores, main-bf3a3e863, the config copy.
+- **Pre-checks, before §4 is read** (if either fails, the re-run is void, not a BLOCK of the lever):
+  - **packing engages:** P2 sends fewer prefetch requests than offP2 for the same units;
+  - **packed calls exist:** P2's units prefetched exceed its prefetch calls.
+- **Then §4 with amendment 1's BLOCK rules,** P2 against M2, scored by `ab-compare.py` on the full site key:
+  - every mutant's verdict and killing test equal;
+  - `pairBatchStored` equal;
+  - served and refused equal, or a difference named per mutant in `cutBeforeKiller`;
+  - `pairBatchRequests` lower in M2.
+- Each arm's 0-11 and 12-21 busy shares are recorded. Wall time is indicative.

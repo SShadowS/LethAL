@@ -160,3 +160,69 @@ From B's `serve-entries (R635)` line:
   - **A void arm is re-run once, at once, under its letter (A2 or B2),** and the series keeps the A-then-B order. A second
     void leaves speed INCONCLUSIVE.
 - **What follows, unchanged:** one pair records a saving; a default flip needs an interleaved series of pairs.
+
+## Amendment 3 (2026-11-23, before any arm runs; the orchestrator asked whether ec78cff18 is still the right head)
+- **The head moves to c4's.** Both arms run on the exact sha c4 (PR-379) runs on, read from `/coord/handoff/PR-379/HEAD.txt`
+  and pinned by sha in `arm.sh` before arm A starts. It must contain PR-365's merge (the RelationFieldNo keep rows) and
+  PR-347's (`refusedCutTail` on by default, master dddd4e4ad), or the driver stops.
+- **Why not ec78cff18 any more:**
+  - Amendment 2 made both arms fresh and c3 a verdict reference only, so pinning c3's head buys only the "A against c3"
+    report, which is not judged.
+  - ec78cff18 lacks PR-365's keep rows, PR-347's default tail route and PR-344's tail packing. They change exactly where
+    the stop acts: PR-365 un-cuts 68975 and 68984, so their entries now run in sequence where a stop can skip; the tail route
+    sends tails as entries of their own, which changes what a stop can skip there. A saving measured on ec78cff18 would
+    describe a product that no longer ships, and a later default flip would rest on it.
+  - The A/B difference is still the flag alone: both arms share the head, the binary and every setting.
+- **The binary does not move:** `current` is still main-bf3a3e863 (sha `b3e1d255...`), both configs pin it, and the gate
+  record check (`gated-check.jq` against `gated-before-regate.json` plus `stop-groups: matches`) is unchanged.
+- **A against c4 replaces A against c3 (reported, not judged):** c4's `v4.json` equals both PR-359 configs apart from
+  `cacheDir` and `stopGroups` (checked with `jq`), on the same head and binary, both on a quiet box. So arm A is a
+  replicate of c4:
+  - verdicts and `killingTest` per mutant are expected equal; any difference is named and filed as a nondeterminism
+    finding (it does not block B's claim);
+  - **A's mutant-phase wall against c4's is reported as one measured run-to-run spread** on this box, the noise the
+    speed reading above says is not known. It is a figure, not a rule: S1 and S2 stay B over A.
+- **A against c3 is still reported** (different heads now): expected differences are PR-365's and PR-347's moves; it is
+  not judged.
+- **Driver changes (`arm.sh`, no run):** `want_head` is read from c4's `HEAD.txt` (the driver stops if the file is missing,
+  empty, not a full sha, or lacks PR-365's or PR-347's merge); the worktree `/work/lethal-wt/pr359` is made at that sha; c3's
+  own head check stays (c3 is still read as a verdict reference); c4's report must exist before arm A (c4 runs first).
+
+## Amendment 4 (2026-11-23, before any arm runs): the owner's ruling, interleaved arms on a shared server
+- **The ruling** (the orchestrator relaying "Owner:", the owner's own words): there is no quiet window on server1. Speed is
+  judged ONLY between interleaved arms of the same run. The result states that server1 was shared (other containers active;
+  CPUs 12-21 about 0.35 busy from outside load during c4), and no absolute speed figure is compared with quiet-machine
+  numbers.
+- **The design (ABBA over two halves):**
+  - DO's 469 mutated files are split into two halves balanced by c4's mutant count (`/coord/handoff/PR-359/halves.py`:
+    largest file first, to the lighter half, ties by name; whole files, so every procedure unit stays whole):
+    `half1.txt` 234 files / 21,756 mutants, `half2.txt` 235 files / 21,755 mutants.
+  - **Four arms, in this order:** A1 (flag off, half 1), B1 (flag on, half 1), B2 (flag on, half 2), A2 (flag off,
+    half 2). Each arm is `--only` its half's files; everything else as amendments 2 and 3 (c4's head, the binary, the
+    settings, its own cold `cacheDir`, the gate-record check).
+  - ABBA: each half's pair runs back to back, and the order flips between the halves, so a linear drift of the shared
+    server over the night cancels in the combined ratio.
+- **V (hard), unchanged in kind:** per mutant on the full site key, A (A1 plus A2) against B (B1 plus B2): 0 verdict
+  moves; `killingTest` moves only of PR-256 amendment 1's kind, each listed and checked; any other a BLOCK. Each half must
+  hold exactly its own mutants on both sides (a mutant missing on either side is "not measured" and voids V for it, INFRA).
+- **Speed (S1, S2), between interleaved arms only:**
+  - per half: S1h = (Bh's mutant-phase wall ÷ Bh's baseline median ms per test) ÷ (the same for Ah); S2h = Bh's CPU ÷
+    Ah's CPU (`time.txt`).
+  - **The claim:** the geometric mean of S1 over the two halves ≤ 0.95, AND each half's S1h < 1.00 (the saving shows in
+    both halves, not only on average); S2 likewise with ≤ 1.00 on the mean.
+  - Raw wall ratios per half are reported; no figure is compared with c3, c4 or any quiet-machine run.
+- **Void rules (per pair, the between-arm rules only):**
+  - **the absolute "mean `cpu12_21_busy` over the mutant phase above 0.20" rule is DROPPED** (the server is shared);
+  - **kept:** within a half, the two arms' mean `cpu12_21_busy` over their mutant phases differ by at most 0.05, and their
+    outside loads on 0-11 (mean `cpu0_11_busy` minus own CPU ÷ (12 × wall)) differ by at most 0.05;
+  - the suspend, watchdog, R948, decision-line and completeness rules as before.
+  - **A void pair is re-run once, at once, in the same order (A1/B1 or B2/A2);** a second void leaves that half's speed
+    INCONCLUSIVE, and the claim then rests on the other half alone and says so (a single half never carries "≤ 0.95").
+- **A against c4 (amendment 3):** the per-mutant verdict check stays (A1 plus A2 against c4, reported, not judged); the
+  "wall spread" figure is DROPPED (c4 was not quiet either: CPUs 12-21 about 0.35 busy from outside load).
+- **Time:** about the same as two full arms (four half-arms of about 3-3.5 h each).
+- **The result states:** server1 shared (other containers active), the measured 12-21 and 0-11 busy shares per arm, and
+  that every speed figure is a between-arm ratio of this run.
+- **Driver changes (`arm.sh`, `series.sh`; no run):** the arm letter is one of A1, B1, B2, A2; the config is `v3.A.json` or
+  `v3.B.json` by letter; each arm passes `--only` for every line of its half's file; `series.sh` runs A1, B1, B2, A2 in
+  order and stops a pair at its first failure.

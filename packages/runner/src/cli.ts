@@ -3867,7 +3867,7 @@ export function v3SectionPassThrough(c: AlRunnerV3ConfigSection) {
     ...(c.daemonStderrDir !== undefined ? { daemonStderrDir: c.daemonStderrDir } : {}), // PR-227
     ...(c.serveTimings ? { serveTimings: true } : {}), // PR-237
     ...(c.companies !== undefined ? { companies: c.companies } : {}), // PR-282
-    ...(c.refusedCutTail === true ? { refusedCutTail: true } : {}), // PR-297
+    ...(c.refusedCutTail !== undefined ? { refusedCutTail: c.refusedCutTail } : {}), // PR-297; PR-347: an explicit false must reach the backend (default on)
     ...(c.stopGroups === true ? { stopGroups: true } : {}), // PR-256
   };
 }

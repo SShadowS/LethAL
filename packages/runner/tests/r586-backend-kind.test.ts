@@ -71,10 +71,15 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (m.measuredBy === "bcdev" && isKill(m.finalVerdict) && m.v3Verdict !== m.finalVerdict) {':
       "confirmation-field",
   },
-  // PR-381: the not-run field and caveat exist only on an al-runner-v3 report; each names v3 explicitly.
-  "explain.ts": { 'report.backend === "al-runner-v3" &&': "v3" },
+  // PR-381, PR-387: the not-run field and caveat exist on al-runner-v3 and bcdev reports; each read names
+  // the backend(s) explicitly ("not recorded" for both; bcdev's own sentence and its omitted hint).
+  "explain.ts": {
+    '(report.backend === "al-runner-v3" || report.backend === "bcdev") &&': "v3-and-bcdev",
+  },
   "not-run-survivors.ts": {
-    'return r.backend === "al-runner-v3" &&': "v3",
+    'return (r.backend === "al-runner-v3" || r.backend === "bcdev") &&': "v3-and-bcdev",
+    '...(coverageOff || r.backend === "bcdev"': "bcdev",
+    'scope.backend === "bcdev"': "bcdev",
   },
   "line-map.ts": {
     'case "bcdev":': "exhaustive-switch",
@@ -110,8 +115,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     "if (!r.authoritative) {": "report-field",
     'if (caps.kind === "al-runner-v3") {': "v3",
     '...(runnerBuild !== undefined && caps.kind === "al-runner-v3"': "v3",
-    // PR-381: the field is written on an al-runner-v3 report only.
-    'input.caps.kind === "al-runner-v3" ? { notRunAtBaseline: input.notRunAtBaseline } : {};': "v3",
+    // PR-381, PR-387: the field is written on al-runner-v3 and bcdev reports.
+    'input.caps.kind === "al-runner-v3" || isBcdev(input.caps.kind)': "v3-and-bcdev",
   },
   "cli.ts": {
     'if (raw !== "bcdev" && raw !== "al-runner-v3") {': "config",
@@ -524,6 +529,36 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       expect(none.validity.executionContexts[0]).not.toHaveProperty("refusedCutTail");
       expect(on.validity.executionContexts[0]?.refusedCutTail).toBe(true);
     });
+  });
+
+  // Red: drop `cutTailFlag` from resolveResume's calls (the search and the --resume-run check), or the key from
+  // `fingerprintWith`: the first resume then reads "another build" or finds nothing.
+  test("PR-347: a --resume across a change of refusedCutTail is refused by name, both ways, as last and by id; the same value resumes", async () => {
+    for (const [first, second] of [
+      [true, false],
+      [false, true],
+    ] as const) {
+      await inProject(async (root) => {
+        const store = new ResultsStore(":memory:");
+        const mk = (tail: boolean) =>
+          Object.assign(withProbe(new V3KindStub([]), []), { refusedCutTail: tail });
+        await v3Session(root, store, mk(first));
+        store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+        for (const resume of ["last", 1] as const) {
+          const refused = await v3Session(root, store, mk(second), { resume }).catch(
+            (e: unknown) => e,
+          );
+          expect(String(refused)).toContain("refused-cut-tail-resume-refused");
+          expect(String(refused)).toContain(`"refusedCutTail": ${first}`);
+          expect(String(refused)).toContain(
+            `was recorded with alRunnerV3.refusedCutTail ${first ? "on" : "off"}, and this session has it ${second ? "on" : "off"}.`,
+          );
+          expect(String(refused)).not.toContain("the default");
+        }
+        const resumed = await v3Session(root, store, mk(first), { resume: 1 });
+        expect(resumed.resumedFrom?.runId).toBe(1);
+      });
+    }
   });
 
   test("PR-256: stopGroups goes in the lending build, the fingerprint and the report; off, none moves", async () => {

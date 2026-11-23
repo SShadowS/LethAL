@@ -135,3 +135,39 @@ first quiet speed reference. Otherwise the BLOCKs are the finding, and the orche
   an extra test, the field absent.
 - **What it becomes:** the c4 result reports the caveat's figures and the not-run list beside the verdict claims. A survivor
   count or score quoted from c4 always carries the sentence.
+
+## Amendment 3 (2026-11-23, before the run): the head now carries PR-347, PR-387 and PR-392
+- **Why (the orchestrator):** master 8c7fa7dc5 holds PR-381, PR-387, PR-347 (`refusedCutTail` ON by default, dddd4e4ad)
+  and PR-392. The section "What changed since c3" requires an amendment naming PR-347's moves before the run. The kit
+  files are `/coord/handoff/PR-379/amend3/`.
+- **PR-347, the moves, by site key** (`amend3/allowed-moves.tsv`, read by `compare.py --allowed-moves`):
+  - c3's cut errors are 838 in codeunit 68975, 662 in 68984 and 54 in 68874 (c3's notes, "baseline-refused-cut").
+    PR-365 keeps 68975's and 68984's refusals, which are the 1,504 of claims 1-2. So the tail route reaches only **68874's
+    54**, as PR-347's spec states. Nothing else on DO.
+  - **Each of the 54 moves from `error` to the verdict and killing test of PR-344's arm A.** Arm A ran on master 8847f29c8
+    (PR-365's merge) with the flag on and the same binary: 47 survived and 7 killed. They are listed by name. Their BC
+    check in both directions (`/coord/handoff/PR-347/bc68874/`) reads 9 false survivors and 6 not judgeable. That is
+    PR-381's caveat case (their BC killer is a test v3 did not run at baseline), so this run reports them rather than
+    blocks on them.
+  - A new check, `amend3/check-tail.py` (rc 0 OK, 1 BLOCK), requires each of the 54 to equal arm A's verdict AND killing
+    test in c4. Any of the 54 that differs is a BLOCK, named.
+    - Self-test: arm A's report passes 54 of 54; c3's blocks all 54.
+  - Claim 1 now reads "no move outside the 1,504 and these 54".
+- **The not-run list is c3's 237, unchanged. This corrects amendment 2's 236.**
+  - Arm A, on PR-365's merge with the flag on, refuses exactly c3's 237 at baseline, `U_ChainThroughTwoCompositeKeys`
+    included: it is still refused, as a cascade after a RelationFieldNo refusal whose reach is not known.
+  - Amendment 2 read PR-365's "red on both" as a baseline fact. It came from PR-365's keep check, which ran the codeunit on
+    its own, not the whole-suite baseline.
+  - So prediction 9 becomes **237 tests** (`amend3/c4-notrun-predicted.txt`, the same names as c3).
+  - The flag does not change the baseline list: arm A ran with it on.
+- **The caveat, prediction 10, restated:** `notRunTests` **237**. `survivors` **8618 + S**, where S now counts the survivors
+  among the 1,504 AND the 54 (c3 has none among either). The 47 survivors arm A gives the 54 are predicted inside S.
+  `sharingACodeunit` is reported as before. `headline-check.ts` reads the amendment-3 list and counts S that way. Its
+  self-test, re-run on master 8c7fa7dc5's own `notRunSurvivors`, `notRunSentence` and `renderConsole`, passes the good
+  case and blocks each planted fault (`amend3/selftest.txt`).
+- **PR-387 (bcdev):** no v3 effect. It fills `notRunAtBaseline` on bcdev, and adds a bcdev wording that `notRunSentence`
+  uses only for `backend: "bcdev"`. c4's v3 sentence is unchanged, and claim 11's literal opening stands.
+- **PR-392:** no effect. Snapshots now carry `payload_format` 2, and an older one is not reused. c4 uses a fresh store, so
+  it reuses no snapshot.
+- **The order after the run:** `compare.py <c4> --allowed-moves amend3/allowed-moves.tsv`, then `amend3/check-tail.py`,
+  then `amend2/headline-check.ts`. A BLOCK in any of them is a finding.

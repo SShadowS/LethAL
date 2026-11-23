@@ -1820,7 +1820,7 @@ function toolConditionsOf(report: SessionReport): ExplainToolCondition[] {
   // PR-381: say so on an older al-runner-v3 report; never print silence.
   const unrecorded = report.mutants.filter((m) => SURVIVING_VERDICTS.has(m.verdict)).length;
   if (
-    report.backend === "al-runner-v3" &&
+    (report.backend === "al-runner-v3" || report.backend === "bcdev") &&
     report.notRunAtBaseline === undefined &&
     unrecorded > 0
   ) {

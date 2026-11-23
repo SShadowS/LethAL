@@ -186,3 +186,43 @@ If a key differs on the first run, the difference is pre-committed in an amendme
   separate knob would only add a fingerprint dimension with no measured need.
 - **NITs accepted:** about 18 un-awaited `baselinePhase(false)` calls in one test file (production awaits); PR-209's generic
   message for runs from before PR-209 (still refused); the flag message coming first on `--resume-run` (still refused).
+
+## Amendment 3 (2026-11-23, after PR-381 merged: TC under the not-run caveat; before TC's record run)
+PR-381 (merged b521dd2b7) adds `notRunAtBaseline` to every al-runner-v3 report, and the caveat `survivors-beside-unrun-tests`
+when it is non-empty and the run has survivors. TC is the only leg where that caveat fires on a refusal: T0 is refused at
+baseline in every session. Derived from the fixture and the table above:
+- **TC-off:** `notRunAtBaseline` = [`Tailcut Tests.T0_RefusedFormat`], 0 survivors, so no caveat.
+- **TC-on:** the same `notRunAtBaseline`, 1 survivor (IsSmall `N <= 3`), so the caveat with `survivors 1, notRunTests 1`.
+- **TC-alone:** `notRunAtBaseline` = [T0] (T0 is refused alone too; T4 fails alone with its own `Error`, an ordinary fail, so
+  it is not counted). 2 survivors (IsBig `N >= 5`, IsSmall `N <= 3`), so the caveat with `survivors 2, notRunTests 1`.
+- **`sharingACodeunit`** (the `[v3-refused-test-nearby]` tag hint) is recorded, not pinned: the tag's source is cleared
+  under method isolation (PR-381 amendment 2), so TC-alone may read 0.
+- **The judge gains (f),** checked after (a)-(d): each session's `notRunAtBaseline` and caveat counts as above, by name. A
+  failure prints the session's actual field and counts. TC becomes PR-381's one live exercise of the caveat on a refusal.
+- **Pack stats (PR-344):** TC-on's `tail packs sent` is predicted above 0 (4 stable tail tests in one codeunit), and is
+  quoted from the record run; it is not judged.
+- **The order:** merge (done, 6ccd98950), (f) built and red-checked, VERIFY, then TC's record run, its confirm run, the full v3
+  gate and the carry gate on the final head, and the BC legs.
+
+## Amendment 4 (2026-11-23, the first record attempt; before the record run that writes)
+- **The record was refused by R810/R849.** `current` (main-bf3a3e863) carries a per-build pin, and on a pinned build a record
+  may write only rows committed at HEAD. TC's baseline is new, so the route is R849's: a pre-committed EXPECTED file at
+  `packages/runner/itest/expected/al-runner-v3.tailcut.baseline.json`, in its own commit to master, before the run.
+- **The expected file is the table above, not a copy of a run.** `/coord/handoff/PR-347/build-expected.ts` takes each row's
+  identity (key, mutatedTextSha256, errorClass) from the itest's normalizer over TC-on's report of the refused attempt. It takes
+  every VERDICT and KILLING TEST from the pre-committed `TC_TABLE`, and STOPS on any disagreement, a missing or doubled site,
+  or a coverage-filtered row. All 10 rows agreed. The one error row (IsBig `N >= 5`) has errorClass `runner-refused`, the PR-250
+  cut's class.
+- **The refused attempt's judge passed (a1)-(f):**
+  - the cut fired in TC-off and TC-on;
+  - the stability pass read T1, T2, T3 and T5 stable and T4 unstable, with 14 tail alone calls under a mutant;
+  - the three tables as pre-committed;
+  - TC-on and TC-alone differ only at IsBig `N >= 5`;
+  - the notes;
+  - (f): TC-on 1 survivor and TC-alone 2 survivors beside T0.
+  - Recorded (not judged): `sharingACodeunit` TC-on 1, TC-alone 2, TC-off absent.
+- **A prediction miss: TC-on's pack stats read 0 packs (amendment 2 predicted above 0).** Each TC mutant is covered by exactly
+  one stable tail test (Double by T1, IsBig by T2, IsSmall by T5; T3 covers no mutant), and a pack's mates are the walked
+  mutant's other covering tail tests. So every pack set is one test, as on DO. **TC does not exercise PR-344's packing live
+  either.** Packing's live exercise needs a mutant covered by two or more stable tail tests: filed as a roadmap item, not
+  built here (a fixture change would move this table).
