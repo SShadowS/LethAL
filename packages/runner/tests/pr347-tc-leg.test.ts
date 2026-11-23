@@ -242,6 +242,9 @@ describe("PR-347 leg TC: the fixture and the wiring", () => {
     );
     expect(t4).toContain("if Logic.IsBig(5) then");
     expect(tests).toContain("Logic.IsSmall(1)");
+    // Review S2: (f)'s pinned name is the fixture's own codeunit and procedure, so a rename fails here, not only live.
+    expect(tests).toContain('codeunit 76150 "Tailcut Tests"');
+    expect(TC_NOT_RUN_TEST).toBe(`${"Tailcut Tests"}.${"T0_RefusedFormat"}`);
     for (const d of ["sandbox-tailcut", "sandbox-tailcut-tests"])
       expect(JSON.parse(read(`fixtures/${d}/app.json`)).runtime).toBe("17.0");
   });

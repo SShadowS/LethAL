@@ -897,7 +897,8 @@ const sameSet = (a: readonly string[], b: readonly string[]): boolean =>
 /**
  * TC's judge, in the pre-committed order. Returns every failure, each starting `TC:`, in order:
  * (a1) the cut fired, (a2) the tail ran, (b) the three tables per mutant, (c) TC-on equals TC-alone but for the one
- * T4-only mutant, (d) tail kills carry the note. (e), the frozen baseline, is the caller's (R332).
+ * T4-only mutant, (d) tail kills carry the note, (f) PR-381's not-run field and caveat per session. (e), the frozen
+ * baseline, is the caller's (R332). (a1) and (a2) return early; (b), (c), (d) and (f) all report together.
  * Pure, so it is red-checked offline.
  */
 export function judgeTailcutLeg(input: TcInput): readonly string[] {
@@ -974,7 +975,8 @@ export function judgeTailcutLeg(input: TcInput): readonly string[] {
           `TC: TC-on ${site.procedureName} ${site.operator} was killed without the "${TC_TAIL_NOTE} ..." note`,
         );
   }
-  // (f) PR-381's not-run field and caveat (amendment 3). `sharingACodeunit` is recorded, never judged.
+  // (f) PR-381's not-run field and caveat (amendment 3), checked even when (b)-(d) failed (only (a1) and (a2) return
+  // early). `sharingACodeunit` is recorded, never judged.
   for (const s of TC_SESSIONS) {
     const got = input.notRun[s];
     const names = got.notRunAtBaseline;
