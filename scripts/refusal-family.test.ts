@@ -1691,10 +1691,26 @@ describe("PR-375: the zip-blob family", () => {
       empty: "''",
       long: "PadStr('', 2000, 'x')",
     };
+    // PR-375 review: the text goes into exactly one statement, the one that writes or zips the entry text, and ends it
     for (const c of f.cells) {
-      const body = (c.setup ?? []).join("\n");
-      expect(body).not.toContain("<payload>");
-      expect(body).toContain(expr[c.state] ?? "?");
+      const setup = c.setup ?? [];
+      expect(setup.join("\n")).not.toContain("<payload>");
+      const e = expr[c.state] ?? "?";
+      const hits = setup.filter(
+        (s) =>
+          s.endsWith(`, ${e});`) &&
+          (s.startsWith("P.PutText(R, ") || s.startsWith("P.MakeZip(R, 2, 'a.txt', ")),
+      );
+      expect(hits).toHaveLength(1);
+    }
+  });
+
+  test("each Describe reads the Blob its scenario writes: B for 'to other blob', the read-only add, extract and close; A otherwise", () => {
+    const targetOf = (c: (typeof f.cells)[number]) => /P\.Describe\(R, (\d)\)/.exec(c.call)?.[1];
+    for (const c of f.cells) {
+      if (c.method.startsWith("IsZip")) continue;
+      const writesB = (c.setup ?? []).includes("R.B.CreateOutStream(OS);");
+      expect(targetOf(c)).toBe(writesB ? "3" : "2");
     }
   });
 
