@@ -160,3 +160,30 @@ From B's `serve-entries (R635)` line:
   - **A void arm is re-run once, at once, under its letter (A2 or B2),** and the series keeps the A-then-B order. A second
     void leaves speed INCONCLUSIVE.
 - **What follows, unchanged:** one pair records a saving; a default flip needs an interleaved series of pairs.
+
+## Amendment 3 (2026-11-23, before any arm runs; the orchestrator asked whether ec78cff18 is still the right head)
+- **The head moves to c4's.** Both arms run on the exact sha c4 (PR-379) runs on, read from `/coord/handoff/PR-379/HEAD.txt`
+  and pinned by sha in `arm.sh` before arm A starts. It must contain PR-365's merge (the RelationFieldNo keep rows) and
+  PR-347's (`refusedCutTail` on by default, master dddd4e4ad), or the driver stops.
+- **Why not ec78cff18 any more:**
+  - Amendment 2 made both arms fresh and c3 a verdict reference only, so pinning c3's head buys only the "A against c3"
+    report, which is not judged.
+  - ec78cff18 lacks PR-365's keep rows, PR-347's default tail route and PR-344's tail packing. They change exactly where
+    the stop acts: PR-365 un-cuts 68975 and 68984, so their entries now run in sequence where a stop can skip; the tail route
+    sends tails as entries of their own, which changes what a stop can skip there. A saving measured on ec78cff18 would
+    describe a product that no longer ships, and a later default flip would rest on it.
+  - The A/B difference is still the flag alone: both arms share the head, the binary and every setting.
+- **The binary does not move:** `current` is still main-bf3a3e863 (sha `b3e1d255...`), both configs pin it, and the gate
+  record check (`gated-check.jq` against `gated-before-regate.json` plus `stop-groups: matches`) is unchanged.
+- **A against c4 replaces A against c3 (reported, not judged):** c4's `v4.json` equals both PR-359 configs apart from
+  `cacheDir` and `stopGroups` (checked with `jq`), on the same head and binary, both on a quiet box. So arm A is a
+  replicate of c4:
+  - verdicts and `killingTest` per mutant are expected equal; any difference is named and filed as a nondeterminism
+    finding (it does not block B's claim);
+  - **A's mutant-phase wall against c4's is reported as one measured run-to-run spread** on this box, the noise the
+    speed reading above says is not known. It is a figure, not a rule: S1 and S2 stay B over A.
+- **A against c3 is still reported** (different heads now): expected differences are PR-365's and PR-347's moves; it is
+  not judged.
+- **Driver changes (`arm.sh`, no run):** `want_head` is read from c4's `HEAD.txt` (the driver stops if the file is missing,
+  empty, not a full sha, or lacks PR-365's or PR-347's merge); the worktree `/work/lethal-wt/pr359` is made at that sha; c3's
+  own head check stays (c3 is still read as a verdict reference); c4's report must exist before arm A (c4 runs first).
