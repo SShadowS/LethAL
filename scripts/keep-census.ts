@@ -17,6 +17,7 @@
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isV3RefusalText } from "../packages/runner/src/al-runner-rows";
+import { mergeChildEnv, v3ChildEnv } from "../packages/runner/src/al-runner-v3-seed";
 import {
   type Cell,
   type CellResult,
@@ -350,7 +351,7 @@ class Daemon {
         stdin: "pipe",
         stdout: "pipe",
         stderr: "ignore",
-        env: { ...process.env, ALRUNNER_SEED: "1" } as Record<string, string>,
+        env: mergeChildEnv(v3ChildEnv()), // PR-360: LethAL's own pins (seed, replay off), not the shell's
       },
     );
     this.pid = this.proc.pid;
@@ -574,7 +575,7 @@ function oneShot(
       cwd,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ALRUNNER_SEED: "1" },
+      env: mergeChildEnv(v3ChildEnv()), // PR-360
       timeout: 900_000,
     },
   );
