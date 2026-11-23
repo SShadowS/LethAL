@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   BASE_ID,
   BC_UNAVAILABLE_TABLES,
@@ -1776,6 +1778,14 @@ describe("PR-375: the zip-blob family", () => {
 describe("PR-377: every family runs on one exact BC build", () => {
   test("the build is four numbers (a bare major version resolves to a build whose .NET runtime al-runner fetches)", () => {
     expect(REFUSAL_FAMILY_BC_VERSION).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+  });
+
+  // PR-377 review: keep-census builds its own al-runner commands from the families; neither script may pass a bare major version
+  test("no script that runs the families passes a literal --bc-version of its own", () => {
+    for (const file of ["refusal-family.ts", "keep-census.ts"]) {
+      const src = readFileSync(join(import.meta.dir, file), "utf8");
+      expect(src).not.toMatch(/"--bc-version",\s*"\d/);
+    }
   });
 
   test("each family's run carries exactly one --bc-version, the exact build, and its own args after it", () => {
