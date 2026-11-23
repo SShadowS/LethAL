@@ -858,7 +858,28 @@ export interface TcInput {
   readonly tailNotices: readonly string[];
   /** What T0 showed in TC-off and TC-on: the refused tests and the `baseline-refused-cut` notice, printed on (a1). */
   readonly t0Evidence: { readonly off: string; readonly on: string };
+  /** Each session's report: `notRunAtBaseline` and `survivorsBesideUnrunTests` (PR-381), judged by (f). */
+  readonly notRun: Readonly<
+    Record<
+      TcSession,
+      {
+        readonly notRunAtBaseline: readonly string[] | undefined;
+        readonly caveat: { readonly survivors: number; readonly notRunTests: number } | undefined;
+      }
+    >
+  >;
 }
+
+/** (f): T0, qualified as the report names it, is the one test not run at baseline in every session. */
+export const TC_NOT_RUN_TEST = "Tailcut Tests.T0_RefusedFormat";
+/** (f): the caveat's counts per session; TC-off has none (no survivor). */
+export const TC_CAVEAT: Readonly<
+  Record<TcSession, { readonly survivors: number; readonly notRunTests: number } | undefined>
+> = {
+  "TC-off": undefined,
+  "TC-on": { survivors: 1, notRunTests: 1 },
+  "TC-alone": { survivors: 2, notRunTests: 1 },
+};
 
 /** The names after `<label>: ` up to `;` or the end of the list, from the stability notice (`none` is empty). */
 function tcNoticeList(notice: string, label: "stable" | "unstable"): string[] | undefined {
@@ -952,6 +973,25 @@ export function judgeTailcutLeg(input: TcInput): readonly string[] {
         fails.push(
           `TC: TC-on ${site.procedureName} ${site.operator} was killed without the "${TC_TAIL_NOTE} ..." note`,
         );
+  }
+  // (f) PR-381's not-run field and caveat (amendment 3). `sharingACodeunit` is recorded, never judged.
+  for (const s of TC_SESSIONS) {
+    const got = input.notRun[s];
+    const names = got.notRunAtBaseline;
+    if (names === undefined || names.length !== 1 || names[0] !== TC_NOT_RUN_TEST)
+      fails.push(
+        `TC: ${s} notRunAtBaseline is ${names === undefined ? "absent" : JSON.stringify(names)}, pre-committed exactly ["${TC_NOT_RUN_TEST}"]`,
+      );
+    const want = TC_CAVEAT[s];
+    const c = got.caveat;
+    const ok =
+      want === undefined
+        ? c === undefined
+        : c !== undefined && c.survivors === want.survivors && c.notRunTests === want.notRunTests;
+    if (!ok)
+      fails.push(
+        `TC: ${s} survivors-beside-unrun-tests is ${c === undefined ? "absent" : `survivors ${c.survivors}, notRunTests ${c.notRunTests}`}, pre-committed ${want === undefined ? "absent" : `survivors ${want.survivors}, notRunTests ${want.notRunTests}`}`,
+      );
   }
   return fails;
 }

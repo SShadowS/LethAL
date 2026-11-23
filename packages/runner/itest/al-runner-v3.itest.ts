@@ -2011,7 +2011,31 @@ async function legTC(scratch: string): Promise<SessionReport> {
   const alone = await run("TC-alone");
   const t0Evidence = (s: { r: SessionReport; t0Notices: string[] }): string =>
     `refused at baseline: ${s.r.unsupportedTests.join(", ") || "none"}; ${s.t0Notices.join(" | ") || "no baseline-refused-cut notice"}`;
+  // Recorded, never judged (amendment 3): TC-on's pack stats (PR-344) and each session's `sharingACodeunit`.
+  const packs = on.b.refusedCutTailStats();
+  console.log(
+    `  TC recorded: TC-on pack stats packs ${packs.packs}, failedPacks ${packs.failedPacks}, servedFromPack ${packs.servedFromPack}`,
+  );
+  for (const [name, s] of [
+    ["TC-off", off],
+    ["TC-on", on],
+    ["TC-alone", alone],
+  ] as const)
+    console.log(
+      `  TC recorded: ${name} sharingACodeunit ${s.r.survivorsBesideUnrunTests?.sharingACodeunit ?? "absent"}`,
+    );
+  const notRunOf = (s: { r: SessionReport }) => ({
+    notRunAtBaseline: s.r.notRunAtBaseline,
+    caveat:
+      s.r.survivorsBesideUnrunTests === undefined
+        ? undefined
+        : {
+            survivors: s.r.survivorsBesideUnrunTests.survivors,
+            notRunTests: s.r.survivorsBesideUnrunTests.notRunTests,
+          },
+  });
   const fails = judgeTailcutLeg({
+    notRun: { "TC-off": notRunOf(off), "TC-on": notRunOf(on), "TC-alone": notRunOf(alone) },
     rows: { "TC-off": off.r.mutants, "TC-on": on.r.mutants, "TC-alone": alone.r.mutants },
     cutEntries: {
       off: off.b.entriesStats().refusedCutEntries,

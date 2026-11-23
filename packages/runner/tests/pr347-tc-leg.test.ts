@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  TC_NOT_RUN_TEST,
   TC_SESSIONS,
   TC_TABLE,
   type TcInput,
@@ -42,7 +43,16 @@ const green = (): TcInput => ({
   tailCalls: { stability: 5, mutant: 6 },
   tailNotices: [STABILITY],
   t0Evidence: { off: "T0_RefusedFormat off", on: "T0_RefusedFormat on" },
+  notRun: {
+    "TC-off": { notRunAtBaseline: [TC_NOT_RUN_TEST], caveat: undefined },
+    "TC-on": { notRunAtBaseline: [TC_NOT_RUN_TEST], caveat: { survivors: 1, notRunTests: 1 } },
+    "TC-alone": { notRunAtBaseline: [TC_NOT_RUN_TEST], caveat: { survivors: 2, notRunTests: 1 } },
+  },
 });
+const withNotRun = (s: TcSession, patch: Partial<TcInput["notRun"][TcSession]>): TcInput => {
+  const g = green();
+  return { ...g, notRun: { ...g.notRun, [s]: { ...g.notRun[s], ...patch } } };
+};
 const edited = (s: TcSession, edit: (r: TcRow & { key: string }) => TcRow): TcInput => {
   const g = green();
   return { ...g, rows: { ...g.rows, [s]: rowsOf(s, edit) } };
@@ -149,6 +159,51 @@ describe("PR-347 leg TC: the judge", () => {
     const fails = judgeTailcutLeg(survived);
     expect(fails.some((f) => f.startsWith("TC: TC-on differs from TC-alone at"))).toBe(true);
     expect(judgeTailcutLeg(g)).toEqual([]);
+  });
+
+  // (f). Red: drop the `notRunAtBaseline` check (undefined, empty, extra, another name, unqualified: each a direction).
+  test("(f) notRunAtBaseline: absent, empty, extra or another name fails, per session, printing the field", () => {
+    for (const s of TC_SESSIONS) {
+      for (const bad of [
+        undefined,
+        [],
+        [TC_NOT_RUN_TEST, "Tailcut Tests.T4_SeesTheMark"],
+        ["Tailcut Tests.T4_SeesTheMark"],
+        ["T0_RefusedFormat"],
+      ]) {
+        const fails = judgeTailcutLeg(withNotRun(s, { notRunAtBaseline: bad }));
+        expect(fails).toHaveLength(1);
+        expect(fails[0]).toStartWith(`TC: ${s} notRunAtBaseline is `);
+        expect(fails[0]).toContain(bad === undefined ? "absent" : JSON.stringify(bad));
+      }
+    }
+  });
+
+  // Red: drop the caveat check; each direction: present where none is pinned, absent where one is, wrong counts.
+  test("(f) the caveat: TC-off none, TC-on 1 / 1, TC-alone 2 / 1; each wrong reading fails with its counts", () => {
+    const off = judgeTailcutLeg(withNotRun("TC-off", { caveat: { survivors: 1, notRunTests: 1 } }));
+    expect(off).toEqual([
+      expect.stringContaining(
+        "TC: TC-off survivors-beside-unrun-tests is survivors 1, notRunTests 1, pre-committed absent",
+      ),
+    ]);
+    for (const s of ["TC-on", "TC-alone"] as const) {
+      const absent = judgeTailcutLeg(withNotRun(s, { caveat: undefined }));
+      expect(absent).toEqual([
+        expect.stringContaining(`TC: ${s} survivors-beside-unrun-tests is absent`),
+      ]);
+      const want = s === "TC-on" ? 1 : 2;
+      for (const c of [
+        { survivors: want + 1, notRunTests: 1 },
+        { survivors: want, notRunTests: 2 },
+      ]) {
+        expect(judgeTailcutLeg(withNotRun(s, { caveat: c }))).toEqual([
+          expect.stringContaining(
+            `TC: ${s} survivors-beside-unrun-tests is survivors ${c.survivors}, notRunTests ${c.notRunTests}`,
+          ),
+        ]);
+      }
+    }
   });
 
   // Red: drop the (d) loop.
