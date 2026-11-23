@@ -8,11 +8,13 @@ import {
   DOTNET_EXCEPTION_RSA,
   DOTNET_NO_OBJECT,
   FAMILIES,
+  FIELDREF_CONVERT,
   FORMAT_EVALUATE,
   FORMAT_REGION,
   type Family,
   GET_URL,
   JSON_TEXT,
+  LANGUAGE_REGION,
   NO_CLIENT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
@@ -1535,10 +1537,127 @@ describe("PR-373: the format-region family", () => {
     for (const k of kinds) expect(f.support).toContain(`\n            ${k}:\n`);
   });
 
-  test("last of FAMILIES (place 23, BC-check number 24, as 7 is skipped): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("format-region");
+  test("place 23 of FAMILIES (BC-check number 24, as 7 is skipped): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(22);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051024");
+  });
+});
+
+describe("PR-374: the fieldref-convert family", () => {
+  const f = FIELDREF_CONVERT;
+  const FIELDS: Record<string, string> = {
+    "FC BigInteger": "BigInteger",
+    "FC Integer": "Integer",
+    "FC Decimal": "Decimal",
+    "FC Code": "Code[20]",
+    "FC Text": "Text[50]",
+    "FC Date": "Date",
+    "FC Boolean": "Boolean",
+    "FC Option": "Option",
+    "FC Guid": "Guid",
+  };
+
+  test("288 cells: 9 field types x 8 values x 4 methods, each combination once; distinct names", () => {
+    expect(f.cells).toHaveLength(288);
+    const keys = f.cells.map((c) => `${c.type}|${c.state}|${c.method}`);
+    expect(new Set(keys).size).toBe(288);
+    expect(new Set(f.cells.map((c) => c.type)).size).toBe(9);
+    expect(new Set(f.cells.map((c) => c.state)).size).toBe(8);
+    expect([...new Set(f.cells.map((c) => c.method))]).toEqual([
+      "SetRange",
+      "SetFilter",
+      "Value",
+      "Validate",
+    ]);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("each cell takes the field its type names: the field number's declared type in table 51000 matches", () => {
+    const decl = new Map(
+      [...f.support.matchAll(/field\((\d+); \w+; ([\w[\]]+)\)/g)].map((m) => [m[1], m[2]] as const),
+    );
+    for (const c of f.cells) {
+      const no = /^FR := RecRef\.Field\((\d+)\);$/.exec(c.setup?.[1] ?? "")?.[1];
+      expect(no).toBeDefined();
+      expect(decl.get(no ?? "")).toBe(FIELDS[c.type]);
+      expect(c.setup?.[0]).toBe("RecRef.Open(51000);");
+    }
+  });
+
+  test("the value's declaration matches its name, and the read-back follows the method", () => {
+    const declOf: Record<string, string> = {
+      "Boolean false": "V: Boolean;",
+      "Code ABC": "V: Code[20];",
+      "Code 123": "V: Code[20];",
+      "Text XY": "V: Text[30];",
+      "Integer 5": "V: Integer;",
+      "BigInteger 5": "V: BigInteger;",
+      "Decimal 1.5": "V: Decimal;",
+      Date: "V: Date;",
+    };
+    for (const c of f.cells) {
+      expect(c.vars?.[2]).toBe(declOf[c.state]);
+      const filter = c.method === "SetRange" || c.method === "SetFilter";
+      expect(
+        c.call.endsWith(
+          filter ? "Error('V:[%1]', FR.GetFilter());" : "Error('V:[%1]', Format(FR.Value, 0, 9));",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  test("no cell writes a row", () => {
+    for (const c of f.cells)
+      expect([...(c.setup ?? []), c.call].join(" ")).not.toMatch(/\.(Insert|Modify|Delete)\(/);
+  });
+
+  test("place 24 of FAMILIES (BC-check number 25): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(23);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051025");
+  });
+});
+
+describe("PR-374: the language-region family", () => {
+  const f = LANGUAGE_REGION;
+
+  test("144 cells: 11 languages x 12 regions, then the 12 regions with no language; distinct names", () => {
+    expect(f.cells).toHaveLength(144);
+    const pairs = f.cells.map((c) =>
+      /^Rep\.SetCase\((\d+), '([a-zA-Z-]+)'\);$/
+        .exec(c.setup?.[2] ?? "")
+        ?.slice(1)
+        .join("|"),
+    );
+    expect(new Set(pairs).size).toBe(144);
+    expect(f.cells.filter((c) => c.state === "no language")).toHaveLength(12);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("the holder is cleared before every run (PR-373's review), and only the no-language cells are locale", () => {
+    for (const c of f.cells) {
+      expect(c.setup?.[0]).toBe("Holder.Put('');");
+      expect(c.setup?.[3]).toBe("Rep.SaveAs('', ReportFormat::Xml, OS);");
+      expect(c.call).toBe("Error('V:[%1]', Holder.Get());");
+      expect(c.depends === "locale").toBe(c.state === "no language");
+    }
+  });
+
+  test("the report sets the language (when one is given) before the region, then formats", () => {
+    const trig = /trigger OnAfterGetRecord\(\)[\s\S]*?\n {12}end;/.exec(f.support)?.[0] ?? "";
+    expect(trig).toContain("if Lang <> 0 then\n                    CurrReport.Language := Lang;");
+    expect(trig.indexOf("CurrReport.Language")).toBeLessThan(
+      trig.indexOf("CurrReport.FormatRegion := Region;"),
+    );
+    expect(trig.indexOf("CurrReport.FormatRegion")).toBeLessThan(trig.indexOf("Answer := "));
+    expect(trig).toContain("Holder.Put(Answer);");
+  });
+
+  test("last of FAMILIES (place 25, BC-check number 26): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("language-region");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(24);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051026");
   });
 });
 
