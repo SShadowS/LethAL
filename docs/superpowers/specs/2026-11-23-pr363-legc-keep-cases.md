@@ -114,3 +114,27 @@ VERIFY (one at a time beside the timed run), Opus build review, CI. Then the ful
 with leg C's reading checked per case against amendment 1.
 - **Leg C's added wall time** (10 more daemon starts and requests) is measured and reported in the result, since every
   update gate pays it.
+
+## Amendment 1 (2026-11-23, the probe, before any v3 gate): the per-case predictions
+- **The probe:** leg C alone, through the real itest (`LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=C`), at the build's
+  WIP head 501b74e2b. That is the gate's exact path: `ALRUNNER_CACHE`, the existing request first, then each family on its
+  own fresh daemon with its subset app.
+  - It ran on current main-bf3a3e863, on CPUs 12-21 at nice 19, from 03:18:21Z to 03:19:05Z.
+  - Log: `/coord/handoff/PR-363/legc-probe.log`. Leg C: PASS (40 s).
+- **The reading:** `serve-keep-reasons = diverged | setfilter-boolean-language-words: MOVED pass`, the same one reason as
+  current's own gate.
+  - The fact's detail lists every new case that is not a refusal (MOVED, UNKEPT or unmeasurable), and it lists none.
+  - **So each of the 47 new cases read `refusal` under its own entry, and no family request gave an unkept or missing
+    row.** No cell comes out, and no case moves to the pinned list.
+- **The predictions pinned for the gate (the hard claims):**
+  - `serve-keep-reasons` reads `diverged` with exactly that one MOVED reason and no other detail;
+  - each of the 47 cases is a refusal;
+  - no unkept row; no family unmeasurable.
+- **The other leg C facts:** every one reads as in current's gate log
+  (`/work/tools/al-runner-v3/main-bf3a3e863/gate.log`). The only additions are `batch-sequential-carry` and `stop-groups`,
+  both `matches`, which come from PR-340 and PR-342 (current was gated before them), not from this change.
+- **The cost:** leg C took 40 s here, against 31 s in current's gate. That is one run each under different load, so about
+  +9 s is the size, not a measurement. The full gate run reports it again.
+- **Older manifest rows:** not re-gated by this task. A `--refresh-rows` would read `diverged` where a row reads `matches`
+  today (the old Company wording does not match `-named`), and may read `unkept` (older XML or GetUrl texts). Any refresh is
+  its own pre-commitment.
