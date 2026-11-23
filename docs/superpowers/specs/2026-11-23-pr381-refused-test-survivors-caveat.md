@@ -119,3 +119,21 @@ one `survived` or `known-survivor` row (B1), then the caveat applies to every su
 9. Each surface (banner and score line, the R844 range, explain, confirm-merge, changed-since, the Stryker description and
    `config.lethal`): the sentence present; and absent on test 3's fixture.
 - Each guard gets a red-going test in each direction.
+
+## Amendment 1 (2026-11-23, the interface for PR-386, agreed with lethal-code; during the build)
+- **The injection point:**
+  `notRunSurvivors(report, reaches?: NotRunReach)`, where
+  `NotRunReach = (test: string, mutant: Readonly<SessionReport["mutants"][number]>) => boolean | "unknown"`.
+  - `test` is the qualified name as in `v3NotRunAtBaseline`.
+  - A survivor is counted when SOME not-run test reaches it, and `"unknown"` counts as reaching, so a supplied function may
+    only over-approximate.
+  - The default is `ALWAYS_REACHES` (`() => true`): the whole-suite trigger above, so this PR's behaviour is exactly the
+    spec's.
+- **PR-386 (lethal-code), the static call-graph reach,** supplies a closure over the run's `MutantManifestEntry` list and the
+  target and test sources it parses, keyed by the full site key. It resolves objectType, the object id, triggerName,
+  procedureScope and the R318 arm names from the manifest, so a page and a codeunit with the same id never collide. A row
+  missing from its index returns `"unknown"`. objectType and the id are NOT added to report rows; this PR stays the caveat only.
+- **A consumer holding only a report.json** (no manifest, no sources) can build no PR-386 closure. It falls back to
+  `ALWAYS_REACHES`, which is safe, and is this PR's default. That is by design, not a gap.
+- **Tests:** a `reaches` returning false for every pair gives `survivors` 0 and no caveat; one returning `"unknown"` counts
+  the survivor. Both are red-checked.

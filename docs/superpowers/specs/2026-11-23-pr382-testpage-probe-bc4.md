@@ -85,3 +85,21 @@ Under the owner's standing yes ("lethal bcdev runs on DO ... including instrumen
   `1.0.0.29`, by id; doctor clean. The restored build is recorded as "the resident content at one version up", not as the
   identical package.
 - Steps 1 and 2 of amendment 1's order, and its stops, are unchanged.
+
+## Amendment 3 (2026-11-23, before the run): red on BC, or a runner that cannot host the page part?
+- **Measured under amendments 1 and 2 (`/coord/handoff/PR-382/run/result.md`):** the refused test failed unmutated on a plain
+  DO build matching the test app, with "The part with ID = 1589389838 was not found on the page." bc4 was restored to the
+  resident content at `30.0.20780.19324`.
+- **The discriminator:** `CDO Variant Setup UI Tests.U1_CreateLineFromLinesPart_LinePersisted` (codeunit 68984), NOT a
+  refused test: it opens the same card (`OpenEdit`) and drives the same `EMailTemplateLines` part. It passed at baseline in
+  c3 (al-runner). Guards checked from the source: `AutoRollback`, no Commit, no company created or deleted.
+- **The run:** one lease, doctor before. One `bcdev_test_run` call on bc4's restored build with both methods: U1 and the
+  refused `U_FieldPickerHopIntoAnUnpinnableKey_TakesTheValueTyped`, so both read the same build in the same session kind. No
+  publish. No mutant is active: doctor shows no control operation in flight, and LethAL clears the active row at teardown
+  (the control API has no reader for `LC Mutation Active`; this stands in for the read by id, as before).
+- **The reading:**
+  - **U1 passes, the refused test fails as before:** the runner hosts that part; the refused test is red on BC as built.
+  - **U1 fails with the same "part ... not found":** the runner's session cannot host that page part for any test; the
+    refused test's result says nothing about the test itself (R1170's client-session work).
+  - **U1 fails otherwise, or the refused test now passes:** stop and report the texts.
+- Doctor after; released only when healthy; the stops of amendment 1 apply.
