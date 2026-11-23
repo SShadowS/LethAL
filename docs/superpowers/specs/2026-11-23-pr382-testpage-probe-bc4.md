@@ -37,3 +37,38 @@ refused-test check to PR-365's kept codeunits before anything is reported from t
 - A lease on bc4 for every server call (standing yes for probes); doctor before and after; released only when healthy.
 - Apps read by id only (R433). No source text leaves /coord; names and counts only.
 - Not a measurement: a static reach argument (option (c)).
+
+## Step 1's first run (2026-11-23 11:39-11:40Z, `/coord/handoff/PR-382/probe/result.md`): stopped
+- The dev runner DID execute the TestPage test, and it FAILED unmutated: "The part with ID = 1589389838 was not found on the
+  page." (at `OpenCardOnFirstLine`). By the rule above: stop. Step 2 was not started.
+- A deviation: "no op in flight" was read from doctor, not `LC Mutation Active` by id (see amendment 1 on why that read is
+  not needed for a plain build).
+
+## Amendment 1 (2026-11-23, before any publish): a plain DO build on bc4, step 1 again, then an exact restore
+Under the owner's standing yes ("lethal bcdev runs on DO ... including instrumenting and then restoring DO", on a leased BC).
+- **bc4's present state, read by app id under a lease (11:42-11:44Z, doctor ok before and after; `/coord/handoff/PR-382/amend/`):**
+  DO `30.0.20780.19322` (a version LethAL minted: an instrumented build left by the last bcdev run), published Dev, installed;
+  DO Test `30.0.0.1`, Dev, installed; LethAL Control `1.0.0.29`. The resident DO package was downloaded as the restore copy
+  (8,655,233 bytes, sha256 `4bd73e99...`; a full package, 592 `.al` files against 589 in a plain build, so republishable).
+- **Why the first run may have failed:** the installed DO is an instrumented build, and the test app (30.0.0.1, built against
+  plain DO) did not find a page part. Unknown until measured; a plain build settles it.
+- **The probe build:** DO from `/work/src/DO/Cloud` (DO's own source, read-only; no fetch), copied to `/coord/handoff/PR-382/`,
+  with ONLY its `app.json` version changed, to `30.0.20780.19323` (one above the resident, so the publish is an upgrade and
+  not refused as a downgrade). Compiled with `alc` against bc4's symbols (PR-67's `cache-bc4`). No LethAL instrumentation, so
+  it has no selector: no mutant can be active in it, which is why `LC Mutation Active` need not be read for this step (the
+  control API has no reader for it; reading the table by hand is not attempted).
+- **The order on bc4 (one lease for the whole sequence; doctor before):**
+  1. Publish the probe build over the dev endpoint (sync). The test app stays installed, as PR-67's 30.0.20774.41536 publish
+     showed; read both versions back by id.
+  2. Step 1 again: the same one method through `bcdev_test_run`.
+     - **Pass:** the runner executes TestPage tests on a matching build. Step 2 needs its own amendment (the mutant artifact).
+     - **Fails the same way:** the test is red on BC with a plain matching build: kills through it cannot be read on BC.
+       Take option (b) in R1187.
+     - **Fails otherwise:** stop, report the text.
+  3. **The exact restore to the present state:** unpublish the test app FIRST (unpublishing the target cascades to its
+     dependents), then unpublish the probe build, then publish the downloaded resident package (`30.0.20780.19322`), then
+     republish DO Test `30.0.0.1` (`/coord/handoff/PR-67/build/do-test-new.app`, its manifest checked: id and version match the
+     installed one). Read all three back by id; they must equal the recorded state. Doctor after.
+- **Stops:** any HTTP 401, any call over its timeout (a hang), an OutOfMemory publish refusal, or a read-back that differs:
+  stop at once, keep the lease, and file one `kraken coord ask --kind bc-restart` with the state reached. No second attempt
+  before kraken answers.
