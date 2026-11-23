@@ -4428,7 +4428,8 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
     for (const [k, v] of Object.entries(set))
       store.db.run(`UPDATE runs SET ${k} = ? WHERE id = ?`, [v, id]);
     store.db.run(
-      "INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload) SELECT ?1, batch_index, batch_hash, (SELECT test_app_hash FROM runs WHERE id = ?1), payload FROM baseline_snapshots WHERE run_id = ?2",
+      // PR-392: the format is copied too, so a clone stays a reusable snapshot.
+      "INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload, payload_format) SELECT ?1, batch_index, batch_hash, (SELECT test_app_hash FROM runs WHERE id = ?1), payload, payload_format FROM baseline_snapshots WHERE run_id = ?2",
       [id, from],
     );
     return id;

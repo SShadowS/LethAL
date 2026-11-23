@@ -711,7 +711,7 @@ CREATE TABLE IF NOT EXISTS installed_bundle_files (
  * PR-392 (R1199): the format of a `baseline_snapshots` payload. 2: its rows carry `bodyNeverRan` where the test body never
  * ran (PR-387). A row written before the column existed reads NULL and is never reused (`=` never matches NULL), so a
  * snapshot that lacks the flag cannot hide a not-run test from `notRunAtBaseline`. Bump it whenever the payload's rows
- * gain a field a reader depends on.
+ * gain a field a reader depends on. 1 was never written (the rows before this column read NULL), so never reuse 1.
  */
 export const SNAPSHOT_PAYLOAD_FORMAT = 2;
 
