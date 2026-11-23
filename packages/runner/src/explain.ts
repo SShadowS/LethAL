@@ -295,8 +295,12 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 34: PR-307 (R1168) added the caveat value `session-kind-mismatch` to `$.caveats[].caveat`. A new value, so it
  * bumps (R233); v33 is frozen.
+ *
+ * 35: PR-381 (R1197) added the caveat value `survivors-beside-unrun-tests` to `$.caveats[].caveat` and the optional
+ * `$.score.survivorsBesideUnrunTests` (three counts, copied from the report's field of the same name). New value and
+ * new paths, so it bumps (R233); v34 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 34;
+export const EXPLAIN_SCHEMA_VERSION = 35;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -400,6 +404,16 @@ export interface ExplainScore {
     readonly errors: number;
     readonly noCoverage: number;
     readonly knownSurvivors: number;
+  };
+  /**
+   * PR-381 (R1197): verbatim from `SessionReport.survivorsBesideUnrunTests`; present exactly when the report
+   * has it. The words are the `survivors-beside-unrun-tests` caveat's interpretation above: this block adds
+   * only the three counts, because the projection authors no prose of its own.
+   */
+  readonly survivorsBesideUnrunTests?: {
+    readonly survivors: number;
+    readonly notRunTests: number;
+    readonly sharingACodeunit?: number;
   };
 }
 
@@ -2039,6 +2053,9 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
         noCoverage: counts.noCoverage,
         knownSurvivors: counts.knownSurvivors,
       },
+      ...(validated.survivorsBesideUnrunTests !== undefined
+        ? { survivorsBesideUnrunTests: { ...validated.survivorsBesideUnrunTests } }
+        : {}),
     },
     caveats: validity.caveats.map((caveat) => ({
       caveat,

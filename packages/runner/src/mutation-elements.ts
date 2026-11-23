@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { SURVIVING_VERDICTS } from "./equivalence-marks";
+import { notRunLine } from "./not-run-survivors";
 import { type MutantOutcome, type SessionReport, mutantRef } from "./report";
 
 /**
@@ -87,6 +89,8 @@ export interface ElementsReport {
       readonly validity: SessionReport["validity"];
       readonly counts: SessionReport["counts"];
       readonly mutationScore: SessionReport["mutationScore"];
+      readonly v3NotRunAtBaseline?: SessionReport["v3NotRunAtBaseline"];
+      readonly survivorsBesideUnrunTests?: SessionReport["survivorsBesideUnrunTests"];
     };
   };
 }
@@ -127,9 +131,12 @@ export function describe(
     /** How the two sets name a mutant: R231's `<batchIndex>/<mutantCode>` on a v3 report. Absent:
      *  the bare code, as an archived v2 report wrote it. */
     readonly refOf?: (m: MutantOutcome) => string;
+    /** PR-381 (R1197): `notRunLine` of the report; goes onto every survivor. */
+    readonly notRunText?: string;
   },
 ): string | undefined {
   const parts: string[] = [];
+  if (ctx.notRunText !== undefined && SURVIVING_VERDICTS.has(m.verdict)) parts.push(ctx.notRunText);
   const ref = ctx.refOf?.(m) ?? m.mutantCode;
   if (ctx.unplaceable.has(ref)) {
     parts.push(
@@ -185,6 +192,12 @@ export function lossesFor(report: SessionReport): string[] {
     // reported, which is the silent-projection failure the module's own doc comment names.
     losses.push(
       `${excludedSites.siteCount} refused site(s) across ${excludedSites.fileCount} file(s) are carried as ONE \`Ignored\` entry per file, at line 1, not one per site: \`excludedSites\` records a count and no spans, because a refused site never became a mutant with a location.`,
+    );
+  }
+  const notRunText = notRunLine(report);
+  if (notRunText !== undefined) {
+    losses.push(
+      `${notRunText}: the page's score is the viewer bundle's own and carries no qualification. The text is on each survivor's description and in config.lethal (PR-381, R1197).`,
     );
   }
   losses.push(
@@ -262,6 +275,7 @@ export async function toMutationElements(
     (report.likelyEquivalentSurvivors?.byRisk ?? []).flatMap((g) => [...g.mutants]),
   );
   const refOf = (m: MutantOutcome) => mutantRef(m.batchIndex, m.mutantCode);
+  const notRunText = notRunLine(report);
 
   const byFile = new Map<string, MutantOutcome[]>();
   for (const m of report.mutants) {
@@ -288,7 +302,12 @@ export async function toMutationElements(
       mutants: mutants.map((m) => {
         const status = STATUS[m.verdict];
         if (status === undefined) unmapped.add(m.verdict);
-        const description = describe(m, { unplaceable, likelyEquivalent, refOf });
+        const description = describe(m, {
+          unplaceable,
+          likelyEquivalent,
+          refOf,
+          ...(notRunText !== undefined ? { notRunText } : {}),
+        });
         return {
           // R231: ids restart per batch, so the id is `<batchIndex>/<mutantCode>`, from the row, and
           // stays unique as the schema requires, on a v2 report as on v3.
@@ -377,6 +396,13 @@ export async function toMutationElements(
           validity: report.validity,
           counts: report.counts,
           mutationScore: report.mutationScore,
+          // PR-381 (R1197): only when the report has them.
+          ...(report.v3NotRunAtBaseline !== undefined
+            ? { v3NotRunAtBaseline: report.v3NotRunAtBaseline }
+            : {}),
+          ...(report.survivorsBesideUnrunTests !== undefined
+            ? { survivorsBesideUnrunTests: report.survivorsBesideUnrunTests }
+            : {}),
         },
       },
     },

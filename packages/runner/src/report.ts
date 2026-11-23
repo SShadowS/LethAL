@@ -28,6 +28,7 @@ import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from ".
 import type { Interpretation } from "./interpretation";
 import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
+import { notRunLine, notRunSurvivors } from "./not-run-survivors";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import {
   PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
@@ -292,7 +293,9 @@ export type Caveat =
   // PR-144: the recheck recovered at least one withheld kill.
   | "isolated-recheck-kills"
   // R1131: at least one row was not scored because its start WorkDate moved from the batch's baseline.
-  | "workdate-changed";
+  | "workdate-changed"
+  // PR-381 (R1197): survivors in an al-runner-v3 run with tests v3 did not run at baseline.
+  | "survivors-beside-unrun-tests";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -823,6 +826,24 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a wrong kill and not a wrong survivor: no verdict was taken under a moved date. Not a claim that " +
       "the baseline was wrong, and not a measure of how many rows a date move would have changed.",
     basis: "R1131",
+  },
+  "survivors-beside-unrun-tests": {
+    meaning:
+      "This is an al-runner-v3 run, and at baseline v3 did not run at least one test to a verdict: it " +
+      "refused it, it timed out or LethAL stopped it (`v3NotRunAtBaseline` names them). Such a test " +
+      "kills nothing here, and v3 has no coverage for it, so a mutant that only it would kill reads " +
+      "`survived`. Every `survived` and `known-survivor` row of the run is flagged, and the " +
+      "`survivorsBesideUnrunTests` count is an UPPER BOUND on the survivors at risk. " +
+      "`sharingACodeunit` counts the survivors that carry the `[v3-refused-test-nearby]` note, a hint " +
+      "and not a bound (omitted when coverage is off). Evidence: on one DO run, 9 of 47 survivors " +
+      "were killed on BC by a test v3 had refused at baseline. To narrow the count, run the " +
+      "survivors on BC (`lethal run --confirm-from`); a static call-graph reach that names the " +
+      "survivors a refused test can reach is planned (PR-383).",
+    entailedNegative:
+      "Not a wrong verdict, and not a claim that any one survivor is killable: no verdict moved and " +
+      "no score changed. A test that ran and failed on its own is not counted here: it is red on BC " +
+      "too.",
+    basis: "R1197",
   },
 };
 
@@ -1803,6 +1824,23 @@ export interface SessionReport {
   readonly baselineStopped?: {
     readonly tests: readonly string[];
     readonly budgetMs: number;
+  };
+  /**
+   * PR-381 (R1197): the baseline tests al-runner v3 did not run to a verdict: refused (NotRun), timed
+   * out or stopped by LethAL. Not a test that ran and failed (those are in `unsupportedTests`). Written
+   * on every al-runner-v3 report (`[]` when there are none), absent on bcdev: a v3 report without it
+   * predates it, and a reader says "not recorded in this report". Sorted qualified test names.
+   */
+  readonly v3NotRunAtBaseline?: readonly string[];
+  /**
+   * PR-381 (R1197): present when `v3NotRunAtBaseline` is non-empty and the run has a `survived` or
+   * `known-survivor` row (caveat `survivors-beside-unrun-tests`); see `notRunSurvivors`. An upper bound
+   * on the survivors at risk. `sharingACodeunit` is absent when coverage is off.
+   */
+  readonly survivorsBesideUnrunTests?: {
+    readonly survivors: number;
+    readonly notRunTests: number;
+    readonly sharingACodeunit?: number;
   };
   /**
    * R72: KILLED mutants whose site carries a recognised platform kill mechanism, or (R1121) whose
@@ -3466,6 +3504,15 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     caveats.push("al-runner-v3-serve-default-fallback-warmup");
   // R907 - see CAVEAT_INTERPRETATIONS["al-runner-v3-coverage-off"].
   if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
+  // PR-381 (R1197) - see CAVEAT_INTERPRETATIONS["survivors-beside-unrun-tests"]. After the coverage-off
+  // push above: the count's hint part reads it.
+  const notRun = notRunSurvivors({
+    backend: input.caps.kind,
+    v3NotRunAtBaseline: input.v3NotRunAtBaseline,
+    mutants,
+    validity: { caveats },
+  });
+  if (notRun !== undefined) caveats.push("survivors-beside-unrun-tests");
   // R912 - see CAVEAT_INTERPRETATIONS["time-budget-reached"].
   if (input.timeBudget !== undefined) caveats.push("time-budget-reached");
   // R1049 - see CAVEAT_INTERPRETATIONS["nondebuggable-no-coverage"]. The flag is a SITE property
@@ -3798,6 +3845,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         }
       : {}),
     ...(input.baselineStopped !== undefined ? { baselineStopped: input.baselineStopped } : {}),
+    ...(input.caps.kind === "al-runner-v3" ? { v3NotRunAtBaseline: input.v3NotRunAtBaseline } : {}),
+    ...(notRun !== undefined ? { survivorsBesideUnrunTests: notRun } : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
     ...(restrictiveDefault !== undefined ? { restrictiveDefault } : {}),
     ...(sessionKind !== undefined && sessionKind.tests.length > 0
@@ -4075,6 +4124,16 @@ export function renderConsole(r: SessionReport): string {
       `timeout-killed ${r.counts.timeoutKilled}, known-survivor ${r.counts.knownSurvivors}, ` +
       `error ${r.counts.errors} [unstable ${r.counts.unstable}${errorBreakdown(r)}])`,
   );
+  // PR-381 (R1197): beside the score, so a survivor count is never read without it. The same text
+  // follows the range and the withheld line below, which also speak of the score.
+  const notRunText = notRunLine(r);
+  if (notRunText !== undefined) {
+    lines.push(
+      r.survivorsBesideUnrunTests !== undefined
+        ? `${notRunText} (validity.caveats "survivors-beside-unrun-tests", R1197)`
+        : notRunText,
+    );
+  }
   // R844: the `error` rows are outside the score; say how far it could move had they run.
   // N is `counts.errors`, which already holds the deadline-exceeded and unstable rows, exactly the
   // rows `mutationScore` leaves out. With nothing scored (denominator 0) the range is 0% to 100%.
@@ -4088,7 +4147,7 @@ export function renderConsole(r: SessionReport): string {
         ? ` (${r.counts.deadlineExceeded} deadline-exceeded and ${r.counts.unstable} unstable are among them)`
         : "";
     lines.push(
-      `${n} mutant(s) errored${inside} and are not in the score; had they run, it would read ${pct(kills / (denom + n))} to ${pct((kills + n) / (denom + n))}.`,
+      `${n} mutant(s) errored${inside} and are not in the score; had they run, it would read ${pct(kills / (denom + n))} to ${pct((kills + n) / (denom + n))}.${notRunText !== undefined ? ` Its survivors: ${notRunText}.` : ""}`,
     );
   }
   // R1108: error rows whose covering test failed, but v3 withheld the failure. A lower bound.
@@ -4099,7 +4158,7 @@ export function renderConsole(r: SessionReport): string {
         ? ' Isolation "auto" scores most of them (R1102).'
         : ' They are in codeunits isolation "auto" kept on "test"; "method" runs them one test per session (R1102, #8218).';
     lines.push(
-      `at least ${withheld} of the ${r.counts.errors} error mutant(s) are withheld kills: a covering test failed under the mutant, but al-runner v3 did not trust the failure after an earlier test of its codeunit was refused, failed or ran out of time. The score leaves them out (validity.caveats "withheld-kills").${remedy}`,
+      `at least ${withheld} of the ${r.counts.errors} error mutant(s) are withheld kills: a covering test failed under the mutant, but al-runner v3 did not trust the failure after an earlier test of its codeunit was refused, failed or ran out of time. The score leaves them out (validity.caveats "withheld-kills").${remedy}${notRunText !== undefined ? ` The score's survivors: ${notRunText}.` : ""}`,
     );
   }
   // R1131: rows not scored because the start WorkDate moved from the batch's baseline (ruling A).

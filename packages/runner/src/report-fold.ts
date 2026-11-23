@@ -1,4 +1,5 @@
 import { compareCodeUnits } from "@lethal/schemata";
+import { isV3RefusalText } from "./al-runner-rows";
 import type { BackendCapabilities, TestMethodRef } from "./backend";
 import type { ConfirmGiven, ConfirmRecord } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
@@ -211,6 +212,13 @@ export interface FoldedReport {
   };
   /** R658: baseline verdicts classified `baseline-test-stopped`; see `SessionReport.baselineStopped`. */
   readonly baselineStopped?: { readonly tests: readonly string[]; readonly budgetMs: number };
+  /**
+   * PR-381 (R1197): baseline rows v3 did not run to a verdict: refused (a `NotRun: out-of-scope:` row),
+   * timed out, or stopped by us. Not a test that ran and failed. Always present here, sorted; the
+   * builder writes it to the report only for an al-runner-v3 run. A reused baseline snapshot emits the
+   * same `baseline-batch-finished`, so a resumed run's carried batches are counted too.
+   */
+  readonly v3NotRunAtBaseline: readonly string[];
   readonly runnerDisagreementTests?: readonly string[];
   /** R403 phase C: from the `tests-discovered` event, each only when non-empty. */
   readonly testBuildSymbols?: readonly string[];
@@ -414,6 +422,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // PR-307: the event is emitted once per session; the last one wins
   let sessionKindSensitive: FoldedReport["sessionKindSensitive"];
   const baselineStoppedTests = new Set<string>();
+  const v3NotRunTests = new Set<string>(); // PR-381
   let stoppedBudgetMs: number | undefined;
   // R1131: the first batch's baseline start WorkDate (ponytail: a later batch on another date, after midnight,
   // is not recorded here; its rows carry `workdate-changed` only if a batch's own answers moved).
@@ -597,6 +606,15 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             testPageRefusedTests.add(v.name);
           }
           if (v.classification.includes("baseline-test-stopped")) baselineStoppedTests.add(v.name);
+          // PR-381: refused (v3's NotRun text), timed out, or stopped. A fail or an error of the
+          // test's own is not here: it is red on BC too.
+          if (
+            v.outcome === "timeout" ||
+            v.classification.includes("baseline-test-stopped") ||
+            isV3RefusalText(v.failureMessage)
+          ) {
+            v3NotRunTests.add(v.name);
+          }
           if (v.durationMs !== undefined) {
             baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
@@ -1037,6 +1055,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         }
       : {}),
     ...(sessionKindSensitive !== undefined ? { sessionKindSensitive } : {}),
+    v3NotRunAtBaseline: [...v3NotRunTests].sort(),
     ...(baselineStoppedTests.size > 0
       ? {
           baselineStopped: {

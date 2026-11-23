@@ -94,7 +94,8 @@
               "nondebuggable-no-coverage",
               "withheld-kills",
               "isolated-recheck-kills",
-              "workdate-changed"
+              "workdate-changed",
+              "survivors-beside-unrun-tests"
             ]
           }
         },
@@ -1247,6 +1248,31 @@
           }
         },
         "budgetMs": {
+          "type": "number"
+        }
+      }
+    },
+    "v3NotRunAtBaseline": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "survivorsBesideUnrunTests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "survivors",
+        "notRunTests"
+      ],
+      "properties": {
+        "survivors": {
+          "type": "number"
+        },
+        "notRunTests": {
+          "type": "number"
+        },
+        "sharingACodeunit": {
           "type": "number"
         }
       }

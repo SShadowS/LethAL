@@ -1314,6 +1314,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "totals",
         "v3Sha256",
       ],
+      // PR-381 (R1197): v2 added the optional `totals.survivorsBesideUnrunTests`; the required set is v1's.
+      "confirmation-v2.schema.json": [
+        "confirmationVersion",
+        "dependencySourceSha256",
+        "flags",
+        "kind",
+        "mutants",
+        "sample",
+        "seed",
+        "totals",
+        "v3Sha256",
+      ],
       "doctor-v1.schema.json": ["checks", "doctorSchemaVersion", "notChecked", "ok"],
       "explain-v4.schema.json": [
         "caveats",
@@ -1541,6 +1553,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "toolConditions",
       ],
       "explain-v23.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v35.schema.json": [
         "caveats",
         "contract",
         "derivedFromReportSchemaVersion",
@@ -1894,6 +1918,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "withheld-kills",
         "isolated-recheck-kills",
         "workdate-changed",
+        "survivors-beside-unrun-tests",
       ],
       "#/properties/survivorSelection/properties/rankedBy": ["report-order", "actionability"],
       "#/properties/survivors/items/properties/attribution": [
@@ -2049,6 +2074,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v33.schema.json")).toEqual(required("explain-v32.schema.json"));
     // PR-307's v34 added a caveat value, not a required field.
     expect(required("explain-v34.schema.json")).toEqual(required("explain-v33.schema.json"));
+    // PR-381's v35 added a caveat value and an optional `score` block, not a required field.
+    expect(required("explain-v35.schema.json")).toEqual(required("explain-v34.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",
