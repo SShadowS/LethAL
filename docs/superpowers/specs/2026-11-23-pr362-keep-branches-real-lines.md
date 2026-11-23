@@ -53,6 +53,15 @@ entry's own kept-vs-fresh measurement.
 - Let the helper split a lookahead: test 3 goes red.
 - Plant `Continia` in a line: test 4 goes red.
 
+## Amendment 1 (the build, 2026-11-23): groups INSIDE a lookahead are not branches either
+- The measured 154 included 35 false branches. The helper split the `(?:panic|timeout|...)` group that sits inside the
+  negative lookahead of `cascade`, `onrun-failed`, `dotnet-exception`, `dotnet-assembly` and `cascade-manual-binding`.
+  Each was "proven" by any line, which proves nothing.
+- **As built,** the helper skips every group with a lookahead around it, as this spec meant. Test 3 pins it, with a red
+  check.
+- **The counts become 119 branches: 116 proven, the same 3 unproven.** The fixture is byte-identical to
+  `/coord/handoff/PR-362/fixture.json`, except for the one payment-reference value.
+
 ## Checks
 VERIFY full (one at a time beside the timed run), Opus review, CI. There are 0 moves: no `src` change. selectLegs decides
 the gates.
