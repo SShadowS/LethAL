@@ -170,7 +170,9 @@ const UNJUDGED: ReadonlyMap<string, string> = new Map([
   ...word(
     "needs-dependency-or-baseapp",
     `denial-read-system-table denial-read-system-table-writes denial-read-flowfield-system-table
-     denial-modify-missing-row saveas-layout-statement saveas-layout-sales-invoice company-open-subscriber-writes`,
+     denial-modify-missing-row saveas-layout-statement saveas-layout-sales-invoice company-open-subscriber-writes
+     relation-field-no-dimension-set-entry-dimension-code relation-field-no-sales-invoice-header-ship-to-post-code
+     relation-field-no-sales-invoice-header-dimension-set-id`,
   ),
   // produced one-shot only: in serve the cell refuses with a text no entry keeps (also two of R1153's 12)
   ...word("serve-text-unkept", "geturl-company-characters geturl-object-type-or-arguments"),
@@ -203,7 +205,7 @@ describe("PR-363: every keep entry is judged by a case or pinned with its reason
   // Red: add a key to V3_SERVE_SAFE_REFUSALS (or drop a name from UNJUDGED): the three sets no longer cover it.
   test("SERVE_CASES, the 47 new cases and the pinned map are exactly the keep list, with no overlap", () => {
     const pinned = new Set(UNJUDGED.keys());
-    expect(UNJUDGED.size).toBe(69); // a name listed twice would collapse in the Map and fall short
+    expect(UNJUDGED.size).toBe(72); // PR-365: +3 RelationFieldNo rows (BaseApp tables) // a name listed twice would collapse in the Map and fall short
     for (const e of fresh) expect(old.has(e)).toBe(false);
     for (const e of pinned) expect(old.has(e) || fresh.has(e)).toBe(false);
     expect([...old, ...fresh, ...pinned].sort()).toEqual([...all].sort());

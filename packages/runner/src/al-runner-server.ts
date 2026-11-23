@@ -1247,8 +1247,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // PR-365 (spec 2026-11-23-pr365-relationfieldno-keep.md, R1187): upstream 1bea5bc7a's refusal of Field.RelationFieldNo for a
   // TableRelation without a field of an unmeasured shape, refused at BASELINE in 7 DO test runs. Unkept, PR-250 cut each
   // codeunit's entry before it, leaving 1,504 of c3's mutants `error`. One exact row per measured (field, table) pair, BaseApp
-  // names; no slot, so a fourth pair or a reworded text still closes. NOT LANDED until the kept-vs-fresh DO check (Plans A, B, C
-  // of the spec) passes.
+  // names; no slot, so a fourth pair or a reworded text still closes. Landed on the orchestrator's ruling of 2026-11-23 after the
+  // kept-vs-fresh DO check: A and B equal; C's 10 differences each `error` from 1bea5bc7a's out-of-scope withholding.
   [
     "relation-field-no-dimension-set-entry-dimension-code",
     "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Code' of table 'Dimension Set Entry', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
