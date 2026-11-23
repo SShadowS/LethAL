@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ownTimeout } from "@lethal/engine/own-timeout";
-import { printAlTree, printTestDir, printWalkedSync } from "../src/baseline-snapshot";
+import { printAlTree, printTestDir, printWalkedSync, printsOnThisThread } from "../src/baseline-snapshot";
 import { ProjectSymlinkRefusedError } from "../src/walk";
 
 const roots: string[] = [];
@@ -23,23 +23,23 @@ const tree = async (files: Record<string, string>): Promise<string> => {
 };
 
 describe("PR-292: the bound print in a worker", () => {
-  test("1: the JS thread stays free while a large tree is printed (a 1 ms interval keeps ticking)", async () => {
-    // About 48 MB of .al: the synchronous print took tens of ms here and ticked 0 times.
-    const big = "codeunit 50100 Big { }\n".repeat(50_000);
-    const files: Record<string, string> = {};
-    for (let i = 0; i < 40; i++) files[`src/F${i}.Codeunit.al`] = big;
-    const dir = await tree(files);
-    let ticks = 0;
-    const timer = setInterval(() => {
-      ticks += 1;
-    }, 1);
-    try {
-      await printAlTree(dir);
-    } finally {
-      clearInterval(timer);
-    }
-    expect(ticks).toBeGreaterThanOrEqual(5); // spec §3 test 1; the synchronous print ticked 0
-  }, 60_000);
+  // PR-380: this test counted a 1 ms interval's ticks during a 48 MB print and fell short on a loaded CI runner (master
+  // 8847f29c8). It now counts where the print RAN, with no clock: the worker has its own module copy, so a print done
+  // there leaves this thread's count unchanged, and a print on this thread (the synchronous one) moves it.
+  test("1: the JS thread stays free: both prints run in the worker, none on this thread (a call count, not a clock)", async () => {
+    const dir = await tree({
+      "Logic.Codeunit.al": "codeunit 50100 Logic { }",
+      "sub/More.Codeunit.al": "codeunit 50101 More { }",
+    });
+    const before = printsOnThisThread();
+    const tree1 = await printAlTree(dir);
+    const tests1 = await printTestDir(dir);
+    expect(printsOnThisThread()).toBe(before);
+    // Control: the count does count on this thread, and the worker's answers are the real prints.
+    expect(tree1).toBe(printWalkedSync(dir, "refuse", true));
+    expect(tests1).toBe(printWalkedSync(dir, "refuse", false));
+    expect(printsOnThisThread()).toBe(before + 2);
+  });
 
   test("2: the worker's prints equal the inline computation, the root control file left out of the tree print only", async () => {
     const dir = await tree({

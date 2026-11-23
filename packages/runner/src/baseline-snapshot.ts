@@ -247,7 +247,15 @@ async function hashAlFiles(
  * PR-259: the bound print alone, under `hashWalked`'s walk and link refusal (no SHA-256). Synchronous: PR-292 runs it in
  * a worker thread (`bound-print-worker.ts`) for the per-send checks, and it is exported for that worker and the tests.
  */
+/**
+ * PR-380: how many bound prints ran on THIS thread. A worker loads its own copy of this module, so a print done in the pool
+ * never moves the main thread's count: the proof that the print leaves the JS thread free, with no clock in it.
+ */
+let printsHere = 0;
+export const printsOnThisThread = (): number => printsHere;
+
 export function printWalkedSync(dir: string, links: LinkPolicy, skipRootControl: boolean): string {
+  printsHere += 1;
   const walk = walkFilesSync(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
   // One file in memory at a time, as `hashAlFiles` reads (DO's tree is 69 MB, per send, per lane).
