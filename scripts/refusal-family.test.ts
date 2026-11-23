@@ -1596,8 +1596,20 @@ describe("PR-374: the fieldref-convert family", () => {
       "Decimal 1.5": "V: Decimal;",
       Date: "V: Date;",
     };
+    // PR-374 review: the statement that sets the value is checked too, so two swapped values cannot pass
+    const setOf: Record<string, string> = {
+      "Boolean false": "V := false;",
+      "Code ABC": "V := 'ABC';",
+      "Code 123": "V := '123';",
+      "Text XY": "V := 'XY';",
+      "Integer 5": "V := 5;",
+      "BigInteger 5": "V := 5L;",
+      "Decimal 1.5": "V := 1.5;",
+      Date: "V := DMY2Date(17, 1, 2026);",
+    };
     for (const c of f.cells) {
       expect(c.vars?.[2]).toBe(declOf[c.state]);
+      expect(c.setup?.[2]).toBe(setOf[c.state]);
       const filter = c.method === "SetRange" || c.method === "SetFilter";
       expect(
         c.call.endsWith(
