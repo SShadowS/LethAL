@@ -1,6 +1,6 @@
 // PR-241: LETHAL_V3_PACK_ENTRIES packs a lane's consecutive prefetch units into one request (A/B knob, off
 // by default). Fakes and call counters only, never a clock.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { PACK_ENTRIES_ENV, readPackEntries } from "../src/al-runner-v3-backend";
 import { type LaneSink, OrderedCommit, runScopeQueue } from "../src/parallel-queue";
 import {
@@ -284,6 +284,20 @@ describe("PR-241 validation", () => {
     expect(readPackEntries("64")).toBe(64);
     for (const bad of ["0", "-3", "1.5", "abc", "64x", " 64", "1e3"])
       expect(() => readPackEntries(bad)).toThrow(/^lethal-v3-pack-entries-refused: /);
+  });
+
+  test("PR-395 (R1200): the backend's lanes() prints no pack notice (the orchestrator says it, knowing the budget)", async () => {
+    const was = process.env[PACK_ENTRIES_ENV];
+    process.env[PACK_ENTRIES_ENV] = "64";
+    const said = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await lanesRig({ lanes: 2 });
+      expect(said.mock.calls.some((c) => String(c[0]).includes("pack-entries"))).toBe(false);
+    } finally {
+      said.mockRestore();
+      if (was === undefined) delete process.env[PACK_ENTRIES_ENV];
+      else process.env[PACK_ENTRIES_ENV] = was;
+    }
   });
 
   test("6: a bad env value refuses at construction, before any run", async () => {
