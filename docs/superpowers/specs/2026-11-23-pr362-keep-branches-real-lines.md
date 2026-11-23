@@ -53,6 +53,24 @@ entry's own kept-vs-fresh measurement.
 - Let the helper split a lookahead: test 3 goes red.
 - Plant `Continia` in a line: test 4 goes red.
 
+## Amendment 1 (the build, 2026-11-23): groups INSIDE a lookahead are not branches either
+- The measured 154 included 35 false branches. The helper split the `(?:panic|timeout|...)` group that sits inside the
+  negative lookahead of `cascade`, `onrun-failed`, `dotnet-exception`, `dotnet-assembly` and `cascade-manual-binding`.
+  Each was "proven" by any line, which proves nothing.
+- **As built,** the helper skips every group with a lookahead around it, as this spec meant. Test 3 pins it, with a red
+  check.
+- **The counts become 119 branches: 116 proven, the same 3 unproven.** The fixture is byte-identical to
+  `/coord/handoff/PR-362/fixture.json`, except for the one payment-reference value.
+
+## Amendment 2 (the Opus review, 2026-11-23: no BLOCK or SERIOUS, two LOW)
+- **Shapes the walker does not split now throw:** a quantified group (`*`, `+`, `{`, `??` after it), a capturing or named
+  alternation, and a top-level `|`, each outside a lookahead. A future entry of that shape fails loudly instead of slipping
+  past with a plausible empty or short branch set. No current entry has one (the review checked all 131). Test 3 pins each
+  shape, with a red check.
+- **An example of the over-matching limit:** in `permission-set-whole-object-type` the `store error ` line also matches the
+  `∅` branch, because the general name slot takes in the words "store error". So that `∅` branch is the whole entry under
+  another name: any line the entry accepts proves it. Both branches still have their own real line.
+
 ## Checks
 VERIFY full (one at a time beside the timed run), Opus review, CI. There are 0 moves: no `src` change. selectLegs decides
 the gates.

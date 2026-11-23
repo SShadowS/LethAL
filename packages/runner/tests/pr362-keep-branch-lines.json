@@ -1,0 +1,585 @@
+{
+  "about": "PR-362 (R1186): one REAL al-runner line per BRANCH of a serve keep entry (tests/helpers/regex-branches.ts), copied from captured rows under /coord/handoff (the `from` path), byte for byte. A branch here CAN match real output; that says nothing about over-matching. Spec: docs/superpowers/specs/2026-11-23-pr362-keep-branches-real-lines.md",
+  "proven": [
+    {
+      "branch": "company-table-read #1 IsEmpty",
+      "line": "NotRun: out-of-scope: IsEmpty on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "company-table-read #1 FindFirst",
+      "line": "NotRun: out-of-scope: FindFirst on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "company-table-read #1 FindSet",
+      "line": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      "from": "R-915/probe-out.json"
+    },
+    {
+      "branch": "company-table-read-named #1 FindSet",
+      "line": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)",
+      "from": "PR-214/kept.ndjson"
+    },
+    {
+      "branch": "api-webhook-entity #1 store error ",
+      "line": "NotRun: out-of-scope: store error API Webhook Entity: the entities of the API pages are listed by the platform and no corpus test pins them",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "api-webhook-entity #1 ∅",
+      "line": "NotRun: out-of-scope: API Webhook Entity: the entities of the API pages are listed by the platform and no corpus test pins them",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "power-bi-blob #1 IsEmpty",
+      "line": "NotRun: out-of-scope: IsEmpty on Power BI Blob: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "power-bi-blob #1 FindFirst",
+      "line": "NotRun: out-of-scope: FindFirst on Power BI Blob: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "power-bi-default-selection #1 IsEmpty",
+      "line": "NotRun: out-of-scope: IsEmpty on Power BI Default Selection: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "power-bi-default-selection #1 FindFirst",
+      "line": "NotRun: out-of-scope: FindFirst on Power BI Default Selection: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "media-read #1 store error ",
+      "line": "NotRun: out-of-scope: store error Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "media-read #1 ∅",
+      "line": "NotRun: out-of-scope: Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
+      "from": "R-940/repro-refusals/out-edge-2bd87774f.json"
+    },
+    {
+      "branch": "application-object-metadata #1 store error ",
+      "line": "NotRun: out-of-scope: store error Application Object Metadata: the Application Object Metadata row of table 'Object' (only a query's Metadata is pinned)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "application-object-metadata #1 ∅",
+      "line": "NotRun: out-of-scope: Application Object Metadata: the Application Object Metadata row of table 'Object' (only a query's Metadata is pinned)",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "permission-set-whole-object-type #1 store error ",
+      "line": "NotRun: out-of-scope: store error Permission: permission set 'All Objects': `table * = X` grants a whole object type (not listed row by row)",
+      "from": "PR-16/repros.json"
+    },
+    {
+      "branch": "permission-set-whole-object-type #1 ∅",
+      "line": "NotRun: out-of-scope: Permission: permission set 'All Objects': `table * = X` grants a whole object type (not listed row by row)",
+      "from": "PR-23/bc-check-expected/permission-denial.raw.json"
+    },
+    {
+      "branch": "fieldref-method-never-assigned #1 Active",
+      "line": "NotRun: out-of-scope: FieldRef.Active on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "from": "PR-23/bc-check-expected/untouched-handle.raw.json"
+    },
+    {
+      "branch": "fieldref-method-never-assigned #1 Caption",
+      "line": "NotRun: out-of-scope: FieldRef.Caption on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "from": "PR-23/bc-check-expected/untouched-handle.raw.json"
+    },
+    {
+      "branch": "fieldref-method-never-assigned #1 Class",
+      "line": "NotRun: out-of-scope: FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "from": "R-913/repro/run2.json"
+    },
+    {
+      "branch": "fieldref-method-never-assigned #1 SetFilter",
+      "line": "NotRun: out-of-scope: FieldRef.SetFilter on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.FieldRef_on_a_FieldRef_that_was_never_assigned.log"
+    },
+    {
+      "branch": "fieldref-method-never-assigned #1 Value",
+      "line": "NotRun: out-of-scope: FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.3-FieldRef_on_a_FieldRef_that_was_never_assigned.log"
+    },
+    {
+      "branch": "fieldref-method-never-assigned #1 EnumValueCount",
+      "line": "NotRun: out-of-scope: FieldRef.EnumValueCount on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.3-FieldRef_on_a_FieldRef_that_was_never_assigned.log"
+    },
+    {
+      "branch": "recordref-method-not-open #1 FilterGroup",
+      "line": "NotRun: out-of-scope: RecordRef.FilterGroup on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "R-928/probe-ref/out.json"
+    },
+    {
+      "branch": "recordref-method-not-open #1 Duplicate",
+      "line": "NotRun: out-of-scope: RecordRef.Duplicate on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.RecordRef_on_a_RecordRef_that_is_not_open.log"
+    },
+    {
+      "branch": "recordref-method-not-open #1 ClearMarks",
+      "line": "NotRun: out-of-scope: RecordRef.ClearMarks on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.RecordRef_on_a_RecordRef_that_is_not_open.log"
+    },
+    {
+      "branch": "recordref-method-not-open #1 KeyIndex",
+      "line": "NotRun: out-of-scope: RecordRef.KeyIndex on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.7-RecordRef_on_a_RecordRef_that_is_not_open.log"
+    },
+    {
+      "branch": "recordref-method-not-open #1 GetFilters",
+      "line": "NotRun: out-of-scope: RecordRef.GetFilters on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.7-RecordRef_on_a_RecordRef_that_is_not_open.log"
+    },
+    {
+      "branch": "recordref-method-not-open #1 FindFirst",
+      "line": "NotRun: out-of-scope: RecordRef.FindFirst on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.7-RecordRef_on_a_RecordRef_that_is_not_open.log"
+    },
+    {
+      "branch": "setfilter-not-a-number #1 a Decimal",
+      "line": "NotRun: out-of-scope: SetFilter: `*hello*` is not a Decimal",
+      "from": "R-913/repro/run6-51227.json"
+    },
+    {
+      "branch": "setfilter-not-a-number #1 an Integer",
+      "line": "NotRun: out-of-scope: SetFilter: `not an integer` is not an Integer",
+      "from": "R-915/probe-out.json"
+    },
+    {
+      "branch": "setfilter-value-expected #1 \\.\\.",
+      "line": "NotRun: out-of-scope: SetFilter: value expected after ..",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.SetFilter.log"
+    },
+    {
+      "branch": "setfilter-value-expected #1 @",
+      "line": "NotRun: out-of-scope: SetFilter: value expected after @",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.SetFilter.log"
+    },
+    {
+      "branch": "setfilter-value-expected #1 `<>`",
+      "line": "NotRun: out-of-scope: SetFilter: value expected after `<>`",
+      "from": "PR-93/census2/t10-refusals/serve.t10-refusals.10-SetFilter.log"
+    },
+    {
+      "branch": "evaluate-decimal-comparison #1 >100",
+      "line": "NotRun: out-of-scope: Evaluate of `>100` into Decimal (form not pinned by the corpus)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.Evaluate_of_100_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-comparison #1 <1000",
+      "line": "NotRun: out-of-scope: Evaluate of `<1000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.Evaluate_of_1000_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-comparison #1 <300",
+      "line": "NotRun: out-of-scope: Evaluate of `<300` into Decimal (form not pinned by the corpus)",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.2-Evaluate_of_300_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "dotnet-json-writer-start-object-in-object #1 a",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'a'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-74/census/t9-refusals/serve.t9-refusals.DotNet_raised_the_NET_exception_.log"
+    },
+    {
+      "branch": "dotnet-json-writer-start-object-in-object #1 message",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'message'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-92/e1.raw.ndjson"
+    },
+    {
+      "branch": "dotnet-json-writer-start-object-in-object #1 message\\.ccRecipients\\[0\\]",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'message.ccRecipients[0]'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-92/e1.raw.ndjson"
+    },
+    {
+      "branch": "dotnet-json-writer-start-object-in-object #1 message\\.toRecipients\\[0\\]",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'message.toRecipients[0]'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-92/e1.raw.ndjson"
+    },
+    {
+      "branch": "dotnet-json-writer-start-object-in-object #1 message\\.body\\.ccRecipients\\[0\\]\\.emailAddress",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'message.body.ccRecipients[0].emailAddress'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.10-DotNet_raised_the_NET_exception_.log"
+    },
+    {
+      "branch": "dotnet-json-writer-start-object-in-object #1 message\\.body\\.toRecipients\\[0\\]\\.emailAddress",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'message.body.toRecipients[0].emailAddress'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-159/census/y1-refusals/serve.y1-refusals.1-DotNet_raised_the_NET_exception_.log"
+    },
+    {
+      "branch": "keyref-method-never-assigned #1 FieldCount",
+      "line": "NotRun: out-of-scope: KeyRef.FieldCount on a KeyRef that was never assigned",
+      "from": "R-913/repro/run7.json"
+    },
+    {
+      "branch": "keyref-method-never-assigned #1 FieldIndex",
+      "line": "NotRun: out-of-scope: KeyRef.FieldIndex on a KeyRef that was never assigned",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.4-KeyRef_on_a_KeyRef_that_was_never_assigned.log"
+    },
+    {
+      "branch": "setfilter-date-text-no-form #1 -1M",
+      "line": "NotRun: out-of-scope: SetFilter: text filter value `-1M` for Date: no form pinned for this language (formulas and other region formats are not pinned, docs/probes-needed.md)",
+      "from": "PR-93/census2/t10-refusals/serve.t10-refusals.10-SetFilter.log"
+    },
+    {
+      "branch": "setfilter-date-text-no-form #1 -2026-09-01",
+      "line": "NotRun: out-of-scope: SetFilter: text filter value `-2026-09-01` for Date: no form pinned for this language (formulas and other region formats are not pinned, docs/probes-needed.md)",
+      "from": "PR-93/census2/t10-refusals/serve.t10-refusals.10-SetFilter.log"
+    },
+    {
+      "branch": "setfilter-not-a-biginteger #1 GL00000000",
+      "line": "NotRun: out-of-scope: SetFilter: `GL00000000` is not a BigInteger",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.10-SetFilter.log"
+    },
+    {
+      "branch": "setfilter-not-a-biginteger #1 GU00000001",
+      "line": "NotRun: out-of-scope: SetFilter: `GU00000001` is not a BigInteger",
+      "from": "PR-93/census/t10-refusals/serve.t10-refusals.10-SetFilter.log"
+    },
+    {
+      "branch": "setfilter-not-a-biginteger #1 C10000",
+      "line": "NotRun: out-of-scope: SetFilter: `C10000` is not a BigInteger",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.1-SetFilter.log"
+    },
+    {
+      "branch": "setfilter-not-a-biginteger #1 C\\*",
+      "line": "NotRun: out-of-scope: SetFilter: `C*` is not a BigInteger",
+      "from": "PR-133/probe/run2.json"
+    },
+    {
+      "branch": "dotnet-json-writer-property-in-array #1 ArrayStart",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state ArrayStart would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-92/e1.raw.ndjson"
+    },
+    {
+      "branch": "dotnet-json-writer-property-in-array #1 Array",
+      "line": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state Array would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-92/e1.raw.ndjson"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{3}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/probe/run1.json"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{4,6}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.4-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{7}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census2/x3-refusals/serve.x3-refusals.7-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{9}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census2/x3-refusals/serve.x3-refusals.8-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{10}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/probe/run1.json"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{11}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census2/x3-refusals/serve.x3-refusals.9-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{12}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census/x3-refusals/serve.x3-refusals.2-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{13}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census2/x3-refusals/serve.x3-refusals.10-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{14}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census/x3-refusals/serve.x3-refusals.3-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{16}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census2/x3-refusals/serve.x3-refusals.11-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{21}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census2/x3-refusals/serve.x3-refusals.12-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{25}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census2/x3-refusals/serve.x3-refusals.13-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{27}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census2/x3-refusals/serve.x3-refusals.14-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{30}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census/x3-refusals/serve.x3-refusals.4-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{37}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/census/x3-refusals/serve.x3-refusals.5-Evaluate_of_into_Decimal_form_not_pinned_by_the_corpus_.log"
+    },
+    {
+      "branch": "evaluate-decimal-nul-run #1 \\x00{40}",
+      "line": "NotRun: out-of-scope: Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-139/probe/run1.json"
+    },
+    {
+      "branch": "conversion-text-to-integer #1 =18",
+      "line": "NotRun: out-of-scope: conversion of Text '=18' to Integer",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.7-conversion_of_Text_18_to_Integer.log"
+    },
+    {
+      "branch": "conversion-text-to-integer #1 1=18",
+      "line": "NotRun: out-of-scope: conversion of Text '1=18' to Integer",
+      "from": "PR-105/census/t12-refusals/serve.t12-refusals.8-conversion_of_Text_1_18_to_Integer.log"
+    },
+    {
+      "branch": "recordref-gettable-integer-123 #1 123",
+      "line": "NotRun: out-of-scope: RecordRef.GetTable of Integer 123",
+      "from": "PR-133/probe/run1.json"
+    },
+    {
+      "branch": "recordref-gettable-integer-123 #1 12345",
+      "line": "NotRun: out-of-scope: RecordRef.GetTable of Integer 12345",
+      "from": "PR-159/census/y1-refusals/serve.y1-refusals.0-RecordRef_GetTable_of_Integer_12345.log"
+    },
+    {
+      "branch": "collation-no-weight-measured #1 516C",
+      "line": "NotRun: out-of-scope: ordering of the character U+516C (no collation weight)",
+      "from": "PR-195/v3.json"
+    },
+    {
+      "branch": "collation-no-weight-measured #1 041A",
+      "line": "NotRun: out-of-scope: ordering of the character U+041A (no collation weight)",
+      "from": "PR-195/p5/k195.ndjson"
+    },
+    {
+      "branch": "saveas-layout-statement #1 Start Date must have a value\\.",
+      "line": "NotRun: out-of-scope: an error in a SaveAs of report \"Standard Statement\", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): Start Date must have a value.",
+      "from": "PR-354/keepcheck/kept.ndjson"
+    },
+    {
+      "branch": "saveas-layout-statement #1 End Date must have a value\\.",
+      "line": "NotRun: out-of-scope: an error in a SaveAs of report \"Standard Statement\", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): End Date must have a value.",
+      "from": "PR-354/keepcheck/kept.ndjson"
+    },
+    {
+      "branch": "saveas-layout-statement #1 Start date must be earlier than End date\\.",
+      "line": "NotRun: out-of-scope: an error in a SaveAs of report \"Standard Statement\", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): Start date must be earlier than End date.",
+      "from": "PR-354/keepcheck/kept.ndjson"
+    },
+    {
+      "branch": "saveas-layout-statement #1 The payment reference must be unique\\. Payment reference \\d{15} already exists\\.",
+      "line": "NotRun: out-of-scope: an error in a SaveAs of report \"Standard Statement\", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): The payment reference must be unique. Payment reference 000000001234567 already exists.",
+      "from": "PR-255/dotnet/new.json"
+    },
+    {
+      "branch": "http #1 an outbound HTTP request with no \\[HttpClientHandler\\] bound to the test: the runtime never opens a connection \\(ADR-027\\)",
+      "line": "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)",
+      "from": "R-612/probe/serve-rows.main.log"
+    },
+    {
+      "branch": "http #1 an outbound HTTP request that a test handler does not answer: the runtime never opens a connection \\(ADR-027\\)\\. To run the test, bind an \\[HttpClientHandler\\] that answers the request, or set TestHttpRequestPolicy = BlockOutboundRequests on the test codeunit to get BC's error for it",
+      "line": "NotRun: out-of-scope: an outbound HTTP request that a test handler does not answer: the runtime never opens a connection (ADR-027). To run the test, bind an [HttpClientHandler] that answers the request, or set TestHttpRequestPolicy = BlockOutboundRequests on the test codeunit to get BC's error for it",
+      "from": "R-942/lic-suite.json"
+    },
+    {
+      "branch": "commit #1 : what the runner keeps is not pinned",
+      "line": "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned",
+      "from": "R-612/probe/serve-rows.main.log"
+    },
+    {
+      "branch": "commit #1  is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test \\(corpus issue 645\\)\\. Run this codeunit with TestIsolation = Codeunit \\(al-runner: --isolation codeunit, the default\\)",
+      "line": "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test (corpus issue 645). Run this codeunit with TestIsolation = Codeunit (al-runner: --isolation codeunit, the default)",
+      "from": "R-635/edge-probe/serve-rows.main.log"
+    },
+    {
+      "branch": "dotnet-exception #1 new ",
+      "line": "NotRun: out-of-scope: DotNet new System.Guid raised the .NET exception System.FormatException: Unrecognized Guid format.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-937/probe/out/oneshot2.json"
+    },
+    {
+      "branch": "dotnet-exception #1 ∅",
+      "line": "NotRun: out-of-scope: DotNet System.Convert.ToInt32 raised the .NET exception System.ArgumentException: Invalid Base.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-937/probe/out/types2.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.FormatException",
+      "line": "NotRun: out-of-scope: DotNet new System.Guid raised the .NET exception System.FormatException: Unrecognized Guid format.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-937/probe/out/oneshot2.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.ArgumentOutOfRangeException",
+      "line": "NotRun: out-of-scope: DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: value ('-5') must be greater than or equal to '-1'. (Parameter 'value')",
+      "from": "PR-32/bc-check-expected/dotnet-exception.raw.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.ArgumentNullException",
+      "line": "NotRun: out-of-scope: DotNet System.Uri.IsBaseOf raised the .NET exception System.ArgumentNullException: Value cannot be null. (Parameter 'uri'); the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-940/probe-dnx/out-edge-2bd87774f-2bd87774f.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.ArgumentException",
+      "line": "NotRun: out-of-scope: DotNet System.Convert.ToInt32 raised the .NET exception System.ArgumentException: Invalid Base.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-937/probe/out/types2.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.NullReferenceException",
+      "line": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.AppendChild raised the .NET exception System.NullReferenceException: Object reference not set to an instance of an object.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-937/probe/out/types2.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.Security\\.Cryptography\\.CryptographicException",
+      "line": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.SignedXml.ComputeSignature raised the .NET exception System.Security.Cryptography.CryptographicException: Signing key is not loaded.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-953/out/new.M1200.json"
+    },
+    {
+      "branch": "dotnet-exception #2 Interop\\+Crypto\\+OpenSslCryptographicException",
+      "line": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:02000093:rsa routines::value missing; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-33/bc-check-expected/dotnet-exception-rsa.raw.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.Xml\\.XPath\\.XPathException",
+      "line": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.SelectNodes raised the .NET exception System.Xml.XPath.XPathException: Expression must evaluate to a node-set.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "R-937/probe/out/types1.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.UriFormatException",
+      "line": "NotRun: out-of-scope: DotNet new System.UriBuilder raised the .NET exception System.UriFormatException: Invalid URI: Invalid port specified.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-32/bc-check-expected/dotnet-exception.raw.json"
+    },
+    {
+      "branch": "dotnet-exception #2 System\\.IndexOutOfRangeException",
+      "line": "NotRun: out-of-scope: DotNet System.Data.DataColumnCollection.Item raised the .NET exception System.IndexOutOfRangeException: Cannot find column 0.; the text AL would see is not pinned (ADR-014 section 7)",
+      "from": "PR-32/bc-check-expected/dotnet-exception.raw.json"
+    },
+    {
+      "branch": "dotnet-assembly #1 new ",
+      "line": "NotRun: out-of-scope: DotNet new Newtonsoft.Json.Linq.JObject: assembly 'Newtonsoft.Json' could not be loaded: FileNotFoundException: Could not load file or assembly 'Newtonsoft.Json, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified. Besides the .NET runtime's own assemblies, no folder was searched. To use it, pass a folder that holds Newtonsoft.Json.dll with --dotnet-assembly-dir.",
+      "from": "R-933/probe-nj/o-none.json"
+    },
+    {
+      "branch": "dotnet-assembly #1 ∅",
+      "line": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.EncryptedXml.DecryptKey: assembly 'System.Security.Cryptography.Xml' could not be loaded: FileNotFoundException: Could not load file or assembly 'System.Security.Cryptography.Xml, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified. Besides the .NET runtime's own assemblies, no folder was searched. To use it, pass a folder that holds System.Security.Cryptography.Xml.dll with --dotnet-assembly-dir.",
+      "from": "R-932/dn-crypto-none.json"
+    },
+    {
+      "branch": "dotnet-member #1 member",
+      "line": "NotRun: out-of-scope: DotNet System.Text.StringBuilder.NoSuchMethod: member 'NoSuchMethod' not found on 'System.Text.StringBuilder'",
+      "from": "R-937/probe/out/oneshot.json"
+    },
+    {
+      "branch": "dotnet-member #1 property, field or method",
+      "line": "NotRun: out-of-scope: DotNet System.Uri.AbsoluteUri: property, field or method 'AbsoluteUri' not found on 'System.Uri'",
+      "from": "R-983/repro.current.json"
+    },
+    {
+      "branch": "dotnet-member #1 settable property or field",
+      "line": "NotRun: out-of-scope: DotNet System.Text.StringBuilder.NoSuchProp: settable property or field 'NoSuchProp' not found on 'System.Text.StringBuilder'",
+      "from": "R-937/probe/out/oneshot.json"
+    },
+    {
+      "branch": "dotnet-overload #1 new ",
+      "line": "NotRun: out-of-scope: DotNet new System.DateTimeOffset: new System.DateTimeOffset has no overload taking 2 argument(s) of the given types (DateTime, null)",
+      "from": "PR-135/repro/run1.json"
+    },
+    {
+      "branch": "dotnet-overload #1 ∅",
+      "line": "NotRun: out-of-scope: DotNet System.Convert.ToString: System.Convert.ToString has no overload taking 2 argument(s) of the given types (null, Int32)",
+      "from": "PR-135/repro/run1.json"
+    },
+    {
+      "branch": "dotnet-overload #2 new ",
+      "line": "NotRun: out-of-scope: DotNet new System.DateTimeOffset: new System.DateTimeOffset has no overload taking 2 argument(s) of the given types (DateTime, null)",
+      "from": "PR-135/repro/run1.json"
+    },
+    {
+      "branch": "dotnet-overload #2 ∅",
+      "line": "NotRun: out-of-scope: DotNet System.Convert.ToString: System.Convert.ToString has no overload taking 2 argument(s) of the given types (null, Int32)",
+      "from": "PR-135/repro/run1.json"
+    },
+    {
+      "branch": "stream-never-created #1 In",
+      "line": "NotRun: out-of-scope: use of an InStream that was never created",
+      "from": "R-913/repro/run3.json"
+    },
+    {
+      "branch": "stream-never-created #1 Out",
+      "line": "NotRun: out-of-scope: use of an OutStream that was never created",
+      "from": "R-913/repro/run2.json"
+    },
+    {
+      "branch": "platform-no-provider #1 store error ",
+      "line": "NotRun: out-of-scope: store error platform table 'File' (2000000022) has no provider",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "platform-no-provider #1 ∅",
+      "line": "NotRun: out-of-scope: platform table 'File' (2000000022) has no provider",
+      "from": "PR-23/bc-check-expected/platform-table-read.raw.json"
+    },
+    {
+      "branch": "company-findset #1 ; name them with --companies NAME\\[,NAME\\.\\.\\.\\] \\(serve: the `companies` field\\); `all` needs test data",
+      "line": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)",
+      "from": "PR-214/kept.ndjson"
+    },
+    {
+      "branch": "company-findset #1 ∅",
+      "line": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      "from": "R-915/probe-out.json"
+    },
+    {
+      "branch": "cascade-existing-state #1 an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \\(only a new key's IsolatedStorage\\.Set and a new NumberSequence\\.Insert are\\)",
+      "line": "NotRun: out-of-scope: an earlier test of this codeunit, B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)",
+      "from": "R-955/restart/out/serve.I.log"
+    },
+    {
+      "branch": "cascade-existing-state #1 number sequence '[^'\\n]+' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \\(only a new NumberSequence\\.Insert is\\)",
+      "line": "NotRun: out-of-scope: an earlier test of this codeunit, B_ChangesSeq, changed number sequence 'R937SEQ' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)",
+      "from": "R-989/restart/out/serve.I2.log"
+    },
+    {
+      "branch": "cascade-existing-state #1 isolated storage key '[^'\\n]+' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \\(only a new key's IsolatedStorage\\.Set is\\)",
+      "line": "NotRun: out-of-scope: an earlier test of this codeunit, B_Changes, changed isolated storage key 'R937KEY' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set is)",
+      "from": "R-989/restart/out/serve.I.log"
+    },
+    {
+      "branch": "recordref-not-open #1 FieldCount",
+      "line": "NotRun: out-of-scope: RecordRef.FieldCount on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "R-913/repro/run2.json"
+    },
+    {
+      "branch": "recordref-not-open #1 FindSet",
+      "line": "NotRun: out-of-scope: RecordRef.FindSet on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "R-998/probe/out/oneshot.json"
+    },
+    {
+      "branch": "recordref-not-open #1 SetRecFilter",
+      "line": "NotRun: out-of-scope: RecordRef.SetRecFilter on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "R-998/probe/out/oneshot.json"
+    },
+    {
+      "branch": "recordref-not-open #1 SetLoadFields",
+      "line": "NotRun: out-of-scope: RecordRef.SetLoadFields on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "from": "R-998/probe/out/oneshot.json"
+    }
+  ]
+}
