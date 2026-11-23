@@ -1168,7 +1168,7 @@ const plainFailMessage = (
  * one-shot; commit and onrun-failed are still refusals there). R1000: the fourth says a plain pass
  * is accepted (a build that measures the case runs the test).
  */
-const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = [
+export const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = [
   ["http", "Codeunit50670.HttpGet", true, false],
   ["commit", "Codeunit50671.CommitCall", false, false],
   ["cascade", "Codeunit50672.LaterFails", true, false],
@@ -1238,6 +1238,21 @@ const unkeptRefusal = (r: ServerTestLine | undefined): boolean =>
     Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(r.message ?? ""))
   );
 
+/**
+ * PR-363 (R1152): one generated app per refusal family (`scripts/pr363-legc-keep-apps.ts`); each holds only the
+ * cells chosen for the keep entries that family can produce, and gets its own fresh daemon and request.
+ */
+export interface V3KeepApp {
+  readonly family: string;
+  /** The app folder (a `sourcePaths` entry). */
+  readonly dir: string;
+  /** The entry each test must be refused under, and the serve test name (`Codeunit<id>.<method>`). */
+  readonly cases: readonly { readonly entry: string; readonly name: string }[];
+}
+
+/** PR-363: how many family apps the generator pins; fewer in `V3ProbeEnv.keepApps` reads `unmeasurable`. */
+export const V3_KEEP_APP_FAMILIES = 10;
+
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
 const SERVE_TEST_TIMEOUT_S = 3;
 const SERVE_DEADLINE_MS = 120_000;
@@ -1266,7 +1281,17 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty-three codeunits, a report, two pages and four tables (twenty-four tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty-three codeunits, a report, two pages and four tables (twenty-four tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}; then (PR-363) one more fresh daemon and request per refusal family (${V3_KEEP_APP_FAMILIES} apps), each judged on its own rows: every chosen case a refusal under its own entry, no plain fail or pass allowed, and every refused row of the request kept`;
+  // PR-363: never run the old request alone, which would read exactly as it did before the family apps.
+  const keepApps = env.keepApps;
+  if (keepApps === undefined || keepApps.length < V3_KEEP_APP_FAMILIES)
+    return fact(
+      "serve-keep-reasons",
+      "warn",
+      "unmeasurable",
+      expected,
+      `the family apps are missing: ${keepApps === undefined ? "none given" : `${keepApps.length} of ${V3_KEEP_APP_FAMILIES}`} (PR-363; run scripts/pr363-legc-keep-apps.ts --out <dir>)`,
+    );
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
@@ -1347,16 +1372,80 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
       );
     }
   }
+  // PR-363: each family app on its OWN fresh daemon, started as the one above, judged on its OWN rows
+  // (every app names its tests `Codeunit5100x.Cell`, so rows of two requests must never be merged).
+  const unmeasured: string[] = [];
+  let caseCount = SERVE_CASES.length;
+  for (const app of keepApps) {
+    caseCount += app.cases.length;
+    const fam = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
+    let res: Awaited<ReturnType<AlRunnerServer["runTests"]>>;
+    try {
+      await fam.start(
+        SERVE_DEADLINE_MS,
+        [],
+        SERVE_TEST_TIMEOUT_S,
+        env.environment !== undefined ? ["--environment", env.environment] : [],
+      );
+      res = await fam.runTests(
+        { sourcePaths: [app.dir], testIsolation: "test" },
+        SERVE_DEADLINE_MS,
+      );
+    } catch (err) {
+      unmeasured.push(`${app.family}: ${String(err)}`);
+      continue;
+    } finally {
+      await fam.close();
+    }
+    if (res.tests.length === 0) {
+      unmeasured.push(
+        `${app.family}: the request returned no test row at all (compilationErrors: ${JSON.stringify(res.compilationErrors)})`,
+      );
+      continue;
+    }
+    const names = new Set(app.cases.map((c) => c.name));
+    for (const t of res.tests)
+      if (!names.has(t.name) && unkeptRefusal(t))
+        unkept.push(`${app.family} (unjudged): UNKEPT ${t.name}: ${t.message ?? "(no message)"}`);
+    for (const c of app.cases) {
+      const r = res.tests.find((t) => t.name === c.name);
+      if (unkeptRefusal(r)) {
+        unkept.push(`${app.family} ${c.entry}: UNKEPT ${c.name}: ${r?.message ?? "(no message)"}`);
+        continue;
+      }
+      const ok =
+        r !== undefined &&
+        r.notRun === true &&
+        r.status === "error" &&
+        r.message !== undefined &&
+        V3_SERVE_SAFE_REFUSALS[c.entry]?.test(r.message) === true;
+      if (ok) how.push(`${c.entry}: refusal`);
+      else
+        moved.push(
+          `${app.family} ${c.entry}: MOVED ${r === undefined ? `no row ${c.name}` : `${r.status} notRun=${String(r.notRun)} ${r.message ?? ""}`}`,
+        );
+    }
+  }
+  const verdict =
+    unkept.length > 0
+      ? "unkept"
+      : unmeasured.length > 0
+        ? "unmeasurable"
+        : moved.length === 0
+          ? "matches"
+          : "diverged";
   return fact(
     "serve-keep-reasons",
     "warn",
-    unkept.length > 0 ? "unkept" : moved.length === 0 ? "matches" : "diverged",
+    verdict,
     expected,
     unkept.length > 0
-      ? [...unkept, ...moved].join("; ")
-      : moved.length === 0
-        ? `the keep rule accepts every row of all ${SERVE_CASES.length} entries (${how.join(", ")})`
-        : moved.join("; "),
+      ? [...unkept, ...unmeasured, ...moved].join("; ")
+      : unmeasured.length > 0
+        ? unmeasured.join("; ")
+        : moved.length === 0
+          ? `the keep rule accepts every row of all ${caseCount} entries (${how.join(", ")})`
+          : moved.join("; "),
   );
 }
 
@@ -1402,6 +1491,11 @@ export interface V3ProbeEnv {
   readonly gateOnlyTrusted?: string;
   /** PR-114a test hook: the deadline of one capability-fact request (default `SERVE_DEADLINE_MS`). */
   readonly serveDeadlineMs?: number;
+  /**
+   * PR-363: the family apps for `serve-keep-reasons` (the generator's manifest). Absent, or fewer than
+   * `V3_KEEP_APP_FAMILIES`: that fact reads `unmeasurable`.
+   */
+  readonly keepApps?: readonly V3KeepApp[];
   /** R612 test hook: the `serve` daemon for `serve-keep-reasons` (default: the real binary). */
   readonly serveSpawn?: ServerSpawnFn;
   /**

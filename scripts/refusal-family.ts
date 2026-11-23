@@ -5826,39 +5826,48 @@ export function emitApp(
     id: "51000000-0000-4000-8000-000000051000",
     name: `Refusal Family ${f.name}`,
   },
+  /**
+   * PR-363: emit only these cell indices (into `f.cells`). Each keeps its own codeunit id (cell i is BASE_ID + 1 + i, no
+   * renumbering), the support objects keep theirs, and `idRanges` stays the family's whole range (it covers what is emitted).
+   * Absent: every cell, byte-identical to before.
+   */
+  only?: readonly number[],
 ): Record<string, string> {
-  const units = f.cells.map((c, i) => {
-    const vars = [f.handles[c.type], ...(c.vars ?? [])].filter((v) => v !== undefined);
-    const body = [...(c.setup ?? []), c.call].map((s) => `        ${s}`).join("\n");
-    // PR-17: a cell that shows UI binds its handlers; each handler is a whole procedure, named by its `procedure` line
-    const handlers = c.handlers ?? [];
-    const names = handlers
-      .map((h) => /procedure (\w+)/.exec(h)?.[1])
-      .filter((n) => n !== undefined);
-    const proc = (name: string, vs: readonly string[], b: string) =>
-      `${names.length > 0 ? `    [HandlerFunctions('${names.join(",")}')]\n` : ""}    [Test]
+  const keep = only === undefined ? undefined : new Set(only);
+  const units = f.cells
+    .flatMap((c, i) => (keep === undefined || keep.has(i) ? [[c, i] as const] : []))
+    .map(([c, i]) => {
+      const vars = [f.handles[c.type], ...(c.vars ?? [])].filter((v) => v !== undefined);
+      const body = [...(c.setup ?? []), c.call].map((s) => `        ${s}`).join("\n");
+      // PR-17: a cell that shows UI binds its handlers; each handler is a whole procedure, named by its `procedure` line
+      const handlers = c.handlers ?? [];
+      const names = handlers
+        .map((h) => /procedure (\w+)/.exec(h)?.[1])
+        .filter((n) => n !== undefined);
+      const proc = (name: string, vs: readonly string[], b: string) =>
+        `${names.length > 0 ? `    [HandlerFunctions('${names.join(",")}')]\n` : ""}    [Test]
     procedure ${name}()
 ${vs.length > 0 ? `    var\n${vs.map((v) => `        ${v}`).join("\n")}\n` : ""}    begin
 ${b}
     end;
 `;
-    const t = c.reader;
-    // PR-63: a two-test cell lists SetLanguage, then ReadLanguage (declaration order is the run order)
-    const tests =
-      t === undefined
-        ? proc("Cell", vars, body)
-        : `${proc(SET_TEST, vars, body)}\n${proc(
-            READ_TEST,
-            t.vars ?? [],
-            [...(t.setup ?? []), t.call].map((s) => `        ${s}`).join("\n"),
-          )}`;
-    return `codeunit ${BASE_ID + 1 + i} "${cellName(c, i)}"
+      const t = c.reader;
+      // PR-63: a two-test cell lists SetLanguage, then ReadLanguage (declaration order is the run order)
+      const tests =
+        t === undefined
+          ? proc("Cell", vars, body)
+          : `${proc(SET_TEST, vars, body)}\n${proc(
+              READ_TEST,
+              t.vars ?? [],
+              [...(t.setup ?? []), t.call].map((s) => `        ${s}`).join("\n"),
+            )}`;
+      return `codeunit ${BASE_ID + 1 + i} "${cellName(c, i)}"
 {
     Subtype = Test;${f.testPermissions !== undefined ? `\n    TestPermissions = ${f.testPermissions};` : ""}
 
 ${tests}${handlers.map((h) => `\n${h}`).join("")}}
 `;
-  });
+    });
   return {
     "app.json": `${JSON.stringify(
       {
