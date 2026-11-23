@@ -151,6 +151,32 @@ describe("PR-370: the recheck phase", () => {
     expect(msg).toContain("boom");
   });
 
+  test("an emit that throws after phase-left (a stop during the close): the catch does not leave the phase twice", async () => {
+    const stop = new AbortController();
+    const types: string[] = [];
+    let thrown = false;
+    await runWithheldRecheck({
+      events: EVENTS,
+      notPassOf: () => ["K.K1"],
+      emit: (e) => {
+        types.push(
+          e.type === "phase-entered" || e.type === "phase-left" ? `${e.type} ${e.phase}` : e.type,
+        );
+        if (e.type === "phase-left" && !thrown) {
+          thrown = true;
+          throw new Error("subscriber failed");
+        }
+      },
+      main: {},
+      budgetSeconds: 10,
+      runner: async () => NESTED,
+      stopSignal: stop.signal,
+      backend: { serveEntries: true, closeDaemons: async () => stop.abort() },
+    });
+    expect(types.filter((t) => t === "phase-left recheck")).toHaveLength(1);
+    expect(types.at(-1)).toBe("warning");
+  });
+
   test("nestedSplit formats each phase in order, in seconds", () => {
     expect(nestedSplit([{ phase: "baseline", elapsedMs: 1_050 }])).toBe("nested: baseline 1.1 s");
   });

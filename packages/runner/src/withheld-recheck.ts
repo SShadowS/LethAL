@@ -420,13 +420,18 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
     phase: "recheck",
     detail: `${targets.length} withheld kill(s), ${tests.length} test(s): a nested session (its own daemons, baseline and mutant phase)`,
   });
-  const left = (phases?: NestedRecheckResult["phases"]) =>
+  // Once only: a throw inside an emit after `left()` reaches the catch, which calls it again.
+  let hasLeft = false;
+  const left = (phases?: NestedRecheckResult["phases"]) => {
+    if (hasLeft) return;
+    hasLeft = true;
     d.emit({
       type: "phase-left",
       phase: "recheck",
       elapsedMs: monoNow() - startedMs,
       ...(phases !== undefined && phases.length > 0 ? { detail: nestedSplit(phases) } : {}),
     });
+  };
   let result: NestedRecheckResult;
   try {
     // The main session's daemons would otherwise stay alive beside the nested session's.
