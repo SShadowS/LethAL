@@ -187,3 +187,42 @@ From B's `serve-entries (R635)` line:
 - **Driver changes (`arm.sh`, no run):** `want_head` is read from c4's `HEAD.txt` (the driver stops if the file is missing,
   empty, not a full sha, or lacks PR-365's or PR-347's merge); the worktree `/work/lethal-wt/pr359` is made at that sha; c3's
   own head check stays (c3 is still read as a verdict reference); c4's report must exist before arm A (c4 runs first).
+
+## Amendment 4 (2026-11-23, before any arm runs): the owner's ruling, interleaved arms on a shared server
+- **The ruling** (the orchestrator relaying "Owner:", the owner's own words): there is no quiet window on server1. Speed is
+  judged ONLY between interleaved arms of the same run. The result states that server1 was shared (other containers active;
+  CPUs 12-21 about 0.35 busy from outside load during c4), and no absolute speed figure is compared with quiet-machine
+  numbers.
+- **The design (ABBA over two halves):**
+  - DO's 469 mutated files are split into two halves balanced by c4's mutant count (`/coord/handoff/PR-359/halves.py`:
+    largest file first, to the lighter half, ties by name; whole files, so every procedure unit stays whole):
+    `half1.txt` 234 files / 21,756 mutants, `half2.txt` 235 files / 21,755 mutants.
+  - **Four arms, in this order:** A1 (flag off, half 1), B1 (flag on, half 1), B2 (flag on, half 2), A2 (flag off,
+    half 2). Each arm is `--only` its half's files; everything else as amendments 2 and 3 (c4's head, the binary, the
+    settings, its own cold `cacheDir`, the gate-record check).
+  - ABBA: each half's pair runs back to back, and the order flips between the halves, so a linear drift of the shared
+    server over the night cancels in the combined ratio.
+- **V (hard), unchanged in kind:** per mutant on the full site key, A (A1 plus A2) against B (B1 plus B2): 0 verdict
+  moves; `killingTest` moves only of PR-256 amendment 1's kind, each listed and checked; any other a BLOCK. Each half must
+  hold exactly its own mutants on both sides (a mutant missing on either side is "not measured" and voids V for it, INFRA).
+- **Speed (S1, S2), between interleaved arms only:**
+  - per half: S1h = (Bh's mutant-phase wall ÷ Bh's baseline median ms per test) ÷ (the same for Ah); S2h = Bh's CPU ÷
+    Ah's CPU (`time.txt`).
+  - **The claim:** the geometric mean of S1 over the two halves ≤ 0.95, AND each half's S1h < 1.00 (the saving shows in
+    both halves, not only on average); S2 likewise with ≤ 1.00 on the mean.
+  - Raw wall ratios per half are reported; no figure is compared with c3, c4 or any quiet-machine run.
+- **Void rules (per pair, the between-arm rules only):**
+  - **the absolute "mean `cpu12_21_busy` over the mutant phase above 0.20" rule is DROPPED** (the server is shared);
+  - **kept:** within a half, the two arms' mean `cpu12_21_busy` over their mutant phases differ by at most 0.05, and their
+    outside loads on 0-11 (mean `cpu0_11_busy` minus own CPU ÷ (12 × wall)) differ by at most 0.05;
+  - the suspend, watchdog, R948, decision-line and completeness rules as before.
+  - **A void pair is re-run once, at once, in the same order (A1/B1 or B2/A2);** a second void leaves that half's speed
+    INCONCLUSIVE, and the claim then rests on the other half alone and says so (a single half never carries "≤ 0.95").
+- **A against c4 (amendment 3):** the per-mutant verdict check stays (A1 plus A2 against c4, reported, not judged); the
+  "wall spread" figure is DROPPED (c4 was not quiet either: CPUs 12-21 about 0.35 busy from outside load).
+- **Time:** about the same as two full arms (four half-arms of about 3-3.5 h each).
+- **The result states:** server1 shared (other containers active), the measured 12-21 and 0-11 busy shares per arm, and
+  that every speed figure is a between-arm ratio of this run.
+- **Driver changes (`arm.sh`, `series.sh`; no run):** the arm letter is one of A1, B1, B2, A2; the config is `v3.A.json` or
+  `v3.B.json` by letter; each arm passes `--only` for every line of its half's file; `series.sh` runs A1, B1, B2, A2 in
+  order and stops a pair at its first failure.
