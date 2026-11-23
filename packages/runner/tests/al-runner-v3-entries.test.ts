@@ -6928,7 +6928,12 @@ describe("R857: --isolate-tests", () => {
     const methods = ["A", "B", "C", "D", "E", "F"];
     const suite = methods.map((m) => ref(m));
     const rows: RowsFn = () => methods.map((method) => ({ method, status: "pass" as const }));
-    const opts = { ...ISOLATE, suite, oneShotRows: rows };
+    // PR-378: an answer is kept only when 2 x its wall time stays under the budget floor (cleanBaselineAnswer); a dropped one
+    // runs again alone, one more call. The fake holds each process for up to 100 timer ticks, measured on the real clock: about
+    // 1.6 s where a tick is 15.6 ms (Windows), so the rig's 1,000 ms floor dropped some answers there (CI 45144980326: 9 calls
+    // for 6 tests). A floor of an hour leaves the counts to the call counters alone.
+    const floor = [3_600_000, 3_600_000] as const;
+    const opts = { ...ISOLATE, suite, oneShotRows: rows, floor };
     const exactOf = (r: Rig) => r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]);
 
     test("every test once, at most four at a time, each verdict its own", async () => {
@@ -6945,7 +6950,7 @@ describe("R857: --isolate-tests", () => {
     test("--workers sets how many at a time: one, or more than four", async () => {
       for (const n of [1, 6]) {
         const extra = { isolateTests: true, isolatedBaselineProcesses: n };
-        const r = await rig({ extra, suite, oneShotRows: rows });
+        const r = await rig({ extra, suite, oneShotRows: rows, floor });
         await baseline(r.b, suite);
         expect(r.one.peak()).toBe(n);
         expect(r.one.calls).toHaveLength(methods.length);
