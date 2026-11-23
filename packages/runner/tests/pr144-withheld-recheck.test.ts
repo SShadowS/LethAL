@@ -280,6 +280,9 @@ function fakeRunner(result: (req: RecheckRequest) => NestedRecheckResult | Error
   };
 }
 
+const isRecheckPhase = (e: RunEventInput): boolean =>
+  (e.type === "phase-entered" || e.type === "phase-left") && e.phase === "recheck";
+
 const seqOf = (es: readonly RunEventInput[]): RunEvent[] =>
   es.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
 
@@ -346,7 +349,10 @@ async function drive(
     // PR-225: every covering test counts as a candidate here, so these driver tests keep their pre-PR-225 test set;
     // the narrowing itself is tested in pr225-recheck-set.test.ts.
     notPassOf: (t) => t.coveringTests,
-    emit: (e) => emitted.push(e),
+    // PR-370: the recheck phase's own two events are pinned in pr370-recheck-phase.test.ts, not here.
+    emit: (e) => {
+      if (!isRecheckPhase(e)) emitted.push(e);
+    },
     main: MAIN,
     budgetSeconds: 77,
     runner: (req) => fake.run(req, () => emitted.length),
@@ -932,6 +938,14 @@ describe("v3RecheckOf (cli wiring)", () => {
       },
       runSession: async (cfg) => {
         ran.push(cfg);
+        // PR-370: the nested session's phases reach the result in order; other events do not.
+        const sink = Array.isArray(cfg.emit) ? cfg.emit : cfg.emit !== undefined ? [cfg.emit] : [];
+        for (const e of [
+          { type: "phase-left", phase: "generate", elapsedMs: 5 },
+          { type: "warning", code: "x", message: "y" },
+          { type: "phase-left", phase: "teardown", elapsedMs: 7 },
+        ] as const)
+          for (const f of sink) f({ ...e, seq: 0 } as never);
         await gate;
         return {
           mutants: [],
@@ -1010,6 +1024,10 @@ describe("v3RecheckOf (cli wiring)", () => {
       sourceSha256: "s",
       dependencySourceSha256: "d",
     });
+    expect(res?.phases).toEqual([
+      { phase: "generate", elapsedMs: 5 },
+      { phase: "teardown", elapsedMs: 7 },
+    ]);
     expect([w.closed(), w.storeClosed()]).toEqual([1, 1]);
   });
 

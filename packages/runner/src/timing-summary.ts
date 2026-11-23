@@ -13,7 +13,7 @@ export const reachPruneMessage = (batch: number, entries: number, survived: numb
   `[lethal] reach pruning (PR-303), batch ${batch}: ${entries} mutant entries left out, ${survived} mutant(s) recorded pruned-survived without running`;
 const REACH_PRUNE_COUNTS = /: (\d+) mutant entries left out, (\d+) mutant\(s\) recorded/;
 
-const PHASE_ORDER = ["generate", "deploy", "baseline", "mutants", "teardown"] as const;
+const PHASE_ORDER = ["generate", "deploy", "baseline", "mutants", "teardown", "recheck"] as const;
 const KINDS = [
   ["baseline", "baseline"],
   ["warmup", "warm-up"],
@@ -49,6 +49,7 @@ const LANE_GAP_MS = 5000;
  */
 export function createTimingFold(opts: { readonly now?: () => number } = {}): TimingFold {
   const phaseMs = new Map<string, number>();
+  let recheckDetail: string | undefined;
   // R1119: the mutants phase's edges and each lane's requests in it, for the lane line.
   type Req = { start: number; end: number };
   let mutantsFrom: number | undefined;
@@ -105,6 +106,8 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
           break;
         case "phase-left":
           phaseMs.set(e.phase, (phaseMs.get(e.phase) ?? 0) + e.elapsedMs);
+          // PR-370: the recheck phase's nested split, printed under the phases line.
+          if (e.phase === "recheck" && e.detail !== undefined) recheckDetail = e.detail;
           if (e.phase === "mutants" && inMutants) {
             inMutants = false;
             mutantsTo = timeOf(e);
@@ -190,6 +193,8 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
         (p) => `${p} ${secs(phaseMs.get(p) ?? 0)}`,
       );
       if (phases.length > 0) lines.push(`  phases: ${phases.join(", ")}`);
+      if (recheckDetail !== undefined)
+        lines.push(`  recheck (withheld kills, PR-144): ${recheckDetail}`);
 
       const served = KINDS.filter(([k]) => kinds.has(k)).map(([k, label]) => {
         const v = kinds.get(k);

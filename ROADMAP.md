@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 1151 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 1152 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1196,6 +1196,7 @@ that ordering is the priority.
 - **R1187** · Seven baseline refusals of Field.RelationFieldNo (upstream 1bea5bc7a refuses unmeasured no-field TableRelation shapes) leave 1,504 of c3's DO mutants unscored through PR-250's cut, 182 of them y3 kills: a keep entry, after a kept-vs-fresh DO check, would recover most of them · [R1187.md](docs/roadmap/R1187.md) · open — next: a kept-vs-fresh DO check of the refusal text (PR-354's method), then a PR56_KEPT row; the same…
 - **R1188** · Three new al-runner refusal shapes on DO under current (c3), BC not yet checked: Field.RelationFieldNo for three BaseApp no-field TableRelations, Report.SaveAs as Pdf of a report whose data items are an unmeasured tree, and a conversion of Integer to Date; check each on BC before any upstream filing · [R1188.md](docs/roadmap/R1188.md) · open — PR-366: the invented probe scripts/r1188-probe reproduces three RelationFieldNo shapes and the…
 - **R1189** · The withheld-kill recheck runs after the teardown phase with no phase and no progress event: on DO about 15-17 min of a busy client with nothing reported, and only 386-438 s of it is the recheck baseline · [R1189.md](docs/roadmap/R1189.md) · open
+- **R1190** · The withheld-kill recheck starts its own daemons (28 on DO) instead of reusing the main session's: at most about 100 s of wall plus the nested generate and deploy per run with a recheck; sized, not built · [R1190.md](docs/roadmap/R1190.md) · open
 
 ---
 
