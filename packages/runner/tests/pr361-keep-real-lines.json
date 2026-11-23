@@ -467,6 +467,21 @@
       "from": "PR-245/kept.ndjson"
     },
     {
+      "entry": "relation-field-no-dimension-set-entry-dimension-code",
+      "line": "NotRun: out-of-scope: the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Code' of table 'Dimension Set Entry', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+      "from": "PR-255/dotnet/new.json"
+    },
+    {
+      "entry": "relation-field-no-sales-invoice-header-ship-to-post-code",
+      "line": "NotRun: out-of-scope: the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Ship-to Post Code' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+      "from": "PR-255/dotnet/new.json"
+    },
+    {
+      "entry": "relation-field-no-sales-invoice-header-dimension-set-id",
+      "line": "NotRun: out-of-scope: the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Set ID' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+      "from": "PR-255/dotnet/new.json"
+    },
+    {
       "entry": "http",
       "line": "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)",
       "from": "R-612/probe/serve-rows.main.log"
