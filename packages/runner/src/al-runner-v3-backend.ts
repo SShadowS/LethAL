@@ -1400,6 +1400,33 @@ export function decodeV3Rows(
 }
 
 /**
+ * PR-396 (spec docs/superpowers/specs/2026-11-23-pr396-v3-stale-buffer-guard.md): BC's stale-record error, which al-runner
+ * raises in upstream #8721's shape (a stale record buffer after a failed `Insert` of a copy; fix in draft #8801). On DO both
+ * v3 kills that carry it (M13065, M13625) PASS on BC, so a v3 kill with this text is not trusted.
+ */
+export const V3_STALE_BUFFER_TEXT =
+  "cannot be saved because some information on the page is not up-to-date";
+export const V3_STALE_BUFFER_NOTE =
+  "[al-runner #8721: a stale-record raise that BC does not make (PR-302: M13065 passes on BC); NOT scored as a kill (PR-396)]";
+
+/**
+ * PR-396: a FAILED row under a mutant whose message holds #8721's text becomes `error` (a runner error, kept text plus
+ * `V3_STALE_BUFFER_NOTE`), so it kills nothing. It deliberately carries no `V3_NOT_RUN_SUFFIX`: PR-144's recheck would
+ * re-run it alone, where #8721 fails the same way and the false kill would be "recovered". Remove when a gated `current`
+ * carries #8801 (M13065 passes under v3 on it).
+ */
+export function staleBufferGuard(v: TestVerdict): TestVerdict {
+  if (v.outcome !== "fail" || !(v.failureMessage ?? "").includes(V3_STALE_BUFFER_TEXT)) return v;
+  return {
+    ...v,
+    outcome: "error",
+    failureMessage: `${v.failureMessage ?? ""} ${V3_STALE_BUFFER_NOTE}`,
+    operation: "completed-accepted",
+    runnerRow: "runner-test-error",
+  };
+}
+
+/**
  * §5: one decoded row -> its verdict. `notRun: true` wins over the message prefix: a not-run row is
  * a timeout (its stop parsed, and it must be the stop the call was sent) or a refusal, never a
  * pass or a fail; `notRun` with `pass`/`fail` is a contract error.
@@ -7677,8 +7704,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `al-runner-v3: coverage is on and v3's --coverage-json gave no per-test coverage for ${row.name} (${call.coverage.kind === "unavailable" ? call.coverage.why : "no single per-test entry"}); refusing rather than reading it as "covered nothing" (R586 §6)`,
       );
     }
-    const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage, call.callId);
-    if (lane.lastActivated === null) return verdict;
+    const rowVerdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage, call.callId);
+    if (lane.lastActivated === null) return rowVerdict;
+    // PR-396: under a mutant only (a baseline row above is left as it is).
+    const verdict = staleBufferGuard(rowVerdict);
     // R586c (B2): alpha.5 counts a Sleep toward --test-timeout-secs on a VIRTUAL clock, so a test it
     // "stopped at 3 s" returned after a few ms. A genuine CPU stop has a wall time of at least the
     // stop (n x 1000 ms). Under a mutant, an earlier one is not a real timeout and must not kill:

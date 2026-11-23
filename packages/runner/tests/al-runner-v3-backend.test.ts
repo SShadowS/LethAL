@@ -46,6 +46,10 @@ import {
   v3CallDeadlineMs,
   v3CompileRefusal,
   v3MissingDependencies,
+  V3_NOT_RUN_SUFFIX,
+  V3_STALE_BUFFER_NOTE,
+  V3_STALE_BUFFER_TEXT,
+  staleBufferGuard,
   v3RowVerdict,
   v3TestDataOffNote,
 } from "../src/al-runner-v3-backend";
@@ -2423,6 +2427,49 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     await expect(six.run(ref("A"), { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
       AlRunnerV3DependencySkippedError,
     );
+  });
+
+  // PR-396: #8721's stale-buffer text under a mutant is never a kill; at baseline it is left as it is.
+  const STALE = `The changes to the Document Template Line record ${V3_STALE_BUFFER_TEXT}. Close the page, reopen it, and try again.`;
+
+  test("PR-396: the #8721 text stays a fail at baseline, and under a mutant reads error with the note, never a kill", async () => {
+    const l = await layout();
+    const staleA = () => [{ method: "A", status: "fail" as const, message: STALE }];
+    const b = backendOf(l, fakeV3(staleA).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    const base = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect(base.outcome).toBe("fail");
+    expect(base.failureMessage ?? "").not.toContain(V3_STALE_BUFFER_NOTE);
+    await b.activate("M0001");
+    const mut = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect([mut.outcome, mut.runnerRow]).toEqual(["error", "runner-test-error"]);
+    expect(mut.failureMessage ?? "").toContain(V3_STALE_BUFFER_TEXT);
+    expect(mut.failureMessage ?? "").toContain(V3_STALE_BUFFER_NOTE);
+    // Not a PR-144 recheck target: no not-run suffix.
+    expect(mut.failureMessage ?? "").not.toContain(V3_NOT_RUN_SUFFIX);
+  });
+
+  test("PR-396: another fail text under a mutant stays a kill (control)", async () => {
+    const l = await layout();
+    const failA = () => [{ method: "A", status: "fail" as const, message: "Assert.AreEqual failed" }];
+    const b = backendOf(l, fakeV3(failA).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    const mut = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect(mut.outcome).toBe("fail");
+    expect(mut.failureMessage ?? "").not.toContain(V3_STALE_BUFFER_NOTE);
+  });
+
+  test("PR-396: staleBufferGuard touches only a FAIL holding the text", () => {
+    const r = { codeunitId: 1, codeunitName: "T", method: "A" };
+    const stale = { ref: r, outcome: "fail" as const, durationMs: 1, failureMessage: STALE };
+    expect(staleBufferGuard(stale).outcome).toBe("error");
+    for (const v of [
+      { ...stale, outcome: "pass" as const },
+      { ...stale, outcome: "error" as const },
+      { ...stale, failureMessage: "Assert.AreEqual failed" },
+    ])
+      expect(staleBufferGuard(v)).toBe(v);
   });
 
   test("R590: v3's hidden-notes line refuses too (a skipped line may be among the hidden)", async () => {

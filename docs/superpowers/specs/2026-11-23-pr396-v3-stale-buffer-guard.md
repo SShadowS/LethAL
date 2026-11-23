@@ -60,3 +60,18 @@ PR-396 (lethal-code).
 
 ## Checks
 VERIFY (one at a time), Opus review, selectLegs' gates, CI.
+
+## Step 1's result (2026-11-23, bc4 20:27-20:35:38Z, released healthy; `/coord/handoff/PR-396/step1-result.md`)
+M13625's site SURVIVES on BC: its v3 killer `Worksheet_AnOldFormatFileWithVariants_CollapsesToOneRow` covers it, is green at
+baseline (197 ms), is not refused, and passes under the mutant. So both carriers of the text are BC-confirmed false kills;
+the text-only rule is built (2 of 2 caught, 0 false alarms on known truth).
+
+## Amendment 1 (2026-11-23, after reading the walk, before any test ran): the guarded row is terminal
+- **Where:** `staleBufferGuard` (al-runner-v3-backend.ts) runs on a test's verdict after `v3RowVerdict`, only when the lane
+  has an active mutant (`lane.lastActivated !== null`), so a baseline row is never touched.
+- **Test 4 was wrong:** a `runner-test-error` step is TERMINAL in the mutant walk (R-435; never held), so the walk ends the
+  mutant as `error` at the guarded step, and a LATER ordinary killer is not reached. That is kept on purpose (mantra 1):
+  the held class (`runner-refused`) assumes the test never ran and left no state, and a #8721 test did run. The cost: a
+  mutant whose guarded test comes before a real killer reads `error`, not `killed` (a lost kill, never a wrong one).
+- **Test 4 becomes:** the existing `pr81-held-error.test.ts` "runner-test-error before a fail: terminal as today (never held,
+  the fail is never run)", plus this PR's backend test asserting the guard yields exactly `runnerRow: "runner-test-error"`.
