@@ -5908,6 +5908,203 @@ report 51000 "FR Report"
   ],
 };
 
+/**
+ * PR-374: #8219's family, the largest open coherent one after families 1-23 under R1036's count over c3 and c3off
+ * (main-bf3a3e863): "conversion of Boolean false to BigInteger" (6) and "conversion of Code <x> to BigInteger" (2), met where
+ * RecordRef code hands a FieldRef a value of another type. Each cell opens table 51000 through a RecordRef, takes one field,
+ * gives it one typed value through one FieldRef method, and reports what the field then holds: the filter after SetRange or
+ * SetFilter, the formatted value after `Value :=` or Validate. No row is written. Cell i is codeunit BASE_ID + 1 + i.
+ */
+const FC_FIELDS: readonly (readonly [string, number])[] = [
+  ["BigInteger", 2],
+  ["Integer", 3],
+  ["Decimal", 4],
+  ["Code", 5],
+  ["Text", 6],
+  ["Date", 7],
+  ["Boolean", 8],
+  ["Option", 9],
+  ["Guid", 10],
+];
+/** The value's name, its AL declaration and the statement that sets it. */
+const FC_VALUES: readonly (readonly [string, string, string])[] = [
+  ["Boolean false", "Boolean", "V := false;"],
+  ["Code ABC", "Code[20]", "V := 'ABC';"],
+  ["Code 123", "Code[20]", "V := '123';"],
+  ["Text XY", "Text[30]", "V := 'XY';"],
+  ["Integer 5", "Integer", "V := 5;"],
+  ["BigInteger 5", "BigInteger", "V := 5L;"],
+  ["Decimal 1.5", "Decimal", "V := 1.5;"],
+  ["Date", "Date", "V := DMY2Date(17, 1, 2026);"],
+];
+/** The method, the statement under test and the read-back that becomes the answer. */
+const FC_METHODS: readonly (readonly [string, string, string])[] = [
+  ["SetRange", "FR.SetRange(V);", "FR.GetFilter()"],
+  ["SetFilter", "FR.SetFilter('%1', V);", "FR.GetFilter()"],
+  ["Value", "FR.Value := V;", "Format(FR.Value, 0, 9)"],
+  ["Validate", "FR.Validate(V);", "Format(FR.Value, 0, 9)"],
+];
+export const FIELDREF_CONVERT: Family = {
+  name: "fieldref-convert",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8219",
+  known: ["conversion of Boolean false to BigInteger"],
+  testPermissions: "Disabled",
+  support: `table 51000 "FC Row"
+{
+    fields
+    {
+        field(1; "Key"; Integer) { }
+        field(2; BigInt; BigInteger) { }
+        field(3; Int; Integer) { }
+        field(4; Dec; Decimal) { }
+        field(5; Cod; Code[20]) { }
+        field(6; Txt; Text[50]) { }
+        field(7; Dat; Date) { }
+        field(8; Bool; Boolean) { }
+        field(9; Opt; Option) { OptionMembers = A,B,C; }
+        field(10; Gid; Guid) { }
+    }
+    keys { key(PK; "Key") { Clustered = true; } }
+}
+`,
+  handles: {},
+  cells: FC_FIELDS.flatMap(([field, no]) =>
+    FC_VALUES.flatMap(([value, decl, set]) =>
+      FC_METHODS.map(([method, call, read]) => ({
+        type: `FC ${field}`,
+        method,
+        state: value,
+        vars: ["RecRef: RecordRef;", "FR: FieldRef;", `V: ${decl};`],
+        setup: ["RecRef.Open(51000);", `FR := RecRef.Field(${no});`, set],
+        call: `${call} Error('V:[%1]', ${read});`,
+      })),
+    ),
+  ),
+};
+
+/**
+ * PR-374: the refusal PR-373 found (19 cells): "CurrReport.FormatRegion := '<x>' in a report not started by Run (its formats and
+ * dataset in that region are not built)", and its sibling "after CurrReport.Language := N in a report not started by Run".
+ * al-runner pins a few (language, region) pairs in a report run by SaveAs and refuses the rest. Here each cell is one pair: an
+ * invented report sets `CurrReport.Language`, then `CurrReport.FormatRegion`, in OnAfterGetRecord, and formats a long date, an
+ * amount, a short date and a time in one text. The holder is cleared before each run (PR-373's review), so a run that never
+ * fires the trigger answers `[]`, never the previous cell's text. Cell i is codeunit BASE_ID + 1 + i; support objects at 51000.
+ */
+const LR_LANGUAGES = [1030, 1031, 1033, 1034, 1036, 1040, 1043, 1044, 1053, 2057, 3084];
+const LR_REGIONS = [
+  "da-DK",
+  "de-DE",
+  "en-US",
+  "es-ES",
+  "fr-FR",
+  "it-IT",
+  "nl-NL",
+  "nb-NO",
+  "sv-SE",
+  "en-GB",
+  "fr-CA",
+  "de-CH",
+];
+const lrCell = (lang: number, region: string): Cell => ({
+  type: "Pair",
+  method: region,
+  state: lang === 0 ? "no language" : `lang ${lang}`,
+  vars: [
+    'Rep: Report "LR Report";',
+    'Buf: Record "LR Buf";',
+    "OS: OutStream;",
+    'Holder: Codeunit "LR Holder";',
+  ],
+  setup: [
+    "Holder.Put('');",
+    "Buf.Data.CreateOutStream(OS);",
+    `Rep.SetCase(${lang}, '${region}');`,
+    "Rep.SaveAs('', ReportFormat::Xml, OS);",
+  ],
+  call: "Error('V:[%1]', Holder.Get());",
+  // without the report language, month names follow the session's language
+  ...(lang === 0 ? { depends: "locale" as const } : {}),
+});
+export const LANGUAGE_REGION: Family = {
+  name: "language-region",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8094",
+  known: [],
+  testPermissions: "Disabled",
+  support: `table 51000 "LR Buf"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Data; Blob) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 51000 "LR Holder"
+{
+    SingleInstance = true;
+
+    var
+        Value: Text;
+
+    procedure Put(V: Text)
+    begin
+        Value := V;
+    end;
+
+    procedure Get(): Text
+    begin
+        exit(Value);
+    end;
+}
+
+report 51000 "LR Report"
+{
+    UsageCategory = None;
+
+    dataset
+    {
+        dataitem(Row; Integer)
+        {
+            DataItemTableView = where(Number = const(1));
+
+            column(Answer; Answer) { }
+
+            trigger OnAfterGetRecord()
+            var
+                Holder: Codeunit "LR Holder";
+                D: Date;
+            begin
+                if Lang <> 0 then
+                    CurrReport.Language := Lang;
+                CurrReport.FormatRegion := Region;
+                D := DMY2Date(17, 1, 2026);
+                Answer := Format(D, 0, 4) + '|' + Format(1234567.891) + '|' + Format(D) + '|' + Format(133015T);
+                Holder.Put(Answer);
+            end;
+        }
+    }
+
+    var
+        Lang: Integer;
+        Region: Text[80];
+        Answer: Text;
+
+    procedure SetCase(NewLang: Integer; NewRegion: Text[80])
+    begin
+        Lang := NewLang;
+        Region := NewRegion;
+    end;
+}
+`,
+  handles: {},
+  cells: [
+    ...LR_LANGUAGES.flatMap((lang) => LR_REGIONS.map((r) => lrCell(lang, r))),
+    // the region alone (the shape that ran in PR-373's fr-FR cells)
+    ...LR_REGIONS.map((r) => lrCell(0, r)),
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -5950,6 +6147,10 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [Y2_COLLATION.name]: Y2_COLLATION,
   // PR-373: appended (BC-check number 24): #8094, Format under CurrReport.FormatRegion, for a per-cell BC differential
   [FORMAT_REGION.name]: FORMAT_REGION,
+  // PR-374: appended (BC-check number 25): #8219, a FieldRef given a value of another type, for a per-cell BC differential
+  [FIELDREF_CONVERT.name]: FIELDREF_CONVERT,
+  // PR-374: appended (BC-check number 26): (language, region) pairs in a report not started by Run, for a per-cell BC differential
+  [LANGUAGE_REGION.name]: LANGUAGE_REGION,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
