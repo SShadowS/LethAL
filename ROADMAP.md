@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**65 of 1163 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 1163 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1171,7 +1171,7 @@ that ordering is the priority.
 - **R1148** · Survived mutants run every covering test, but on DO only 52% of those tests reach the mutated statement: pruning covering tests to the reaching ones (statement grain, codeunit-order safe) is the largest LethAL-owned speed lever left · [R1148.md](docs/roadmap/R1148.md) · open — pruning is BUILT, behind LETHAL_V3_REACH_PRUNE (default OFF; PR-303). Full DO (PR-330, 2026-11-22) is…
 - **R1149** · Restore leg O1's full corpus-set expectation (every write test passes) when al-runner's P2 lets a partner login's memo reads run with BC's value; until then O1 names the f9116dc96 row-insert refusal as a known coverage loss (PR-233) · [R1149.md](docs/roadmap/R1149.md) · open — trigger: the first gated `current` carrying upstream's P2 (the partner-OnAfterLogin memo probe, #8239)
 - **R1150** · The update gate's default pass path accepts a receipt whose applied pin this checkout does not know: no digest check, no ledger row, and `current` can still move to a build every v3 session then refuses · [R1150.md](docs/roadmap/R1150.md) · done (9177f68a8)
-- **R1151** · Merge the kill-pair batches of one packed prefetch call into one batch (PR-242's L2'): PR-241 packs units into one prefetchMutants call, but batchKillPairs still runs per unit, so each unit's few kills pay their own live request · [R1151.md](docs/roadmap/R1151.md) · open
+- **R1151** · Merge the kill-pair batches of one packed prefetch call into one batch (PR-242's L2'): PR-241 packs units into one prefetchMutants call, but batchKillPairs still runs per unit, so each unit's few kills pay their own live request · [R1151.md](docs/roadmap/R1151.md) · done (3f0bac764)
 - **R1152** · Leg C's serve-keep-reasons checks only some keep-list entries: a reworded refusal text (the Company-table one, upstream since edge-4ebfe7913) passed every gate and turned into a DO restart storm (PERF-10, 2026-11-19) · [R1152.md](docs/roadmap/R1152.md) · done (ea4a58dda) — PR-363: leg C's serve-keep-reasons judges 47 more entries, each from a refusal-family cell…
 - **R1154** · PERF-10's '~5,900 lane-s of overlapping serve requests' was a machine suspend, not overlap: old event files mix Date.now request walls with monotonic atMs, so a request in flight across a sleep looks 33 min long; exclude suspends when summing old runs (PR-252 makes new runs' walls monotonic) · [R1154.md](docs/roadmap/R1154.md) · closed 2026-11-20 — the overlap was a suspend (PR-273); PR-252 (monotonic durations) and PR-264…
 - **R1155** · y2/y3 verdicts on edge-4ebfe7913 that ran through a by-value record copy are suspect (that build guessed the copy keeps the caller's filters); 2,204 private-corpus mutants are labelled, and they clear once `current` is a build that measures the shape · [R1155.md](docs/roadmap/R1155.md) · closed 2026-11-22 — measured (PR-335, /coord/handoff/PR-335/r1155.txt and r1155b.txt): on c2…

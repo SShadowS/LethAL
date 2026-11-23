@@ -211,17 +211,97 @@ describe("PR-241 backend: one packed prefetch call", () => {
     expect(sizesOf(r)).toEqual(Array(10).fill(1));
   });
 
-  test("kill pairs are batched per unit, as when the units were prefetched one by one", async () => {
-    const rows: RowsFn = (m) =>
-      allPass(m, 0, 0, 0).map((x) =>
-        x.method === "A" ? { ...x, status: "fail" as const, message: "boom" } : x,
+  /** R1151: a killed mutant fails test A of the codeunit; every other mutant (and NONE) passes all. */
+  const killing =
+    (killed: ReadonlySet<string>): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        killed.has(m) && x.method === "A" ? { ...x, status: "fail" as const, message: "boom" } : x,
       );
-    const { r, prefetch } = await start(64, { pairBatch: true, rows });
+  type Answer = { readonly rows: unknown; readonly excluded?: unknown };
+  const pairsOf = (r: LanesRig) => {
+    const store = (
+      priv(r).laneList[1]?.prefetch as unknown as {
+        pairStore: Map<string, { cu: number; none: Answer; m: Answer; through?: string }>;
+      }
+    ).pairStore;
+    // What a pair confirms: its codeunit, both answers' rows and left-out tests, and PR-102's cut. Left out:
+    // `seq`, `wallMs` and `callId`, which name the request (one merged request where per unit there were several).
+    const ans = (a: Answer) => [a.rows, a.excluded ?? null];
+    return new Map(
+      [...store].map(([k, v]) => [
+        k,
+        JSON.stringify([v.cu, ans(v.none), ans(v.m), v.through ?? null]),
+      ]),
+    );
+  };
+
+  test("R1151: the kill pairs of a packed call go in ONE batch (they went per unit before)", async () => {
+    const { r, prefetch } = await start(64, {
+      pairBatch: true,
+      rows: killing(new Set(["M0001", "M0002"])),
+    });
     const all = [unitPlans(0, 1), unitPlans(1, 1)].flat(); // one killed mutant per unit
     await prefetch(all, { unitSizes: [1, 1] });
     const s = r.b.entriesStats();
     expect(s.pairBatchStored).toBe(2);
-    expect(s.pairBatchRequests).toBe(2); // one pair request per unit, not one for both
+    expect(s.pairBatchRequests).toBe(1);
+  });
+
+  test("R1151: pair for pair, a packed call stores exactly what the same units store prefetched one by one", async () => {
+    const killed = new Set(["M0001", "M0003", "M0007", "M0012"]); // unit 1 (M0004-M0006) has none
+    const units = [0, 1, 2, 3].map((u) => unitPlans(u, 3));
+    const packed = await start(64, { pairBatch: true, rows: killing(killed) });
+    await packed.prefetch(units.flat(), { unitSizes: [3, 3, 3, 3] });
+    const oneByOne = await start(undefined, { pairBatch: true, rows: killing(killed) });
+    // Each prefetch call starts its own store, so the one-by-one pairs are read after each unit.
+    const b = new Map<string, string>();
+    for (const u of units) {
+      await oneByOne.prefetch(u);
+      for (const [k, v] of pairsOf(oneByOne.r)) b.set(k, v);
+    }
+    const a = pairsOf(packed.r);
+    expect(a.size).toBe(4);
+    expect([...a.keys()].map((k) => k.split("|")[1]).sort()).toEqual([...killed].sort());
+    expect(a).toEqual(b);
+    expect(packed.r.b.entriesStats().pairBatchRequests).toBe(1);
+    expect(oneByOne.r.b.entriesStats().pairBatchRequests).toBe(3); // one per unit with a kill
+    // Review SF1: every merged pair is SERVED to its own kill (seq after the kill's prefetch), with no send;
+    // a mutant that was not killed has no pair.
+    const v = packed.r.views[1];
+    if (v === undefined) throw new Error("no lane 1");
+    for (const m of [...killed].sort()) {
+      await v.activate(m);
+      expect((await v.run(A, OPTS)).outcome).toBe("fail");
+      const sent = packed.r.serve.requests.length;
+      await v.sendKillPair(m, A);
+      expect(packed.r.serve.requests.length).toBe(sent);
+    }
+    expect(packed.r.b.entriesStats()).toMatchObject({ pairBatchServed: 4, pairBatchRefused: 0 });
+    expect(a.has(`${[...a.keys()][0]?.split("|")[0]}|M0002`)).toBe(false);
+  });
+
+  test("R1151: the byte budget still splits a merged batch, whole kills only", async () => {
+    const { r, prefetch } = await start(64, {
+      pairBatch: true,
+      rows: killing(new Set(["M0001", "M0002"])),
+    });
+    priv(r).costByCall.set(CU, [3 * 2 ** 30]); // a kill's two 3 GiB groups exceed the 4 GiB budget, so each kill goes alone
+    await prefetch([unitPlans(0, 1), unitPlans(1, 1)].flat(), { unitSizes: [1, 1] });
+    const s = r.b.entriesStats();
+    expect(s.pairBatchStored).toBe(2);
+    expect(s.pairBatchRequests).toBe(2);
+  });
+
+  test("R1151: an unpacked call is unchanged: one batch for its own kills", async () => {
+    const { r, prefetch } = await start(undefined, {
+      pairBatch: true,
+      rows: killing(new Set(["M0001", "M0002"])),
+    });
+    await prefetch(unitPlans(0, 2));
+    const s = r.b.entriesStats();
+    expect(s.pairBatchStored).toBe(2);
+    expect(s.pairBatchRequests).toBe(1);
   });
 
   test("5: every unit's rows land on its own mutants; the units are counted", async () => {

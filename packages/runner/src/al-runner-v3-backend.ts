@@ -10608,15 +10608,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       for (const g of again) resent.add(g.mutantId);
       if (again.length > 0) segments.push([...again]);
     }
-    // PR-241: kill pairs are batched per unit, as when the units were prefetched one by one.
-    if (unitSizes === undefined) await this.batchKillPairs(lane, plans);
-    else {
-      let at = 0;
-      for (const size of unitSizes) {
-        await this.batchKillPairs(lane, plans.slice(at, at + size));
-        at += size;
-      }
-    }
+    // R1151 (PR-267): ONE kill-pair batch for the whole call, packed or not; it still chunks by cost
+    // (`groupsThatFit`). Every unit is scored after this, so each pair still follows its kill's prefetch.
+    await this.batchKillPairs(lane, plans);
   }
 
   /**
