@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**65 of 1159 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**66 of 1160 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -406,6 +406,7 @@ that ordering is the priority.
 - **R1179** · On --resume, CARRIED kills never reach R197's kill ledger: only live kill sites call recordKill, so a resumed session walks a procedure's later mutants in a different order than a fresh run, which can move killingTest and PR-144 recheck eligibility · [R1179.md](docs/roadmap/R1179.md) · done (ba4c4a327 and 4e22f41e4, coord PR-345, built as PR-341 part 3): --resume seeds the session's kill…
 - **R1180** · PR-340's carry walk is not measured for what it leaves in a lane's serve daemon: the carry gate's fixture sends every ordinary request before the walks (one prefetch window), so the next full DO run must compare its unlabelled mutants with a no-walk control per mutant · [R1180.md](docs/roadmap/R1180.md) · closed 2026-11-23 — measured by PR-357 (orchestrator's ruling): c3 against its LETHAL_V3_CARRY_WALK=off…
 - **R1186** · 30 serve keep entries hold alternations, and PR-361 proves only ONE real al-runner line per entry: an unmatched branch is R1153's failure shape (a keep that never meets real output), unguarded · [R1186.md](docs/roadmap/R1186.md) · done (1f111b808) — PR-362: pr362-keep-branch-lines.test.ts splits every keep entry's non-capturing groups…
+- **R1197** · refusedCutTail's tail route reads a mutant `survived` when the test that would kill it is the one refused at baseline: v3 never runs it and has no coverage for it, so on DO 68874 9 of the 47 recovered survivors are killed on BC (false survivors); with the flag off the PR-250 cut scored them `error` · [R1197.md](docs/roadmap/R1197.md) · open
 
 ## Product gaps a real project hits
 
