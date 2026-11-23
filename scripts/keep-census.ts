@@ -23,6 +23,7 @@ import {
   type CellResult,
   FAMILIES,
   type Family,
+  REFUSAL_FAMILY_BC_VERSION,
   classOf,
   classify,
   emitApp,
@@ -340,8 +341,9 @@ class Daemon {
         pkgs,
         "--test-timeout",
         "20",
+        // PR-377: the families' one exact build (a bare `28` resolves to a build whose .NET runtime al-runner fetches)
         "--bc-version",
-        "28",
+        REFUSAL_FAMILY_BC_VERSION,
         ...(hasDeps ? [] : ["--no-download"]),
         "--dotnet-sidecar",
         sidecar,
@@ -570,7 +572,16 @@ function oneShot(
   extra: string[] = [],
 ) {
   const p = Bun.spawnSync(
-    [bin, "test", "--bc-version", "28", "--output-json", ...args, ...extra, dir],
+    [
+      bin,
+      "test",
+      "--bc-version",
+      REFUSAL_FAMILY_BC_VERSION,
+      "--output-json",
+      ...args,
+      ...extra,
+      dir,
+    ],
     {
       cwd,
       stdout: "pipe",

@@ -6267,12 +6267,10 @@ export const ZIP_BLOB: Family = {
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
   known: [],
   testPermissions: "Disabled",
-  // Data Compression wraps .NET's ZipArchive: al-runner needs its .NET helper, and the exact BC build (the last --bc-version
-  // wins over the script's `28`), as LethAL's own serve runs pass them.
+  // Data Compression wraps .NET's ZipArchive: al-runner needs its .NET helper (and the exact BC build, which every family now
+  // runs on: REFUSAL_FAMILY_BC_VERSION, PR-377), as LethAL's own serve runs pass them.
   // ponytail: box paths (the pinned build's sidecar, the cached service tier); take them from the run's config when a second box needs this.
   args: [
-    "--bc-version",
-    "28.4.53241.56646",
     "--dotnet-sidecar",
     "/work/tools/al-runner-v3/current/dotnet-sidecar/AlDotNetSidecar.dll",
     "--dotnet-assembly-dir",
@@ -6512,6 +6510,24 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
 export const BASE_ID = 51000;
+
+/**
+ * PR-377: the one BC build every family runs on, four numbers: the build LethAL's DO configs and serve runs name (R1194). A bare
+ * major version (`28`) resolves to a build whose service-tier runtime al-runner then fetches from the artifact feed (PR-375).
+ */
+export const REFUSAL_FAMILY_BC_VERSION = "28.4.53241.56646";
+
+/** PR-377: al-runner's arguments for one family's run of the app in `dir`. */
+export function runArgs(f: Family, dir: string): string[] {
+  return [
+    "test",
+    "--bc-version",
+    REFUSAL_FAMILY_BC_VERSION,
+    ...(f.args ?? []),
+    "--output-json",
+    dir,
+  ];
+}
 
 /** A cell's test codeunit name (AL caps object names at 30). */
 export function cellName(c: Cell, i: number): string {
@@ -6973,15 +6989,12 @@ if (import.meta.main) {
     mkdirSync(join(dir, file, ".."), { recursive: true });
     writeFileSync(join(dir, file), text);
   }
-  const p = Bun.spawnSync(
-    [bin, "test", "--bc-version", "28", ...(f.args ?? []), "--output-json", dir],
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, ALRUNNER_SEED: "1" },
-      timeout: 600_000,
-    },
-  );
+  const p = Bun.spawnSync([bin, ...runArgs(f, dir)], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ALRUNNER_SEED: "1" },
+    timeout: 600_000,
+  });
   let j: {
     tests?: { name: string; status: string; message?: string; notRun?: boolean }[];
     compilationErrors?: unknown[];
