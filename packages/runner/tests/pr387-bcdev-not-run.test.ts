@@ -201,6 +201,11 @@ describe("PR-387 test 3: not counted", () => {
     expect(isBcdevNotRunBaselineRow({ outcome: "error", classification: [] })).toBe(false);
     expect(isBcdevNotRunBaselineRow({ outcome: "fail", classification: [] })).toBe(false);
   });
+  test("a deadline-exceeded row counts (as on v3)", () => {
+    expect(isBcdevNotRunBaselineRow({ outcome: "deadline-exceeded", classification: [] })).toBe(
+      true,
+    );
+  });
   test("stale-test-app wins over a skip and a body that never ran (the session is refused whole)", () => {
     expect(
       isBcdevNotRunBaselineRow({

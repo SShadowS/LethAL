@@ -81,7 +81,7 @@
         },
         "survivorsBesideUnrunTests": {
           "type": "object",
-          "description": "PR-381 (R1197): verbatim from the report's survivorsBesideUnrunTests. Present exactly when the report has it: an al-runner-v3 run with at least one test v3 did not run at baseline (refused, timed out or stopped) and at least one survivor. The words are the interpretation of the caveat survivors-beside-unrun-tests. An upper bound on the survivors at risk, not a verdict.",
+          "description": "PR-381 (R1197): verbatim from the report's survivorsBesideUnrunTests. Present exactly when the report has it: an al-runner-v3 or bcdev run with at least one test not run at baseline (refused, timed out or stopped) and at least one survivor. The words are the interpretation of the caveat survivors-beside-unrun-tests. An upper bound on the survivors at risk, not a verdict.",
           "additionalProperties": false,
           "required": ["survivors", "notRunTests"],
           "properties": {

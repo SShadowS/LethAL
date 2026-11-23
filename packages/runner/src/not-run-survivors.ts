@@ -1,4 +1,4 @@
-// PR-381 (R1197): survivors in an al-runner-v3 run that had tests v3 did not run at baseline.
+// PR-381 (R1197), PR-387: survivors in an al-runner-v3 or bcdev run that had tests not run at baseline.
 // Spec: docs/superpowers/specs/2026-11-23-pr381-refused-test-survivors-caveat.md
 // A test v3 refused, timed out or stopped at baseline kills nothing, so a survivor only it would kill
 // is unknown. No verdict changes: this is the count and the words that go beside every survivor count.
@@ -47,6 +47,7 @@ export function isBcdevNotRunBaselineRow(v: {
   return (
     v.notRun === true ||
     v.outcome === "timeout" ||
+    v.outcome === "deadline-exceeded" ||
     v.outcome === "skip" ||
     v.classification.some(
       (c) =>
@@ -74,7 +75,7 @@ export interface NotRunView {
 export interface NotRunSurvivors {
   /** `survived` and `known-survivor` rows. */
   readonly survivors: number;
-  /** Tests v3 refused, timed out or stopped at baseline. */
+  /** Tests not run at baseline (v3 or BC refused, timed out or stopped them). */
   readonly notRunTests: number;
   /** Survivors carrying `[v3-refused-test-nearby]`. Omitted with coverage off. */
   readonly sharingACodeunit?: number;
@@ -88,8 +89,7 @@ const survivorRows = (r: NotRunView) =>
 
 /**
  * The rule, pure, on ANY backend: `undefined` unless `notRunAtBaseline` is non-empty and the report has at
- * least one `survived` or `known-survivor` row. (This PR fills the field for al-runner-v3 only; bcdev is
- * PR-387.) confirm-merge passes a view holding only the survivors still measured by v3.
+ * least one `survived` or `known-survivor` row. (Both al-runner-v3 and bcdev fill the field.) confirm-merge passes a view holding only the survivors still measured by v3.
  */
 export function notRunSurvivors(r: NotRunView): NotRunSurvivors | undefined {
   const tests = r.notRunAtBaseline ?? [];

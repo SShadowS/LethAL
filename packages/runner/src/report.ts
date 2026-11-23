@@ -294,7 +294,7 @@ export type Caveat =
   | "isolated-recheck-kills"
   // R1131: at least one row was not scored because its start WorkDate moved from the batch's baseline.
   | "workdate-changed"
-  // PR-381 (R1197): survivors in an al-runner-v3 run with tests v3 did not run at baseline.
+  // PR-381 (R1197), PR-387: survivors in an al-runner-v3 or bcdev run with tests not run at baseline.
   | "survivors-beside-unrun-tests";
 
 /**
@@ -1827,10 +1827,11 @@ export interface SessionReport {
     readonly budgetMs: number;
   };
   /**
-   * PR-381 (R1197): the baseline tests al-runner v3 did not run to a verdict: refused (NotRun), timed
-   * out or stopped by LethAL. Not a test that ran and failed (those are in `unsupportedTests`). Written
-   * on every al-runner-v3 report (`[]` when there are none), absent on bcdev: a v3 report without it
-   * predates it, and a reader says "not recorded in this report". Sorted qualified test names.
+   * PR-381 (R1197), PR-387: the baseline tests the backend did not run to a verdict: refused (v3
+   * NotRun, or a BC TestPage or permission refusal), timed out or stopped by LethAL, skipped, or a body
+   * that never ran. Not a test that ran and failed (those are in `unsupportedTests`). Written on every
+   * al-runner-v3 and bcdev report (`[]` when there are none): a report without it predates it, and a
+   * reader says "not recorded in this report". Sorted qualified test names.
    */
   readonly notRunAtBaseline?: readonly string[];
   /**

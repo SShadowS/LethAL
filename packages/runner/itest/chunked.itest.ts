@@ -89,7 +89,7 @@ import {
   printItestTarget,
   readFixtureConfig,
 } from "./config-path";
-import { CHUNKED_FIGURES } from "./gate-expected";
+import { CHUNKED_FIGURES, TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { CHUNKED_SUBLEGS } from "./gate-sublegs";
 import {
@@ -439,9 +439,15 @@ async function main(): Promise<void> {
     // guardReached and reachedBy (as a SET) per mutant across the two legs.
     assertReachIdenticalAcrossLegs(control.report, chunked.report);
     // PR-387: chunking is a cost knob, so the not-run-at-baseline list and its counts match across legs.
-    assert.ok(
-      (control.report.notRunAtBaseline ?? []).length > 0,
-      "PR-387: the control leg must name the refused TestPage test",
+    assert.deepEqual(
+      control.report.notRunAtBaseline,
+      TABLES_FIGURES.testPageRefused,
+      "PR-387: the control leg must name exactly the refused TestPage test",
+    );
+    assert.deepEqual(
+      chunked.report.notRunAtBaseline,
+      TABLES_FIGURES.testPageRefused,
+      "PR-387: the chunked leg must name exactly the refused TestPage test",
     );
     assert.deepEqual(
       chunked.report.notRunAtBaseline,

@@ -1040,7 +1040,11 @@ function assertVerdictTable(report: SessionReport): void {
     TABLES_FIGURES.testPageRefused,
     "PR-387: notRunAtBaseline must name exactly the refused TestPage test",
   );
-  assert.equal(report.survivorsBesideUnrunTests?.survivors, 83, "PR-387: survivors beside unrun");
+  assert.equal(
+    report.survivorsBesideUnrunTests?.survivors,
+    TABLES_FIGURES.survived, // this fixture has no known survivors, so survived is the whole count
+    "PR-387: survivors beside unrun",
+  );
   assert.equal(report.survivorsBesideUnrunTests?.notRunTests, 1, "PR-387: not-run test count");
   assert.equal(
     report.survivorsBesideUnrunTests?.sharingACodeunit,
