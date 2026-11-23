@@ -276,10 +276,10 @@ describe("PR-381 the report", () => {
     expect(renderConsole(r)).not.toContain(NOT_RECORDED_TEXT);
   });
 
-  test("4: bcdev, test 1's fixture: no caveat and no field in this PR (PR-385 turns this around)", () => {
+  test("4: bcdev, test 1's fixture: v3's refusal TEXT is not a bcdev class, so the field is written empty (PR-387 fills it by classification)", () => {
     const r = build(CAPS_BC, [PASS, REFUSED_ROW], ROWS);
     expect(r.validity.caveats).not.toContain("survivors-beside-unrun-tests");
-    expect(r.notRunAtBaseline).toBeUndefined();
+    expect(r.notRunAtBaseline).toEqual([]);
     expect(r.survivorsBesideUnrunTests).toBeUndefined();
     expect(renderConsole(r)).not.toContain("did not run at baseline");
   });
@@ -387,14 +387,16 @@ describe("PR-381 the report", () => {
 describe("PR-381 the rule is backend-neutral (PR-387 fills the field for bcdev)", () => {
   test("a bcdev report WITH notRunAtBaseline filled by hand and survivors gets the caveat counts", () => {
     const r = build(CAPS_BC, [PASS, REFUSED_ROW], ROWS);
-    expect(r.notRunAtBaseline).toBeUndefined(); // this PR fills it for v3 only
+    expect(r.notRunAtBaseline).toEqual([]);
     const byHand = { ...r, notRunAtBaseline: [REFUSED] };
-    expect(notRunSurvivors(byHand)).toEqual({ survivors: 2, notRunTests: 1, sharingACodeunit: 1 });
-    expect(notRunLine(byHand)).toBe(SENT_TAGGED);
+    // PR-387: bcdev has no nearby-tag count, so `sharingACodeunit` is omitted.
+    expect(notRunSurvivors(byHand)).toEqual({ survivors: 2, notRunTests: 1 });
+    expect(notRunLine(byHand)).toContain("BC could not run at baseline");
   });
-  test("a bcdev report without the field prints nothing new, not even 'not recorded'", () => {
+  test("a bcdev report without the field says 'not recorded' (PR-387), never silence", () => {
     const r = build(CAPS_BC, [PASS, REFUSED_ROW], ROWS);
-    expect(notRunLine(r)).toBeUndefined();
+    const { notRunAtBaseline: _a, ...old } = r;
+    expect(notRunLine(old)).toBe(NOT_RECORDED_TEXT);
   });
 });
 

@@ -503,6 +503,11 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "siteCount": 9,
     "totalFiles": 13,
   },
+  "notRunAtBaseline": [
+    "Sales Permission Tests.WritesToAppTable",
+    "Sales Post Tests.PostBatchWaitsForLock",
+    "Sales UI Tests.OpensApprovalCard",
+  ],
   "only": {
     "excludedFileCount": 9,
     "patterns": [
@@ -544,6 +549,10 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "missingTests": [
       "Sales Regression Tests.LegacyDiscountApplies",
     ],
+  },
+  "survivorsBesideUnrunTests": {
+    "notRunTests": 3,
+    "survivors": 5,
   },
   "survivorsByProcedure": [
     {
@@ -694,6 +703,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "tests-permission-refused",
       "tests-testpage-unsupported",
       "baseline-test-stopped",
+      "survivors-beside-unrun-tests",
       "runner-disagreement",
       "stop-hung-sessions",
       "resumed",

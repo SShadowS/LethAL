@@ -1034,6 +1034,19 @@ function assertVerdictTable(report: SessionReport): void {
     false,
     "a refused test is not a green one: baselineGreen keeps its meaning (every discovered test passed)",
   );
+  // PR-387: the refused TestPage test is a baseline test BC could not run, so its 83 survivors carry the caveat.
+  assert.deepEqual(
+    report.notRunAtBaseline,
+    TABLES_FIGURES.testPageRefused,
+    "PR-387: notRunAtBaseline must name exactly the refused TestPage test",
+  );
+  assert.equal(report.survivorsBesideUnrunTests?.survivors, 83, "PR-387: survivors beside unrun");
+  assert.equal(report.survivorsBesideUnrunTests?.notRunTests, 1, "PR-387: not-run test count");
+  assert.equal(
+    report.survivorsBesideUnrunTests?.sharingACodeunit,
+    undefined,
+    "PR-387: bcdev has no sharingACodeunit count",
+  );
   assert.equal(report.counts.killed, EXPECTED.killed, "killed count mismatch");
   assert.equal(report.counts.survived, EXPECTED.survived, "survived count mismatch");
   assert.equal(report.counts.noCoverage, EXPECTED.noCoverage, "no-coverage count mismatch");

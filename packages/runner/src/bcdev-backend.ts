@@ -1896,6 +1896,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           outcome: "error",
           durationMs: monoNow() - started,
           failureMessage: firstText(res),
+          bodyNeverRan: true,
         };
       }
       const payload = parseTestRunPayload(firstText(res));
@@ -1908,6 +1909,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           outcome: "error",
           durationMs: monoNow() - started,
           failureMessage: NO_RESULT_FOR_METHOD,
+          bodyNeverRan: true,
         };
       }
       const outcome = WIRE_STATUS_TO_OUTCOME[r.status];

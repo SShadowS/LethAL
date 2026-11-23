@@ -438,6 +438,21 @@ async function main(): Promise<void> {
     // GH-24: chunking is a cost knob (R208) and must not move reach either — identical
     // guardReached and reachedBy (as a SET) per mutant across the two legs.
     assertReachIdenticalAcrossLegs(control.report, chunked.report);
+    // PR-387: chunking is a cost knob, so the not-run-at-baseline list and its counts match across legs.
+    assert.ok(
+      (control.report.notRunAtBaseline ?? []).length > 0,
+      "PR-387: the control leg must name the refused TestPage test",
+    );
+    assert.deepEqual(
+      chunked.report.notRunAtBaseline,
+      control.report.notRunAtBaseline,
+      "PR-387: chunking moved notRunAtBaseline",
+    );
+    assert.deepEqual(
+      chunked.report.survivorsBesideUnrunTests,
+      control.report.survivorsBesideUnrunTests,
+      "PR-387: chunking moved survivorsBesideUnrunTests",
+    );
 
     // 3. The chunked leg's own counts, pre-committed.
     assert.equal(chunked.report.warmKills, CHUNKED.warmKills, "chunked: warmKills");
