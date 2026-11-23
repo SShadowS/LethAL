@@ -380,14 +380,17 @@ export function judgeCarryWalk(a: {
       );
     // B1: classify exactly as the ordinary path does. A refusal marker without notRun, a RUNNER_REFUSAL
     // text, an OnRun or timeout row and a notRun row are never a pass or a fail: the walk is not sound.
+    // PR-396: a #8721 stale-buffer row reads error here too, so the walk fails rather than kills.
     const verdicts = new Map<string, TestVerdict["outcome"]>();
     for (const [k, r] of map) {
-      const v = v3RowVerdict(
-        { codeunitId: r.codeunit, codeunitName: String(r.codeunit), method: r.method },
-        r,
-        a.stopSeconds,
-        0,
-        undefined,
+      const v = staleBufferGuard(
+        v3RowVerdict(
+          { codeunitId: r.codeunit, codeunitName: String(r.codeunit), method: r.method },
+          r,
+          a.stopSeconds,
+          0,
+          undefined,
+        ),
       );
       if (v.outcome !== "pass" && v.outcome !== "fail")
         return failed(
