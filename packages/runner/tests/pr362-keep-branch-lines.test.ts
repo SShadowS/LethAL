@@ -78,6 +78,17 @@ describe("3. the branch helper, on invented regexes", () => {
     expect(keys(/^(?=y)(?:a|b)$/)).toEqual(["e #1 a", "e #1 b"]);
   });
 
+  // Review LOW 1. Red: drop the matching throw in nonCapturingGroups (the shape then yields a plausible wrong set).
+  test("a shape the walker does not split throws, never a plausible empty set", () => {
+    expect(() => branchesOf("e", /^(?:a|b)+$/)).toThrow("quantified group");
+    expect(() => branchesOf("e", /^(?:x){0,1}$/)).toThrow("quantified group");
+    expect(() => branchesOf("e", /^(?:x)??y$/)).toThrow("quantified group");
+    expect(() => branchesOf("e", /^(a|b)$/)).toThrow("capturing or named alternation");
+    expect(() => branchesOf("e", /^a|b$/)).toThrow("top-level |");
+    // Inside a lookahead the same shapes are conditions, and are left alone.
+    expect(keys(/^(?!(?:a|b)+)x$/)).toEqual([]);
+  });
+
   test("| and parentheses inside a character class or escaped are not group syntax", () => {
     expect(nonCapturingGroups(String.raw`[(|)]\(\|\)`)).toEqual([]);
     expect(keys(/^(?:[|(]|\))$/)).toEqual(["e #1 [|(]", "e #1 \\)"]);

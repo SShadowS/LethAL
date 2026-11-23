@@ -41,12 +41,22 @@ export function nonCapturingGroups(src: string): Group[] {
           : "other";
       stack.push({ open: i, kind, bars: [] });
     } else if (c === "|") {
-      stack[stack.length - 1]?.bars.push(i);
+      const top = stack[stack.length - 1];
+      // Review LOW 1: fail loudly on a shape this walker does not split, never a plausible empty branch set.
+      if (top === undefined) throw new Error(`a top-level | at ${i} is not split: ${src}`);
+      top.bars.push(i);
     } else if (c === ")") {
       const g = stack.pop();
       if (g === undefined) throw new Error(`unbalanced ) at ${i} in ${src}`);
       // A group inside a lookahead is part of a condition, never a branch.
       const inLook = stack.some((s) => s.kind === "look");
+      if (!inLook && g.kind !== "look") {
+        const next = src.slice(i + 1, i + 3);
+        if (/^[*+{]/.test(next) || next === "??")
+          throw new Error(`a quantified group at ${g.open} is not split: ${src}`);
+        if (g.kind === "other" && g.bars.length > 0)
+          throw new Error(`a capturing or named alternation at ${g.open} is not split: ${src}`);
+      }
       if (g.kind === "nc" && !inLook)
         out.push({ open: g.open, close: i, bars: g.bars, optional: src[i + 1] === "?" });
     }

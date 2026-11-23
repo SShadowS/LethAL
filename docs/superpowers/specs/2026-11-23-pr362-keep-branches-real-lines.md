@@ -62,6 +62,15 @@ entry's own kept-vs-fresh measurement.
 - **The counts become 119 branches: 116 proven, the same 3 unproven.** The fixture is byte-identical to
   `/coord/handoff/PR-362/fixture.json`, except for the one payment-reference value.
 
+## Amendment 2 (the Opus review, 2026-11-23: no BLOCK or SERIOUS, two LOW)
+- **Shapes the walker does not split now throw:** a quantified group (`*`, `+`, `{`, `??` after it), a capturing or named
+  alternation, and a top-level `|`, each outside a lookahead. A future entry of that shape fails loudly instead of slipping
+  past with a plausible empty or short branch set. No current entry has one (the review checked all 131). Test 3 pins each
+  shape, with a red check.
+- **An example of the over-matching limit:** in `permission-set-whole-object-type` the `store error ` line also matches the
+  `∅` branch, because the general name slot takes in the words "store error". So that `∅` branch is the whole entry under
+  another name: any line the entry accepts proves it. Both branches still have their own real line.
+
 ## Checks
 VERIFY full (one at a time beside the timed run), Opus review, CI. There are 0 moves: no `src` change. selectLegs decides
 the gates.
