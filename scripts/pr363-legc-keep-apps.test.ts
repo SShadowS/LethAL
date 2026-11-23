@@ -42,6 +42,8 @@ const FULL_APP_SHA256: Readonly<Record<string, string>> = {
   "y1-refusals": "83e391514bb35362a57b3426276e722ef48b25af3b0c5de8669601d5c7eeb5a2",
   "y2-xml": "2c9a64f47571c86d0391d13ba93e2dcdd3f4af1190188f94347ef9ebb6bfad3d",
   "y2-collation": "94862c82c367622279c2810b9b3c8b2f6ca33d72627420af4a36065344932c8b",
+  // PR-373: the app bc4 and main-bf3a3e863 ran (the emitted AL equals /coord/handoff/PR-373/bc-check/src)
+  "format-region": "484b0b635a4186fcb6ad1401f26db20243919458ff886d9aced6537e50464d9d",
 };
 
 describe("PR-363: emitApp's subset option", () => {

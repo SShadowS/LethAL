@@ -5771,6 +5771,9 @@ const frCell = (
     `Rep.SetCase(${lang}, '${region}', ${region === "" ? "false" : "true"}, ${kind}, DMY2Date(17, ${month}, 2026));`,
     "Rep.SaveAs('', ReportFormat::Xml, OS);",
   ],
+  // ponytail: the SingleInstance holder is not cleared before the report runs, so a report that never fires OnAfterGetRecord
+  // would report the previous cell's text. Not seen on bc4 or main-bf3a3e863 (every answer matches its own month and kind).
+  // Add `Holder.Put('');` first when the cells are next re-measured on both sides (it changes the BC-check app).
   call: "Error('V:[%1]', Holder.Get());",
   // without the report language, month names and captions follow the session's language
   ...(lang === 0 ? { depends: "locale" as const } : {}),

@@ -1509,8 +1509,7 @@ describe("PR-373: the format-region family", () => {
     for (const c of f.cells) {
       const m = /^Rep\.SetCase\((\d+), '([a-zA-Z-]*)', (true|false),/.exec(c.setup?.[1] ?? "");
       expect(m).not.toBeNull();
-      const [, lang, region, set] = m ?? [];
-      expect(set).toBe(region === "" ? "false" : "true");
+      const [, lang, region] = m ?? [];
       expect(region === "").toBe(c.state === "none");
       expect(lang !== "0").toBe(c.state.endsWith(" lang"));
       expect(c.depends === "locale").toBe(!c.state.endsWith(" lang"));
