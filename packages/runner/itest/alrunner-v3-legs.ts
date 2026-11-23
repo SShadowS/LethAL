@@ -857,7 +857,7 @@ export interface TcInput {
   /** TC-on's `al-runner-v3-refused-cut-tail` notices (messages). */
   readonly tailNotices: readonly string[];
   /** What T0 showed in TC-off and TC-on: the refused tests and the `baseline-refused-cut` notice, printed on (a1). */
-  readonly t0Evidence: string;
+  readonly t0Evidence: { readonly off: string; readonly on: string };
 }
 
 /** The names after `<label>: ` up to `;` or the end of the list, from the stability notice (`none` is empty). */
@@ -881,13 +881,13 @@ const sameSet = (a: readonly string[], b: readonly string[]): boolean =>
  */
 export function judgeTailcutLeg(input: TcInput): readonly string[] {
   const fails: string[] = [];
-  for (const [s, n] of [
-    ["TC-off", input.cutEntries.off],
-    ["TC-on", input.cutEntries.on],
+  for (const [s, n, evidence] of [
+    ["TC-off", input.cutEntries.off, input.t0Evidence.off],
+    ["TC-on", input.cutEntries.on, input.t0Evidence.on],
   ] as const)
     if (n <= 0)
       fails.push(
-        `TC: no PR-250 cut: ${s} read "cut before a baseline-refused test (PR-250)" ${n}, pre-committed above 0 for codeunit ${TC_CODEUNIT_ID}. T0's evidence: ${input.t0Evidence || "none"}`,
+        `TC: no PR-250 cut: ${s} read "cut before a baseline-refused test (PR-250)" ${n}, pre-committed above 0 for codeunit ${TC_CODEUNIT_ID}. T0's evidence (${s}): ${evidence || "none"}`,
       );
   if (fails.length > 0) return fails;
   const stabilityNotice = input.tailNotices.find((n) => n.includes(`codeunit ${TC_CODEUNIT_ID}:`));

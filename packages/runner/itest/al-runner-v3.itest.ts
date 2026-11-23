@@ -2002,6 +2002,8 @@ async function legTC(scratch: string): Promise<SessionReport> {
   const off = await run("TC-off");
   const on = await run("TC-on");
   const alone = await run("TC-alone");
+  const t0Evidence = (s: { r: SessionReport; t0Notices: string[] }): string =>
+    `refused at baseline: ${s.r.unsupportedTests.join(", ") || "none"}; ${s.t0Notices.join(" | ") || "no baseline-refused-cut notice"}`;
   const fails = judgeTailcutLeg({
     rows: { "TC-off": off.r.mutants, "TC-on": on.r.mutants, "TC-alone": alone.r.mutants },
     cutEntries: {
@@ -2010,7 +2012,10 @@ async function legTC(scratch: string): Promise<SessionReport> {
     },
     tailCalls: on.b.refusedCutTailStats(),
     tailNotices: on.tailNotices,
-    t0Evidence: `refused at baseline: ${on.r.unsupportedTests.join(", ") || "none"}; ${on.t0Notices.join(" | ") || "no baseline-refused-cut notice"}`,
+    t0Evidence: {
+      off: t0Evidence(off),
+      on: t0Evidence(on),
+    },
   });
   for (const f of fails) console.log(`    - ${f}`);
   const [first] = fails;

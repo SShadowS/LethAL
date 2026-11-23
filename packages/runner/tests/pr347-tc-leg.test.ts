@@ -41,7 +41,7 @@ const green = (): TcInput => ({
   cutEntries: { off: 6, on: 6 },
   tailCalls: { stability: 5, mutant: 6 },
   tailNotices: [STABILITY],
-  t0Evidence: "T0_RefusedFormat",
+  t0Evidence: { off: "T0_RefusedFormat off", on: "T0_RefusedFormat on" },
 });
 const edited = (s: TcSession, edit: (r: TcRow & { key: string }) => TcRow): TcInput => {
   const g = green();
@@ -62,7 +62,9 @@ describe("PR-347 leg TC: the judge", () => {
       expect(fails).toHaveLength(1);
       expect(fails[0]).toStartWith("TC: no PR-250 cut");
       expect(fails[0]).toContain(`TC-${which}`);
-      expect(fails[0]).toContain("T0_RefusedFormat");
+      // the evidence is the failing session's own, never the other's
+      expect(fails[0]).toContain(`T0_RefusedFormat ${which}`);
+      expect(fails[0]).not.toContain(`T0_RefusedFormat ${which === "off" ? "on" : "off"}`);
     }
   });
 
@@ -111,6 +113,33 @@ describe("PR-347 leg TC: the judge", () => {
     }
   });
 
+  // Red: remove the `rows.length !== TC_TABLE.length` guard.
+  test("(b) an EXTRA row in a session's report is named by its count", () => {
+    for (const s of TC_SESSIONS) {
+      const g = green();
+      const extra: TcRow = {
+        procedureName: "Ghost",
+        operatorName: "lethal.empty-block",
+        verdict: "killed",
+      };
+      const fails = judgeTailcutLeg({ ...g, rows: { ...g.rows, [s]: [...g.rows[s], extra] } });
+      expect(fails.some((f) => f.startsWith(`${s}: 11 mutants, pre-committed 10`))).toBe(true);
+    }
+  });
+
+  // Red: remove the `rows.length !== 1` condition (the first row alone would match the table).
+  test("(b) a DUPLICATE row for one site is named by that site", () => {
+    for (const s of TC_SESSIONS) {
+      const g = green();
+      const [first] = g.rows[s];
+      if (first === undefined) throw new Error("no rows");
+      const fails = judgeTailcutLeg({ ...g, rows: { ...g.rows, [s]: [...g.rows[s], first] } });
+      expect(
+        fails.some((f) => f.startsWith(`${s}: ${first.procedureName} ${first.operatorName} is `)),
+      ).toBe(true);
+    }
+  });
+
   // Red: drop the (c) block (the IsBig boundary: error under TC-on, never survived).
   test("(c) TC-on = TC-alone but for exactly IsBig's boundary mutant, which stays error", () => {
     const g = green();
@@ -152,7 +181,11 @@ describe("PR-347 leg TC: the fixture and the wiring", () => {
     ].map((n) => tests.indexOf(`procedure ${n}(`));
     expect(order.every((i, k) => i > 0 && (k === 0 || i > (order[k - 1] ?? 0)))).toBe(true);
     expect(tests).toContain("Format(8, 2, '<Integer,2>')");
-    expect(tests).toContain("if Logic.IsBig(5) then");
+    const t4 = tests.slice(
+      tests.indexOf("procedure T4_SeesTheMark("),
+      tests.indexOf("procedure T5_IsSmallOne("),
+    );
+    expect(t4).toContain("if Logic.IsBig(5) then");
     expect(tests).toContain("Logic.IsSmall(1)");
     for (const d of ["sandbox-tailcut", "sandbox-tailcut-tests"])
       expect(JSON.parse(read(`fixtures/${d}/app.json`)).runtime).toBe("17.0");

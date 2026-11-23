@@ -535,6 +535,10 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
           );
           expect(String(refused)).toContain("refused-cut-tail-resume-refused");
           expect(String(refused)).toContain(`"refusedCutTail": ${first}`);
+          expect(String(refused)).toContain(
+            `was recorded with alRunnerV3.refusedCutTail ${first ? "on" : "off"}, and this session has it ${second ? "on" : "off"}.`,
+          );
+          expect(String(refused)).not.toContain("the default");
         }
         const resumed = await v3Session(root, store, mk(first), { resume: 1 });
         expect(resumed.resumedFrom?.runId).toBe(1);

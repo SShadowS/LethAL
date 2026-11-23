@@ -4827,7 +4827,7 @@ function olderDefaultResumeMessage(subject: string): string {
  * `false`; a run recorded with it the other way has another digest and lending build, so its rows are not carried.
  */
 function refusedCutTailResumeMessage(subject: string, nowOn: boolean): string {
-  return `refused-cut-tail-resume-refused: ${subject} was recorded with alRunnerV3.refusedCutTail ${nowOn ? "off (the default before PR-347)" : "on (the default since PR-347)"}, and this session has it ${nowOn ? "on" : "off"}. A test measured alone after a baseline-refusal cut (PR-250) must never be carried into a run without that route as an ordinary kill, nor the other way round. Resume it with "refusedCutTail": ${nowOn ? "false" : "true"} in the alRunnerV3 config section (as that run had it), or drop the resume flag to run from scratch.`;
+  return `refused-cut-tail-resume-refused: ${subject} was recorded with alRunnerV3.refusedCutTail ${nowOn ? "off" : "on"}, and this session has it ${nowOn ? "on" : "off"}. A test measured alone after a baseline-refusal cut (PR-250) must never be carried into a run without that route as an ordinary kill, nor the other way round. Resume it with "refusedCutTail": ${nowOn ? "false" : "true"} in the alRunnerV3 config section (as that run had it), or drop the resume flag to run from scratch.`;
 }
 
 function resolveResume(
