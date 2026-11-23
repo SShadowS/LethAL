@@ -89,7 +89,7 @@ export interface ElementsReport {
       readonly validity: SessionReport["validity"];
       readonly counts: SessionReport["counts"];
       readonly mutationScore: SessionReport["mutationScore"];
-      readonly v3NotRunAtBaseline?: SessionReport["v3NotRunAtBaseline"];
+      readonly notRunAtBaseline?: SessionReport["notRunAtBaseline"];
       readonly survivorsBesideUnrunTests?: SessionReport["survivorsBesideUnrunTests"];
     };
   };
@@ -397,8 +397,8 @@ export async function toMutationElements(
           counts: report.counts,
           mutationScore: report.mutationScore,
           // PR-381 (R1197): only when the report has them.
-          ...(report.v3NotRunAtBaseline !== undefined
-            ? { v3NotRunAtBaseline: report.v3NotRunAtBaseline }
+          ...(report.notRunAtBaseline !== undefined
+            ? { notRunAtBaseline: report.notRunAtBaseline }
             : {}),
           ...(report.survivorsBesideUnrunTests !== undefined
             ? { survivorsBesideUnrunTests: report.survivorsBesideUnrunTests }

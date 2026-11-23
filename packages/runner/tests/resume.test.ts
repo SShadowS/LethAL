@@ -6879,6 +6879,73 @@ describe("R658 D5: a baseline holding a stopped test records no snapshot", () =>
   });
 });
 
+describe("PR-381 (R1197): --resume with a REUSED baseline snapshot holding a refused row", () => {
+  const REFUSAL = "NotRun: out-of-scope: the test needs a thing";
+  /** An al-runner-v3 shape whose baseline refuses `BSlow` (a notRun row); every other test passes. */
+  class RefusingBaseline extends CountingBackend {
+    private active: string | null = null;
+    refusedRuns = 0;
+    constructor(abortAfter?: number) {
+      super("pass", abortAfter);
+      (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
+    }
+    override capabilities(): BackendCapabilities {
+      return { ...super.capabilities(), kind: "al-runner-v3", authoritative: false };
+    }
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-test", binarySha256: "b".repeat(64) };
+    }
+    override async activate(id: string | null): Promise<void> {
+      this.active = id;
+      await super.activate(id);
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      if (this.active === null && ref.method === "BSlow") {
+        this.refusedRuns += 1;
+        return {
+          ref,
+          outcome: "error",
+          durationMs: 5,
+          failureMessage: REFUSAL,
+          runnerRow: "runner-refused",
+        };
+      }
+      return super.run(ref, opts);
+    }
+  }
+
+  test("run 2 re-runs no refused baseline test, and its carried survivors carry the caveat", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), TWO_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new RefusingBaseline(1),
+      store,
+      ...dirs,
+      selectorIds,
+      stopHungSessions: true,
+    });
+    expect(first.quarantined).toBeDefined();
+    expect(first.notRunAtBaseline).toEqual(["Sandbox Tests.BSlow"]);
+    const second = new RefusingBaseline();
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      stopHungSessions: true,
+      resume: "last",
+      retryStranded: true,
+    });
+    // The snapshot is reused: the refused test was not run again, yet the report still names it.
+    expect(second.refusedRuns).toBe(0);
+    expect(report.notRunAtBaseline).toEqual(["Sandbox Tests.BSlow"]);
+    expect(report.mutants.some((m) => m.carried === true && m.verdict === "survived")).toBe(true);
+    expect(report.validity.caveats).toContain("survivors-beside-unrun-tests");
+    expect(report.survivorsBesideUnrunTests?.notRunTests).toBe(1);
+  });
+});
+
 /**
  * R912: the mutant loop prefetches and scores in windows, and `--time-budget` stops scheduling.
  * Order is asserted with counters (rows in the store at each prefetch call), never a wall clock; the

@@ -754,7 +754,9 @@ function totalsOf(mutants: readonly ConfirmationMutant[], v3: SessionReport): Co
       .filter((m) => m.measuredBy === "al-runner-v3" && SURVIVING_VERDICTS.has(m.finalVerdict))
       .map((m) => m.key),
   );
-  const view = { ...v3, mutants: v3.mutants.filter((m) => stillV3.has(keyOf(m))) };
+  // The stored result counts the whole run: this subset is recomputed, so the field is left out.
+  const { survivorsBesideUnrunTests: _stored, ...v3Rest } = v3;
+  const view = { ...v3Rest, mutants: v3.mutants.filter((m) => stillV3.has(keyOf(m))) };
   const notRun = notRunSurvivors(view);
   const notRunText = notRunLine(view);
   return {
@@ -762,7 +764,8 @@ function totalsOf(mutants: readonly ConfirmationMutant[], v3: SessionReport): Co
     byMeasuredBy,
     bcStubKills: mutants.filter((m) => m.flags.includes("linux-rdlc-stub")).length,
     score: killed + survived === 0 ? null : killed / (killed + survived),
-    provenance: `${survived} survivors, ${survivorsOnBc} of them measured on BC${notRunText !== undefined ? `; ${notRunText}` : ""}`,
+    // Known-survivors count as survivors, as the not-run sentence counts them.
+    provenance: `${survived + (byFinalVerdict["known-survivor"] ?? 0)} survivors, ${survivorsOnBc} of them measured on BC${notRunText !== undefined ? `; ${notRunText}` : ""}`,
     ...(notRun !== undefined ? { survivorsBesideUnrunTests: notRun } : {}),
   };
 }

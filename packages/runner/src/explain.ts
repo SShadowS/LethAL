@@ -18,6 +18,7 @@ import {
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
   MARK_KEYS_STALE_INTERPRETATION,
+  NOT_RUN_NOT_RECORDED_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
@@ -297,8 +298,9 @@ import { refuseRetiredV2Report } from "./v2-retired";
  * bumps (R233); v33 is frozen.
  *
  * 35: PR-381 (R1197) added the caveat value `survivors-beside-unrun-tests` to `$.caveats[].caveat` and the optional
- * `$.score.survivorsBesideUnrunTests` (three counts, copied from the report's field of the same name). New value and
- * new paths, so it bumps (R233); v34 is frozen.
+ * `$.score.survivorsBesideUnrunTests` (three counts, copied from the report's field of the same name), and the tool
+ * condition `not-run-tests-not-recorded` (an older al-runner-v3 report with survivors). New values and new paths,
+ * so it bumps (R233); v34 is frozen.
  */
 export const EXPLAIN_SCHEMA_VERSION = 35;
 
@@ -352,6 +354,7 @@ export const ADMISSIBLE_INTERPRETATIONS: readonly Interpretation[] = [
   COVERAGE_NOT_MEASURED_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   STRANDED_SKIP_INTERPRETATION,
+  NOT_RUN_NOT_RECORDED_INTERPRETATION,
   MARK_KEYS_STALE_INTERPRETATION,
 ];
 
@@ -713,7 +716,12 @@ export interface ExplainNotMeasured {
  * strings in the output with no registry or report behind them. A hand list would have been one
  * more place a new authored string could be quietly added.
  */
-export const TOOL_CONDITIONS = ["quarantined", "stranded-skips"] as const;
+export const TOOL_CONDITIONS = [
+  "quarantined",
+  "stranded-skips",
+  // PR-381: an al-runner-v3 report with survivors that does not record the tests v3 did not run.
+  "not-run-tests-not-recorded",
+] as const;
 export type ToolCondition = (typeof TOOL_CONDITIONS)[number];
 
 export interface ExplainToolCondition {
@@ -1806,6 +1814,19 @@ function toolConditionsOf(report: SessionReport): ExplainToolCondition[] {
       condition: "stranded-skips",
       count: resumedFrom.skippedStranded,
       interpretation: STRANDED_SKIP_INTERPRETATION,
+    });
+  }
+  // PR-381: say so on an older al-runner-v3 report; never print silence.
+  const unrecorded = report.mutants.filter((m) => m.verdict === "survived").length;
+  if (
+    report.backend === "al-runner-v3" &&
+    report.notRunAtBaseline === undefined &&
+    unrecorded > 0
+  ) {
+    conditions.push({
+      condition: "not-run-tests-not-recorded",
+      count: unrecorded,
+      interpretation: NOT_RUN_NOT_RECORDED_INTERPRETATION,
     });
   }
   return conditions;

@@ -1,5 +1,4 @@
 import { compareCodeUnits } from "@lethal/schemata";
-import { isV3RefusalText } from "./al-runner-rows";
 import type { BackendCapabilities, TestMethodRef } from "./backend";
 import type { ConfirmGiven, ConfirmRecord } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
@@ -14,6 +13,7 @@ import {
 } from "./excluded-sites";
 import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
+import { isNotRunBaselineRow } from "./not-run-survivors";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
   type CostlyTestRow,
@@ -218,7 +218,7 @@ export interface FoldedReport {
    * builder writes it to the report only for an al-runner-v3 run. A reused baseline snapshot emits the
    * same `baseline-batch-finished`, so a resumed run's carried batches are counted too.
    */
-  readonly v3NotRunAtBaseline: readonly string[];
+  readonly notRunAtBaseline: readonly string[];
   readonly runnerDisagreementTests?: readonly string[];
   /** R403 phase C: from the `tests-discovered` event, each only when non-empty. */
   readonly testBuildSymbols?: readonly string[];
@@ -608,13 +608,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           if (v.classification.includes("baseline-test-stopped")) baselineStoppedTests.add(v.name);
           // PR-381: refused (v3's NotRun text), timed out, or stopped. A fail or an error of the
           // test's own is not here: it is red on BC too.
-          if (
-            v.outcome === "timeout" ||
-            v.classification.includes("baseline-test-stopped") ||
-            isV3RefusalText(v.failureMessage)
-          ) {
-            v3NotRunTests.add(v.name);
-          }
+          // A stopped test is `timeout` (`stoppedByUs`), so its classification needs no branch here.
+          if (isNotRunBaselineRow(v)) v3NotRunTests.add(v.name);
           if (v.durationMs !== undefined) {
             baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
@@ -1055,7 +1050,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         }
       : {}),
     ...(sessionKindSensitive !== undefined ? { sessionKindSensitive } : {}),
-    v3NotRunAtBaseline: [...v3NotRunTests].sort(),
+    notRunAtBaseline: [...v3NotRunTests].sort(),
     ...(baselineStoppedTests.size > 0
       ? {
           baselineStopped: {

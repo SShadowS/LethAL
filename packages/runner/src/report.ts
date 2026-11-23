@@ -830,15 +830,15 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "survivors-beside-unrun-tests": {
     meaning:
       "This is an al-runner-v3 run, and at baseline v3 did not run at least one test to a verdict: it " +
-      "refused it, it timed out or LethAL stopped it (`v3NotRunAtBaseline` names them). Such a test " +
+      "refused it, it timed out or LethAL stopped it (`notRunAtBaseline` names them). Such a test " +
       "kills nothing here, and v3 has no coverage for it, so a mutant that only it would kill reads " +
       "`survived`. Every `survived` and `known-survivor` row of the run is flagged, and the " +
       "`survivorsBesideUnrunTests` count is an UPPER BOUND on the survivors at risk. " +
       "`sharingACodeunit` counts the survivors that carry the `[v3-refused-test-nearby]` note, a hint " +
       "and not a bound (omitted when coverage is off). Evidence: on one DO run, 9 of 47 survivors " +
       "were killed on BC by a test v3 had refused at baseline. To narrow the count, run the " +
-      "survivors on BC (`lethal run --confirm-from`); a static call-graph reach that names the " +
-      "survivors a refused test can reach is planned (PR-383).",
+      "survivors on BC (`lethal run --confirm-from`). A static call-graph reach that names the " +
+      "survivors a refused test can reach was measured as no gain (PR-386, closed).",
     entailedNegative:
       "Not a wrong verdict, and not a claim that any one survivor is killable: no verdict moved and " +
       "no score changed. A test that ran and failed on its own is not counted here: it is red on BC " +
@@ -1831,9 +1831,9 @@ export interface SessionReport {
    * on every al-runner-v3 report (`[]` when there are none), absent on bcdev: a v3 report without it
    * predates it, and a reader says "not recorded in this report". Sorted qualified test names.
    */
-  readonly v3NotRunAtBaseline?: readonly string[];
+  readonly notRunAtBaseline?: readonly string[];
   /**
-   * PR-381 (R1197): present when `v3NotRunAtBaseline` is non-empty and the run has a `survived` or
+   * PR-381 (R1197): present when `notRunAtBaseline` is non-empty and the run has a `survived` or
    * `known-survivor` row (caveat `survivors-beside-unrun-tests`); see `notRunSurvivors`. An upper bound
    * on the survivors at risk. `sharingACodeunit` is absent when coverage is off.
    */
@@ -2394,6 +2394,21 @@ export const STRANDED_SKIP_INTERPRETATION: Interpretation = {
     "They are recorded `error` (score-excluded), never `survived`: the honest statement is `not " +
     "measured`, by either run.",
   basis: "R53",
+};
+
+/**
+ * PR-381 (R1197): an al-runner-v3 report with survivors that has no `notRunAtBaseline`: written before the
+ * field existed. Nothing is known about which baseline tests v3 did not run.
+ */
+export const NOT_RUN_NOT_RECORDED_INTERPRETATION: Interpretation = {
+  meaning:
+    "This al-runner-v3 report was written before it recorded which baseline tests v3 did not run " +
+    "(refused, timed out or stopped), so the `survivors-beside-unrun-tests` question is not answered " +
+    "for its survivors: tests not run at baseline are not recorded in this report. The count is the " +
+    "report's survivors.",
+  entailedNegative:
+    "Not a statement that no test was left unrun, and not a caveat: a re-run of the project records the field.",
+  basis: "R1197",
 };
 
 export interface MutantOutcome {
@@ -3506,9 +3521,13 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
   // PR-381 (R1197) - see CAVEAT_INTERPRETATIONS["survivors-beside-unrun-tests"]. After the coverage-off
   // push above: the count's hint part reads it.
+  // The field is filled for al-runner-v3 only in this PR (bcdev is PR-387): the fold's list is not read
+  // on bcdev, so a bcdev report prints and writes nothing new.
+  const notRunField =
+    input.caps.kind === "al-runner-v3" ? { notRunAtBaseline: input.notRunAtBaseline } : {};
   const notRun = notRunSurvivors({
     backend: input.caps.kind,
-    v3NotRunAtBaseline: input.v3NotRunAtBaseline,
+    ...notRunField,
     mutants,
     validity: { caveats },
   });
@@ -3845,7 +3864,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         }
       : {}),
     ...(input.baselineStopped !== undefined ? { baselineStopped: input.baselineStopped } : {}),
-    ...(input.caps.kind === "al-runner-v3" ? { v3NotRunAtBaseline: input.v3NotRunAtBaseline } : {}),
+    ...notRunField,
     ...(notRun !== undefined ? { survivorsBesideUnrunTests: notRun } : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
     ...(restrictiveDefault !== undefined ? { restrictiveDefault } : {}),

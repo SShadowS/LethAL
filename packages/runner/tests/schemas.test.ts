@@ -1975,7 +1975,11 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "workdate-changed",
         "left-out-test-reach",
       ],
-      "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
+      "#/properties/toolConditions/items/properties/condition": [
+        "quarantined",
+        "stranded-skips",
+        "not-run-tests-not-recorded",
+      ],
       // R273: new domains on the new optional `suggestions` (an optional additive field, so no
       // bump, orchestrator ruling 2026-10-06). From here on a value added to them bumps (R233).
       "#/properties/suggestions/properties/gaps/items/properties/kind": [

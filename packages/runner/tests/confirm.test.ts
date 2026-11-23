@@ -966,7 +966,7 @@ describe("mergeConfirmation: the final-verdict rule", () => {
     expect(c.totals.byMeasuredBy.bcdev).toBe(count((m) => m.measuredBy === "bcdev"));
     expect(c.totals.score).toBeCloseTo(3 / 7);
     // survivors: rows 1, 2, 3, 6 -> 4; measured on BC: 1 and 6
-    // PR-381: v3Rows is an al-runner-v3 report with survivors and no `v3NotRunAtBaseline`, so a reader
+    // PR-381: v3Rows is an al-runner-v3 report with survivors and no `notRunAtBaseline`, so a reader
     // says it was not recorded rather than staying silent.
     expect(c.totals.provenance).toBe(
       "4 survivors, 2 of them measured on BC; tests not run at baseline: not recorded in this report",
@@ -994,7 +994,7 @@ describe("mergeConfirmation: PR-381 (R1197) survivors beside tests v3 did not ru
   };
 
   test("only survivors still measured by v3 are counted, in the provenance and totals", () => {
-    const c = merge(withField({ v3NotRunAtBaseline: ["X. Y Tests.Refused", "Z.T"] }));
+    const c = merge(withField({ notRunAtBaseline: ["X. Y Tests.Refused", "Z.T"] }));
     expect(c.totals.survivorsBesideUnrunTests).toEqual({
       survivors: 2,
       notRunTests: 2,
@@ -1007,9 +1007,17 @@ describe("mergeConfirmation: PR-381 (R1197) survivors beside tests v3 did not ru
   });
 
   test("the twin: no not-run test recorded, no text and no counts", () => {
-    const c = merge(withField({ v3NotRunAtBaseline: [] }));
+    const c = merge(withField({ notRunAtBaseline: [] }));
     expect(c.totals.survivorsBesideUnrunTests).toBeUndefined();
     expect(c.totals.provenance).toBe("3 survivors, 1 of them measured on BC");
+  });
+
+  test("a known-survivor counts as a survivor in the provenance, as the sentence counts it", () => {
+    const p = pair({
+      v3: [{ verdict: "survived", failureNote: NOTE }, { verdict: "known-survivor" }],
+    });
+    const c = merge({ ...p, v3: { ...p.v3, notRunAtBaseline: [] } as SessionReport });
+    expect(c.totals.provenance).toBe("2 survivors, 1 of them measured on BC");
   });
 });
 

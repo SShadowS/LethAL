@@ -605,7 +605,7 @@
         "additionalProperties": false,
         "required": ["condition", "count", "interpretation"],
         "properties": {
-          "condition": { "type": "string", "enum": ["quarantined", "stranded-skips"] },
+          "condition": { "type": "string", "enum": ["quarantined", "stranded-skips", "not-run-tests-not-recorded"] },
           "count": {
             "type": "integer",
             "description": "How many mutants the condition accounts for. Always 0 for `quarantined`, whose cost was never scheduled and so cannot be counted."

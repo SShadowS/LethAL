@@ -72,8 +72,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
       "confirmation-field",
   },
   // PR-381: the not-run field and caveat exist only on an al-runner-v3 report; each names v3 explicitly.
+  "explain.ts": { 'report.backend === "al-runner-v3" &&': "v3" },
   "not-run-survivors.ts": {
-    'if (r.backend !== "al-runner-v3") return undefined;': "v3",
     'return r.backend === "al-runner-v3" &&': "v3",
   },
   "line-map.ts": {
@@ -111,8 +111,7 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (caps.kind === "al-runner-v3") {': "v3",
     '...(runnerBuild !== undefined && caps.kind === "al-runner-v3"': "v3",
     // PR-381: the field is written on an al-runner-v3 report only.
-    '...(input.caps.kind === "al-runner-v3" ? { v3NotRunAtBaseline: input.v3NotRunAtBaseline } : {}),':
-      "v3",
+    'input.caps.kind === "al-runner-v3" ? { notRunAtBaseline: input.notRunAtBaseline } : {};': "v3",
   },
   "cli.ts": {
     'if (raw !== "bcdev" && raw !== "al-runner-v3") {': "config",

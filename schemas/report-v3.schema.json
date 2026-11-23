@@ -1252,7 +1252,7 @@
         }
       }
     },
-    "v3NotRunAtBaseline": {
+    "notRunAtBaseline": {
       "type": "array",
       "items": {
         "type": "string"

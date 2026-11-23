@@ -7,8 +7,8 @@ import type { RunEvent, RunEventInput } from "../src/events";
 import { explain } from "../src/explain";
 import { toMutationElements } from "../src/mutation-elements";
 import {
-  ALWAYS_REACHES,
   NOT_RECORDED_TEXT,
+  notRunLine,
   notRunSentence,
   notRunSurvivors,
 } from "../src/not-run-survivors";
@@ -84,6 +84,7 @@ interface Row {
   readonly id: string;
   readonly verdict: "survived" | "known-survivor" | "killed" | "error" | "no-coverage";
   readonly failureNote?: string;
+  readonly cause?: "runner-refused";
 }
 
 const TAGGED = `${TAG} ${REFUSED}: refused by v3 at baseline in a covering test's codeunit, so a kill it might make on BC is not measured here`;
@@ -150,6 +151,7 @@ function build(
       coverageAttribution: "exact",
       ...(r.verdict === "killed" ? { killingTest: "Sales Helper Tests.T1" } : {}),
       ...(r.failureNote !== undefined ? { failureNote: r.failureNote } : {}),
+      ...(r.cause !== undefined ? { cause: r.cause } : {}),
     });
   }
   events.push({ type: "session-finished", elapsedMs: 10 });
@@ -163,14 +165,14 @@ const ROWS: readonly Row[] = [
 ];
 
 const SENT_TAGGED =
-  "2 survivors, all in a run with 1 tests v3 did not run at baseline (refused, timed out or stopped; such a test kills nothing, so a survivor only it would kill is unknown); 1 carry the nearby tag (a hint, not a bound)";
+  "2 survivors, all in a run with 1 test v3 did not run at baseline (refused, timed out or stopped; such a test kills nothing, so a survivor only it would kill is unknown); 1 carry the nearby tag (a hint, not a bound)";
 const SENT_NO_HINT =
-  "2 survivors, all in a run with 1 tests v3 did not run at baseline (refused, timed out or stopped; such a test kills nothing, so a survivor only it would kill is unknown)";
+  "2 survivors, all in a run with 1 test v3 did not run at baseline (refused, timed out or stopped; such a test kills nothing, so a survivor only it would kill is unknown)";
 
 describe("PR-381 the report", () => {
   test("1: a refused test and survivors: the field, the caveat, the counts and the sentence", () => {
     const r = build(CAPS_V3, [PASS, REFUSED_ROW], ROWS);
-    expect(r.v3NotRunAtBaseline).toEqual([REFUSED]);
+    expect(r.notRunAtBaseline).toEqual([REFUSED]);
     expect(r.validity.caveats).toContain("survivors-beside-unrun-tests");
     expect(r.survivorsBesideUnrunTests).toEqual({
       survivors: 2,
@@ -189,7 +191,65 @@ describe("PR-381 the report", () => {
       classification: ["baseline-test-stopped"],
     };
     const r = build(CAPS_V3, [PASS, timeout, stopped], ROWS);
-    expect(r.v3NotRunAtBaseline).toEqual(["Sales Helper Tests.Hung", "Sales Helper Tests.Slow"]);
+    expect(r.notRunAtBaseline).toEqual(["Sales Helper Tests.Hung", "Sales Helper Tests.Slow"]);
+  });
+
+  // S1 (round 2): each class of "v3 did not run it" counts; a red-going test each.
+  const classOf = (row: Base) => build(CAPS_V3, [PASS, row], ROWS).notRunAtBaseline;
+  test("1c: a deadline-exceeded baseline row counts", () => {
+    expect(
+      classOf({
+        name: "Sales Helper Tests.Late",
+        outcome: "deadline-exceeded",
+        failureMessage: "al-runner-v3: the call for codeunit 1 passed LethAL's outer bound",
+      }),
+    ).toEqual(["Sales Helper Tests.Late"]);
+  });
+  test("1d: a verdict carrying the not-run suffix counts, with a pointer appended after it", () => {
+    expect(
+      classOf({
+        name: "Sales Helper Tests.Suffix",
+        outcome: "error",
+        failureMessage: `something else ${V3_NOT_RUN_SUFFIX} [set alRunnerV3.license to a .bclicense file (R956)]`,
+      }),
+    ).toEqual(["Sales Helper Tests.Suffix"]);
+  });
+  test("1e: v3's contract notRun rows count", () => {
+    expect(
+      classOf({
+        name: "Sales Helper Tests.Contract",
+        outcome: "error",
+        failureMessage:
+          'al-runner-v3 contract: Contract is notRun with status "pass"; never scored (R586 §5)',
+      }),
+    ).toEqual(["Sales Helper Tests.Contract"]);
+    expect(
+      classOf({
+        name: "Sales Helper Tests.Contract2",
+        outcome: "error",
+        failureMessage:
+          "al-runner-v3 contract: Contract2 reports a 9s stop, but the call was sent --test-timeout-secs 5; never scored (R586 §5)",
+      }),
+    ).toEqual(["Sales Helper Tests.Contract2"]);
+  });
+  test("1f: a baseline transport failure counts: the test never ran", () => {
+    expect(
+      classOf({
+        name: "Sales Helper Tests.Transport",
+        outcome: "error",
+        failureMessage:
+          'al-runner-v3 transport failure: no answer; never read as "all passed" (R586 §5)',
+      }),
+    ).toEqual(["Sales Helper Tests.Transport"]);
+  });
+  test("1g: the R-236c TestPage-scan skip is not counted (PR-387)", () => {
+    expect(
+      classOf({
+        name: "Sales Helper Tests.Page",
+        outcome: "skip",
+        failureMessage: "refused before sending: a reachable call may open a TestPage",
+      }),
+    ).toEqual([]);
   });
 
   test("2: a refused test and only kills and errors: no caveat, no count, verdicts unchanged", () => {
@@ -199,7 +259,7 @@ describe("PR-381 the report", () => {
       { id: "M0003", verdict: "no-coverage" },
     ];
     const r = build(CAPS_V3, [PASS, REFUSED_ROW], rows);
-    expect(r.v3NotRunAtBaseline).toEqual([REFUSED]);
+    expect(r.notRunAtBaseline).toEqual([REFUSED]);
     expect(r.validity.caveats).not.toContain("survivors-beside-unrun-tests");
     expect(r.survivorsBesideUnrunTests).toBeUndefined();
     expect(r.mutants.map((m) => m.verdict)).toEqual(["killed", "error", "no-coverage"]);
@@ -208,7 +268,7 @@ describe("PR-381 the report", () => {
 
   test("3: survivors and only a test that ran and FAILED: no caveat, the field is written empty", () => {
     const r = build(CAPS_V3, [PASS, FAILED_ROW], ROWS);
-    expect(r.v3NotRunAtBaseline).toEqual([]);
+    expect(r.notRunAtBaseline).toEqual([]);
     expect(r.validity.caveats).not.toContain("survivors-beside-unrun-tests");
     expect(r.survivorsBesideUnrunTests).toBeUndefined();
     expect(renderConsole(r)).not.toContain("did not run at baseline");
@@ -218,7 +278,7 @@ describe("PR-381 the report", () => {
   test("4: bcdev, test 1's fixture: no caveat and no field in this PR (PR-385 turns this around)", () => {
     const r = build(CAPS_BC, [PASS, REFUSED_ROW], ROWS);
     expect(r.validity.caveats).not.toContain("survivors-beside-unrun-tests");
-    expect(r.v3NotRunAtBaseline).toBeUndefined();
+    expect(r.notRunAtBaseline).toBeUndefined();
     expect(r.survivorsBesideUnrunTests).toBeUndefined();
     expect(renderConsole(r)).not.toContain("did not run at baseline");
   });
@@ -230,7 +290,7 @@ describe("PR-381 the report", () => {
       { id: "M0003", verdict: "survived", failureNote: "[singleinstance-carry-unobservable] x" },
     ];
     const r = build(CAPS_V3, [PASS, REFUSED_ROW], rows);
-    expect(r.v3NotRunAtBaseline).toEqual(["X. Y Tests.Refused"]);
+    expect(r.notRunAtBaseline).toEqual(["X. Y Tests.Refused"]);
     expect(r.survivorsBesideUnrunTests?.sharingACodeunit).toBe(2);
     expect(r.survivorsBesideUnrunTests?.survivors).toBe(3);
   });
@@ -314,7 +374,7 @@ describe("PR-381 the report", () => {
 
   test("an older al-runner-v3 report with survivors and no field: not recorded, never silence", () => {
     const r = build(CAPS_V3, [PASS, REFUSED_ROW], ROWS);
-    const { v3NotRunAtBaseline: _a, survivorsBesideUnrunTests: _b, ...old } = r;
+    const { notRunAtBaseline: _a, survivorsBesideUnrunTests: _b, ...old } = r;
     expect(notRunSurvivors(old)).toBeUndefined();
     expect(renderConsole(old as SessionReport)).toContain(NOT_RECORDED_TEXT);
     // and an old bcdev report prints nothing of the kind
@@ -323,29 +383,17 @@ describe("PR-381 the report", () => {
   });
 });
 
-describe("PR-381 the reach injection point (PR-386)", () => {
-  const r = build(CAPS_V3, [PASS, REFUSED_ROW], ROWS);
-  test("the default reaches everything; false for every pair: 0 survivors, no result", () => {
-    expect(notRunSurvivors(r)?.survivors).toBe(2);
-    expect(notRunSurvivors(r, ALWAYS_REACHES)?.survivors).toBe(2);
-    expect(notRunSurvivors(r, () => false)).toBeUndefined();
+describe("PR-381 the rule is backend-neutral (PR-387 fills the field for bcdev)", () => {
+  test("a bcdev report WITH notRunAtBaseline filled by hand and survivors gets the caveat counts", () => {
+    const r = build(CAPS_BC, [PASS, REFUSED_ROW], ROWS);
+    expect(r.notRunAtBaseline).toBeUndefined(); // this PR fills it for v3 only
+    const byHand = { ...r, notRunAtBaseline: [REFUSED] };
+    expect(notRunSurvivors(byHand)).toEqual({ survivors: 2, notRunTests: 1, sharingACodeunit: 1 });
+    expect(notRunLine(byHand)).toBe(SENT_TAGGED);
   });
-  test('"unknown" counts as reaching; only a reached survivor is counted', () => {
-    expect(notRunSurvivors(r, () => "unknown")?.survivors).toBe(2);
-    const only1 = notRunSurvivors(r, (_t, m) => m.line === 10 && m.file.length > 0);
-    expect(only1?.survivors).toBe(2);
-    // the WHOLE report row is passed, and the test is the qualified name from the field
-    const seen: string[] = [];
-    notRunSurvivors(r, (t, m) => {
-      seen.push(`${t}|${m.operatorName}|${m.mutantCode}`);
-      return true;
-    });
-    expect(seen).toEqual([
-      `${REFUSED}|lethal.void-method-call|M0001`,
-      `${REFUSED}|lethal.void-method-call|M0002`,
-    ]);
-    const none = notRunSurvivors(r, (_t, m) => m.line === 999);
-    expect(none).toBeUndefined();
+  test("a bcdev report without the field prints nothing new, not even 'not recorded'", () => {
+    const r = build(CAPS_BC, [PASS, REFUSED_ROW], ROWS);
+    expect(notRunLine(r)).toBeUndefined();
   });
 });
 
@@ -370,6 +418,55 @@ describe("PR-381 test 9: every surface, and its negative twin", () => {
     expect(renderConsole(withErrors(no))).not.toContain("did not run at baseline");
   });
 
+  test("readers print the STORED field, not a recomputation (S2)", () => {
+    const stored = { ...yes, survivorsBesideUnrunTests: { survivors: 7, notRunTests: 3 } };
+    expect(renderConsole(stored)).toContain(
+      "7 survivors, all in a run with 3 tests v3 did not run at baseline (refused, timed out or stopped; such a test kills nothing, so a survivor only it would kill is unknown)",
+    );
+    const narrowed = {
+      ...stored,
+      validity: { ...stored.validity, caveats: [...stored.validity.caveats, "line-narrowed"] },
+    };
+    expect(changedLineSurvivors(narrowed)?.notRun).toContain(
+      "7 survivors, all in a run with 3 tests",
+    );
+  });
+
+  test("the withheld-kills line carries the sentence too", () => {
+    const withheld: Row = {
+      id: "M0004",
+      verdict: "error",
+      cause: "runner-refused",
+      failureNote: `NotRun: out-of-scope: the test Codeunit1.A failed before it, this failure is not trusted: boom ${V3_NOT_RUN_SUFFIX}`,
+    };
+    const r = build(CAPS_V3, [PASS, REFUSED_ROW], [...ROWS, withheld]);
+    expect(r.mutants.filter((m) => m.withheldKill !== undefined)).toHaveLength(1);
+    const line = renderConsole(r)
+      .split("\n")
+      .find((l) => l.includes("are withheld kills"));
+    expect(line).toContain(`The score's survivors: ${SENT_TAGGED}.`);
+    const twin = build(CAPS_V3, [PASS, FAILED_ROW], [...ROWS, withheld]);
+    expect(
+      renderConsole(twin)
+        .split("\n")
+        .find((l) => l.includes("are withheld kills")),
+    ).not.toContain("did not run at baseline");
+  });
+
+  test("explain on an older al-runner-v3 report: the not-recorded tool condition (S3)", () => {
+    const { notRunAtBaseline: _a, survivorsBesideUnrunTests: _b, ...old } = yes;
+    const c = explain(old as SessionReport).toolConditions.find(
+      (t) => t.condition === "not-run-tests-not-recorded",
+    );
+    expect(c?.count).toBe(2);
+    expect(explain(yes).toolConditions.map((t) => t.condition)).not.toContain(
+      "not-run-tests-not-recorded",
+    );
+    expect(explain(no).toolConditions.map((t) => t.condition)).not.toContain(
+      "not-run-tests-not-recorded",
+    );
+  });
+
   test("explain: the three counts and the caveat; absent on the twin", () => {
     const out = explain(yes);
     expect(out.score.survivorsBesideUnrunTests).toEqual({
@@ -390,7 +487,9 @@ describe("PR-381 test 9: every surface, and its negative twin", () => {
     });
     const s = changedLineSurvivors(narrowed(yes));
     expect(s?.notRun).toBe(SENT_TAGGED);
-    expect(renderChangedLineSurvivors(s as never)).toContain(`counted: 2\n${SENT_TAGGED}`);
+    expect(renderChangedLineSurvivors(s as never)).toContain(
+      `counted: 2\nof the whole run: ${SENT_TAGGED}`,
+    );
     const t = changedLineSurvivors(narrowed(no));
     expect(t?.notRun).toBeUndefined();
     expect(renderChangedLineSurvivors(t as never)).not.toContain("did not run at baseline");
@@ -415,7 +514,7 @@ describe("PR-381 test 9: every surface, and its negative twin", () => {
       notRunTests: 1,
       sharingACodeunit: 1,
     });
-    expect(out.report.config.lethal.v3NotRunAtBaseline).toEqual([REFUSED]);
+    expect(out.report.config.lethal.notRunAtBaseline).toEqual([REFUSED]);
     expect(out.losses.some((l) => l.startsWith(SENT_TAGGED))).toBe(true);
     const twin = await toMutationElements(no, opts);
     const twinText = JSON.stringify(twin.report.files) + twin.losses.join("\n");

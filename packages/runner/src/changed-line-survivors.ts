@@ -56,7 +56,8 @@ export type ReportView = {
     | "restrictiveDefault"
     | "resumedFrom"
     | "quarantined"
-    | "v3NotRunAtBaseline"
+    | "notRunAtBaseline"
+    | "survivorsBesideUnrunTests"
     | "testsOnly"
   >
 >;
@@ -133,7 +134,8 @@ export function changedLineSurvivors(
       : report.validity.caveats.includes("time-budget-reached")
         ? "the run was stopped by its time budget"
         : undefined;
-  const notRun = notRunLine(report);
+  const notRun =
+    report.backend !== undefined ? notRunLine({ ...report, backend: report.backend }) : undefined;
   return {
     counted: counted.sort(byFileLineCode),
     accepted: accepted.sort(byFileLineCode),
@@ -157,7 +159,8 @@ export function renderChangedLineSurvivors(s: ChangedLineSurvivors, accept?: Acc
       ? `SURVIVORS ON THE CHANGED LINES (partial: ${s.partial}; the counts are not a full list)`
       : "SURVIVORS ON THE CHANGED LINES";
   const lines = ["", head, `counted: ${s.counted.length}`];
-  if (s.notRun !== undefined) lines.push(s.notRun);
+  // The sentence counts the whole run's survivors, not only the counted ones above.
+  if (s.notRun !== undefined) lines.push(`of the whole run: ${s.notRun}`);
   for (const m of s.counted) {
     lines.push(row(m));
     const ready = accept?.ready.get(mutantRef(m.batchIndex, m.mutantCode));
