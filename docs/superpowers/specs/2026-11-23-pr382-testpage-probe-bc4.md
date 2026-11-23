@@ -72,3 +72,16 @@ Under the owner's standing yes ("lethal bcdev runs on DO ... including instrumen
 - **Stops:** any HTTP 401, any call over its timeout (a hang), an OutOfMemory publish refusal, or a read-back that differs:
   stop at once, keep the lease, and file one `kraken coord ask --kind bc-restart` with the state reached. No second attempt
   before kraken answers.
+
+## Amendment 2 (2026-11-23, before any publish): the restore is an upgrade, never a downgrade
+- **Why:** amendment 1's restore republished the resident `30.0.20780.19322` after the probe's `30.0.20780.19323`. BC refuses
+  a lower version of an app whose data was kept on uninstall, so that restore needs `deleteData`, which deletes DO's data in
+  bc4's company. Not done.
+- **The restore instead (LethAL's own advice when a run leaves an instrumented build):** the downloaded resident package
+  holds its full source (592 `.al` files, the instrumentation included). Extract it to `/coord/handoff/PR-382/restore-src/`,
+  change ONLY its `app.json` version to `30.0.20780.19324`, compile with `alc` against the same symbols, and publish it as an
+  upgrade over the probe build. Nothing is unpublished; DO Test `30.0.0.1` stays installed.
+- **The read-back:** DO reads `30.0.20780.19324` (the resident's content one version up), DO Test `30.0.0.1`, Control
+  `1.0.0.29`, by id; doctor clean. The restored build is recorded as "the resident content at one version up", not as the
+  identical package.
+- Steps 1 and 2 of amendment 1's order, and its stops, are unchanged.
