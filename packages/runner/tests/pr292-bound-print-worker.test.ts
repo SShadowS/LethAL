@@ -5,7 +5,12 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ownTimeout } from "@lethal/engine/own-timeout";
-import { printAlTree, printTestDir, printWalkedSync, printsOnThisThread } from "../src/baseline-snapshot";
+import {
+  printAlTree,
+  printTestDir,
+  printWalkedSync,
+  printsOnThisThread,
+} from "../src/baseline-snapshot";
 import { ProjectSymlinkRefusedError } from "../src/walk";
 
 const roots: string[] = [];
