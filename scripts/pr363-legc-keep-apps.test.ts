@@ -5,7 +5,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { V3_SERVE_SAFE_REFUSALS } from "../packages/runner/src/al-runner-server";
-import { SERVE_CASES, V3_KEEP_APP_FAMILIES } from "../packages/runner/src/al-runner-v3-contract";
+import {
+  SERVE_CASES,
+  V3_KEEP_APP_FAMILIES,
+  V3_KEEP_CASES,
+} from "../packages/runner/src/al-runner-v3-contract";
 import {
   KEEP_SELECTIONS,
   type KeepSelection,
@@ -46,7 +50,7 @@ describe("PR-363: emitApp's subset option", () => {
     expect(Object.keys(FAMILIES).sort()).toEqual(Object.keys(FULL_APP_SHA256).sort());
     for (const [name, f] of Object.entries(FAMILIES)) {
       const sha = new Bun.CryptoHasher("sha256").update(JSON.stringify(emitApp(f))).digest("hex");
-      expect({ name, sha }).toEqual({ name, sha: FULL_APP_SHA256[name] });
+      expect({ name, sha }).toEqual({ name, sha: FULL_APP_SHA256[name] ?? "(no pinned hash)" });
     }
   });
 
@@ -74,7 +78,7 @@ describe("PR-363: emitApp's subset option", () => {
 describe("PR-363: the generator", () => {
   // Red: delete a cell from a family, or edit a selection's state: the selector throws by name.
   test("every one of the 47 selections names exactly one existing cell; 10 families", () => {
-    expect(KEEP_SELECTIONS).toHaveLength(47);
+    expect(KEEP_SELECTIONS).toHaveLength(V3_KEEP_CASES); // 47: the contract checks the manifest against this count
     const byFamily = resolveSelections();
     expect(byFamily.size).toBe(V3_KEEP_APP_FAMILIES);
     expect([...byFamily.values()].reduce((n, v) => n + v.length, 0)).toBe(47);
@@ -83,16 +87,16 @@ describe("PR-363: the generator", () => {
   test("a missing cell, a missing family and a doubly chosen cell each throw by name", () => {
     const base = KEEP_SELECTIONS[0];
     if (base === undefined) throw new Error("no selections");
-    const [entry, family, type, method] = base;
+    const [entry, family, type, method, state] = base;
     expect(() => resolveSelections([[entry, family, type, method, "no such state"]])).toThrow(
       `${entry}: 0 cells`,
     );
     expect(() => resolveSelections([[entry, "no-such-family", type, method, "fresh"]])).toThrow(
       `${entry}: no family no-such-family`,
     );
-    expect(() =>
-      resolveSelections([base, ["another-entry", ...base.slice(1)] as KeepSelection]),
-    ).toThrow(`another-entry and ${entry} select the same cell`);
+    expect(() => resolveSelections([base, ["another-entry", family, type, method, state]])).toThrow(
+      `another-entry and ${entry} select the same cell`,
+    );
   });
 
   // Red: renumber cells in the subset; give two families one app id; drop `--out`'s manifest case names.

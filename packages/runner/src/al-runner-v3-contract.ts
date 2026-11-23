@@ -1252,6 +1252,8 @@ export interface V3KeepApp {
 
 /** PR-363: how many family apps the generator pins; fewer in `V3ProbeEnv.keepApps` reads `unmeasurable`. */
 export const V3_KEEP_APP_FAMILIES = 10;
+/** PR-363 (build review L1): how many cases the family apps pin in all; a manifest with another count is `unmeasurable`. */
+export const V3_KEEP_CASES = 47;
 
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
 const SERVE_TEST_TIMEOUT_S = 3;
@@ -1284,13 +1286,18 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
   const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty-three codeunits, a report, two pages and four tables (twenty-four tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}; then (PR-363) one more fresh daemon and request per refusal family (${V3_KEEP_APP_FAMILIES} apps), each judged on its own rows: every chosen case a refusal under its own entry, no plain fail or pass allowed, and every refused row of the request kept`;
   // PR-363: never run the old request alone, which would read exactly as it did before the family apps.
   const keepApps = env.keepApps;
-  if (keepApps === undefined || keepApps.length < V3_KEEP_APP_FAMILIES)
+  const keepCases = keepApps?.reduce((n, a) => n + a.cases.length, 0) ?? 0;
+  if (
+    keepApps === undefined ||
+    keepApps.length < V3_KEEP_APP_FAMILIES ||
+    keepCases !== V3_KEEP_CASES
+  )
     return fact(
       "serve-keep-reasons",
       "warn",
       "unmeasurable",
       expected,
-      `the family apps are missing: ${keepApps === undefined ? "none given" : `${keepApps.length} of ${V3_KEEP_APP_FAMILIES}`} (PR-363; run scripts/pr363-legc-keep-apps.ts --out <dir>)`,
+      `the family apps are missing or short: ${keepApps === undefined ? "none given" : `${keepApps.length} of ${V3_KEEP_APP_FAMILIES} families, ${keepCases} of ${V3_KEEP_CASES} cases`} (PR-363; run scripts/pr363-legc-keep-apps.ts --out <dir>)`,
     );
   let rows: readonly ServerTestLine[];
   try {
@@ -1442,7 +1449,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     unkept.length > 0
       ? [...unkept, ...unmeasured, ...moved].join("; ")
       : unmeasured.length > 0
-        ? unmeasured.join("; ")
+        ? [...unmeasured, ...moved].join("; ")
         : moved.length === 0
           ? `the keep rule accepts every row of all ${caseCount} entries (${how.join(", ")})`
           : moved.join("; "),
