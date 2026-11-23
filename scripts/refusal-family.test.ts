@@ -21,6 +21,7 @@ import {
   PUBAPP_FLOWFIELD,
   READ_TEST,
   RECORD_FILTERS,
+  REFUSAL_FAMILY_BC_VERSION,
   SET_TEST,
   T9_REFUSALS,
   T10_REFUSALS,
@@ -47,6 +48,7 @@ import {
   parseBcTsv,
   refusalClasses,
   refusalText,
+  runArgs,
 } from "./refusal-family";
 
 // PR-01: the generator's pure parts. No al-runner runs here.
@@ -1746,10 +1748,8 @@ describe("PR-375: the zip-blob family", () => {
     ]);
   });
 
-  test("the run passes the exact BC build and the .NET helper, and the app depends on the System Application", () => {
+  test("the run passes the .NET helper (the exact build comes from runArgs, PR-377), and the app depends on the System Application", () => {
     expect(f.args).toEqual([
-      "--bc-version",
-      "28.4.53241.56646",
       "--dotnet-sidecar",
       "/work/tools/al-runner-v3/current/dotnet-sidecar/AlDotNetSidecar.dll",
       "--dotnet-assembly-dir",
@@ -1770,6 +1770,23 @@ describe("PR-375: the zip-blob family", () => {
     expect(Object.keys(FAMILIES).at(-1)).toBe("zip-blob");
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(25);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051027");
+  });
+});
+
+describe("PR-377: every family runs on one exact BC build", () => {
+  test("the build is four numbers (a bare major version resolves to a build whose .NET runtime al-runner fetches)", () => {
+    expect(REFUSAL_FAMILY_BC_VERSION).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+  });
+
+  test("each family's run carries exactly one --bc-version, the exact build, and its own args after it", () => {
+    for (const f of Object.values(FAMILIES)) {
+      const a = runArgs(f, "/x");
+      const at = a.flatMap((v, i) => (v === "--bc-version" ? [i] : []));
+      expect(at).toEqual([1]);
+      expect(a[2]).toBe(REFUSAL_FAMILY_BC_VERSION);
+      expect(a.slice(3, 3 + (f.args ?? []).length)).toEqual([...(f.args ?? [])]);
+      expect(a.slice(-2)).toEqual(["--output-json", "/x"]);
+    }
   });
 });
 

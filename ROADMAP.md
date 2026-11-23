@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 1156 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**63 of 1157 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1201,6 +1201,7 @@ that ordering is the priority.
 - **R1192** · Two more generated BC differentials (PR-374): FieldRef type conversions (#8219, 288 cells) and (language, region) pairs in a SaveAs report (144 cells); 211 refusals with BC's answers sent, 5 wrong-answer shapes filed #8867-#8871 · [R1192.md](docs/roadmap/R1192.md) · closed 2026-11-23 — measured on bc4 and filed upstream
 - **R1193** · A zip kept in a Blob through the System Application's Data Compression as a generated BC differential (PR-375): 36 cells, 13 equal, 23 refused with BC's answers sent, 0 wrong values · [R1193.md](docs/roadmap/R1193.md) · closed 2026-11-23 — measured on bc4; nothing to file, BC's answers sent to alrunner
 - **R1194** · DO's runs reach al-runner's .NET helper: 0 dotnet-unavailable rows in c3 and c3off, LethAL passes the exact BC build, the pinned sidecar and the service folder; the --bc-version 28 failure was the refusal-family script's own, so no product lever · [R1194.md](docs/roadmap/R1194.md) · closed 2026-11-23 — measured (PR-376): no lever; the script's ceiling is recorded
+- **R1195** · refusal-family.ts runs every family on one exact BC build (PR-377): 1 move in 3,418 cells, and it restores PR-32's measured answer; DO's own CI builds on the latest BC 28 sandbox, not 29 · [R1195.md](docs/roadmap/R1195.md) · closed 2026-11-23 — measured (PR-377); the script fix lands with this row
 
 ---
 
