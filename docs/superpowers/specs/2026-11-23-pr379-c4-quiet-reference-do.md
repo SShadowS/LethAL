@@ -74,3 +74,17 @@ first quiet speed reference. Otherwise the BLOCKs are the finding, and the orche
 ## The compare's self-test (done before this commit)
 - c3 against itself: 0 moves, and every R1187 claim blocks (c3 lacks the rows).
 - c3 with one planted verdict outside the 1,504: exactly one move-BLOCK, naming the planted mutant.
+
+## Amendment 1 (2026-11-23, before the run): survivors a refused test covers are not confirmed; c4 is held
+- **Why (the orchestrator):** preproc found on bc4 that in codeunit 68874, 9 of 47 v3 survivors are FALSE survivors. Their BC
+  killer is a test v3 refuses at baseline. PR-365's keep rows have the same shape in 68975 and 68984: the refused tests stay unrun,
+  and the other tests of the codeunit now run. The owner is asked how such survivors are scored.
+- **Held:** c4 does not start until the owner's answer is in, and this spec is amended for it.
+- **In the compare:** a survivor of the 1,504 that a refused test covers is counted as UNCONFIRMED, not as a recovered survivor.
+  The refused tests leave no coverage in c3 or c4, so it is read from y3's report, where they ran (PR-365's reach). The rows go
+  to `unconfirmed-survivors.tsv`.
+  - Kills are unaffected (the gained- and lost-kill checks stand).
+  - R1187's "at least 1,493 leave `error`" still holds as a count. Its survivors are reported as confirmed or unconfirmed, and only
+    the confirmed ones count as recovered.
+- **Positive control:** with every cut mutant forced to `survived` on c3's report, 808 count as unconfirmed. That is exactly
+  PR-365's `reach.tsv`, where 775 are covered by a refused test and a later one, and 33 by a refused test and others.

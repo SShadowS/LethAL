@@ -49,10 +49,11 @@ session-dependent. It found 1 contradiction, so the check escalated to all 228.
 | not listed in the sample (counted with unmarked) | 8 | 4 | 0 | 0 | 4 | 0 |
 | marked session-dependent (PR-299) | 78 | 0 | 0 | 0 | 2 | 76 (no coverage on headless BC) |
 
-- **The 1 contradiction is an al-runner false kill, not a flag effect** (upstream #8721). The killing test passes on BC. It
-  needed the flag only to run at all: in c2 its codeunit is cut, so the test never ran under that mutant. An invented repro
-  (one row copied twice in one test, then a Modify with no Find) gives al-runner's "not up-to-date" error in a plain test,
-  where BC accepts it.
+- **The 1 contradiction is an al-runner false kill that the flag surfaces** (upstream #8721). Its cause is general, not the
+  flag: an invented repro (one row copied twice in one test, then a Modify with no Find) gives al-runner's "not up-to-date"
+  error in a plain test, where BC accepts it. But the flag is what turns it into a verdict: in c2 (flag off) its codeunit is
+  cut, so the killing test never ran under that mutant and it scored `error`; only t1b's tail alone call killed it.
+  (Corrected 2026-11-23: this line first said "not a flag effect", which overstated it; PR-347's spec-adversary, S1.)
 - **4 kills are not confirmed and not contradicted.** BC's coverage says the named test does not reach these mutants, so BC never
   ran it under them. One test's name suggests a session effect that PR-299 does not list. Open.
 
