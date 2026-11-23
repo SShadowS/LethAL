@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**62 of 1148 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**61 of 1148 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -405,7 +405,7 @@ that ordering is the priority.
 - **R1178** · PR-144's withheld-kill recheck eligibility depends on which held error the walk reads FIRST: a resume with an empty ledger read a plain refusal first, so three mutants c2 had won back through the recheck stayed `error` (DO: M2519, M2548, M2549; not a refusedCutTail effect) · [R1178.md](docs/roadmap/R1178.md) · done (af13c2659, PR-341 part 1): the first withheld-eligible held error is kept as the one the recheck reads…
 - **R1179** · On --resume, CARRIED kills never reach R197's kill ledger: only live kill sites call recordKill, so a resumed session walks a procedure's later mutants in a different order than a fresh run, which can move killingTest and PR-144 recheck eligibility · [R1179.md](docs/roadmap/R1179.md) · done (ba4c4a327 and 4e22f41e4, coord PR-345, built as PR-341 part 3): --resume seeds the session's kill…
 - **R1180** · PR-340's carry walk is not measured for what it leaves in a lane's serve daemon: the carry gate's fixture sends every ordinary request before the walks (one prefetch window), so the next full DO run must compare its unlabelled mutants with a no-walk control per mutant · [R1180.md](docs/roadmap/R1180.md) · open — next: the first full DO run on a head with PR-340, against a LETHAL_V3_CARRY_WALK=off control on the…
-- **R1186** · 30 serve keep entries hold alternations, and PR-361 proves only ONE real al-runner line per entry: an unmatched branch is R1153's failure shape (a keep that never meets real output), unguarded · [R1186.md](docs/roadmap/R1186.md) · open — extend pr361-keep-real-lines.test.ts to one real line per top-level branch, or list each unproven…
+- **R1186** · 30 serve keep entries hold alternations, and PR-361 proves only ONE real al-runner line per entry: an unmatched branch is R1153's failure shape (a keep that never meets real output), unguarded · [R1186.md](docs/roadmap/R1186.md) · done (1f111b808) — PR-362: pr362-keep-branch-lines.test.ts splits every keep entry's non-capturing groups…
 
 ## Product gaps a real project hits
 
