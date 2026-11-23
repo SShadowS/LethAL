@@ -112,3 +112,27 @@ Every leg `selectLegs` names, on the final head.
   that each arm writes its report, the counters line is present, and the scorer runs. It is not part of the A/B.
 - **Order:** P then M, one after the other. §4 claims request counts, which are deterministic, and treats the wall as
   indicative. If a speed figure is to be claimed, the arms are interleaved P, M, P, M with an untouched control first, and the claim is pre-committed in a further amendment.
+
+## 8. Amendment 3 (2026-11-23, PR-391: the first round is void; before the re-run)
+- **Amendment 2's time budget was wrong.** Any finite `--time-budget` turns PR-241's packing OFF
+  (`orchestrator.ts`, `packCap = split && !budgeted ? ...`, R912), while the backend still prints `pack-entries 64` (R1200).
+  - The original driver passed no budget for exactly this reason.
+  - So the first round's arms (P1 and offP on b521dd2b7, M1 and a probe on 9a75c8233) all ran unpacked.
+  - Their equal counts (49 pair requests each) measure nothing about §1's lever, which needs packed calls.
+  - **The first round is VOID for §4.** Its verdict equality stands only as a fact about unpacked calls. R1151 stays open.
+- **The re-run:** `/coord/handoff/PR-391/ab.sh` passes NO `--time-budget`. The only cap is the outer
+  `timeout --foreground -k 300 <cap>` (default 10,800 s), and an arm it kills is void.
+  - Three arms, one after the other, on CPUs 0-11, after PR-394 and before PR-359:
+    - **offP2:** b521dd2b7 with `LETHAL_V3_PACK_ENTRIES` unset;
+    - **P2:** b521dd2b7 at 64;
+    - **M2:** lethal/pr-267's head at 64.
+  - Everything else is §4's slice: the same 4 `--only` files, `--workers 3`, fresh stores, main-bf3a3e863, the config copy.
+- **Pre-checks, before §4 is read** (if either fails, the re-run is void, not a BLOCK of the lever):
+  - **packing engages:** P2 sends fewer prefetch requests than offP2 for the same units;
+  - **packed calls exist:** P2's units prefetched exceed its prefetch calls.
+- **Then §4 with amendment 1's BLOCK rules,** P2 against M2, scored by `ab-compare.py` on the full site key:
+  - every mutant's verdict and killing test equal;
+  - `pairBatchStored` equal;
+  - served and refused equal, or a difference named per mutant in `cutBeforeKiller`;
+  - `pairBatchRequests` lower in M2.
+- Each arm's 0-11 and 12-21 busy shares are recorded. Wall time is indicative.
