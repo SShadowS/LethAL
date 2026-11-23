@@ -160,3 +160,24 @@ If a key differs on the first run, the difference is pre-committed in an amendme
   6. The real backend's report field is not tested in a whole session: it reads the tested getter.
 - **The first live run:** TC is recorded once (R332: `LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.tailcut.baseline.json`,
   which exits 3), then re-run to confirm a pass, then the full v3 gate on the final head.
+
+## Amendment 2 (2026-11-23, the Opus build review of 6abba9995: no BLOCK, 3 SHOULD-FIXes; before any gate)
+- **The carry gate is in scope (S1).** `itest:alrunner-v3-carry` builds the real backend without the key, so the flip turns
+  the flag on there. Step 1 did not measure it. It runs on the final head with PR-347's gates. **Prediction: unchanged**,
+  because `fixtures/sandbox-carry` has no baseline refusal: 0 cuts, 0 tail calls, and its committed figures and warning sets
+  pass as today.
+- **`compile:fixtures` and the new fixtures (S2):** the pinned symbol tar does not hold the two new fixtures, so
+  `compile:fixtures` SKIPs them on a fresh worktree. That corrects "compiles it like every fixture" above. The skip is
+  recorded in R1128 by name (the orchestrator's ruling). Leg TC is unaffected: it takes its Microsoft symbols as RC does.
+- **A golden that grows (S3, the orchestrator's ruling: keep):** `tests/__fixtures__/instrumented-output-golden.json` gains
+  two entries, `TailcutLogic` (10 mutants, equal to the census and the table above) and `TailcutTests` (34). They are additions
+  only: no existing entry's bytes change, and the result shows the diff.
+- **Merge order:** TC is a default leg, so the update gate refuses at preflight until `al-runner-v3.tailcut.baseline.json` is
+  committed. The baseline is recorded and committed in the branch before the merge.
+- **NITs fixed in round 2:**
+  - the judge's extra-row and duplicate-row guards get red-going tests;
+  - (a1)'s evidence comes from the session that failed;
+  - the fixture test ties the `IsBig(5)` check to T4;
+  - the resume message says "with refusedCutTail off" or "on", not "the default".
+- **NITs accepted:** about 18 un-awaited `baselinePhase(false)` calls in one test file (production awaits); PR-209's generic
+  message for runs from before PR-209 (still refused); the flag message coming first on `--resume-run` (still refused).
