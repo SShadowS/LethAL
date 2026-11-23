@@ -2451,7 +2451,9 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
 
   test("PR-396: another fail text under a mutant stays a kill (control)", async () => {
     const l = await layout();
-    const failA = () => [{ method: "A", status: "fail" as const, message: "Assert.AreEqual failed" }];
+    const failA = () => [
+      { method: "A", status: "fail" as const, message: "Assert.AreEqual failed" },
+    ];
     const b = backendOf(l, fakeV3(failA).spawn, fakeAlc().io);
     await b.deploy(l.batch);
     await b.activate("M0001");
