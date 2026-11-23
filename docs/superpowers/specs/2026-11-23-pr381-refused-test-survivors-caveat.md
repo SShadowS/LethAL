@@ -137,3 +137,32 @@ one `survived` or `known-survivor` row (B1), then the caveat applies to every su
   `ALWAYS_REACHES`, which is safe, and is this PR's default. That is by design, not a gap.
 - **Tests:** a `reaches` returning false for every pair gives `survivors` 0 and no caveat; one returning `"unknown"` counts
   the survivor. Both are red-checked.
+
+## Amendment 2 (2026-11-23, the Opus build review of 31f712b55: 1 BLOCK, 4 SHOULD-FIXes; before any gate)
+- **The resume BLOCK above (B1) rested on an out-of-date premise, settled from the code.** Since R-646c there is no
+  whole-batch replay: every non-skipped batch goes through `scoreBatch`. A reused R192 snapshot pushes its stored rows,
+  `failureMessage` included, and `baseline-batch-finished` is emitted with no condition. Carrying and history lending
+  happen after that emit. A baseline with a stopped test is never stored, so it runs again.
+  - So carried and lent survivors always sit in a folded batch. The store read and the "unknown for N carried batches"
+    sentence are dropped.
+  - The batches that emit no baseline event (stranded-only, compile failure, quarantine) hold no survivors.
+  - Test 6 becomes a `runSession` `--resume` test with a reused snapshot holding a refused row: the field and the caveat
+    on the carried survivors.
+- **The not-run class, widened (review B1 and S1).** Also counted:
+  - a `deadline-exceeded` baseline row;
+  - any row carrying the not-run marker (`V3_NOT_RUN_SUFFIX`, matched anywhere in the message), including "al-runner-v3
+    contract:" notRun rows;
+  - a baseline transport failure (the test never ran, and it would run on BC).
+  - Not counted: the R-236c TestPage-scan skip, which BC refuses too (PR-387's scope, bcdev), and an ordinary fail.
+- **Readers use the stored field (S2):** renderConsole, changed-since and the Stryker export build the sentence from
+  `survivorsBesideUnrunTests` when it is present. They recompute only for confirm-merge's subset view and for older reports.
+- **explain on an older v3 report (S3)** carries the "not recorded" marker, as every other reader does.
+- **Tests (S4):** the withheld-kills line is asserted with withheld kills present, and each guard's red check is recorded in
+  `/coord/handoff/PR-381/redcheck.md`.
+- **NITs fixed:** the changed-since figure says "of the run"; confirm's "N survivors" counts known-survivors; "1 test" is
+  singular; `NotRunView.backend` is required; report.ts no longer calls the static reach "planned".
+- **PR-386 is closed as "no gain"** (lethal-code: on DO the closure equals `ALWAYS_REACHES`; a 2.6% ceiling). The app-level
+  caveat is final (the owner agreed). Whether the unused `reaches` hook is removed is decided with lethal-code (PR-387) and
+  stated in the result.
+- **The predictions are unchanged in direction.** c3's `notRunTests` may grow above 237 if c3 has deadline, marker-only or
+  transport-failure baseline rows. The offline script re-counts, and the result states the final figure.
