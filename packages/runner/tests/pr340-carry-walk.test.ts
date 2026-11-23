@@ -7,6 +7,7 @@ import {
   CARRY_WALK_ENV,
   type V3Row,
   V3_SINGLEINSTANCE_NOTE,
+  V3_STALE_BUFFER_TEXT,
   judgeCarryWalk,
 } from "../src/al-runner-v3-backend";
 import { mergeChildEnv, v3MutantDaemonEnv } from "../src/al-runner-v3-seed";
@@ -72,6 +73,18 @@ describe("PR-340: judgeCarryWalk", () => {
       failure: "boom",
       reproduced: "boom",
     });
+  });
+
+  // PR-396. Red: in judgeCarryWalk, drop the `staleBufferGuard(` wrap around `v3RowVerdict`.
+  test("PR-396: fail, pass, fail on the #8721 stale-buffer text is a failed walk, never a kill", () => {
+    const stale = (m: string): V3Row[] => [
+      echo(m),
+      row(1, "T1", "fail", `Codeunit1 ${V3_STALE_BUFFER_TEXT}.`),
+      row(2, "T2", "pass"),
+    ];
+    const r = judge([stale("M1"), answer(NONE, "pass"), stale("M1")]);
+    expect(r.kind).toBe("failed");
+    expect(failedReason(r)).toContain("reads error");
   });
 
   test("1b. the FIRST such test in the first answer's order is the killer", () => {
