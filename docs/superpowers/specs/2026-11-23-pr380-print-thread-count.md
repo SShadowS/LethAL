@@ -15,6 +15,12 @@ Written 2026-11-23. Replaces test 1 of `docs/superpowers/specs/2026-11-21-pr292-
 - **The test:** `printAlTree` and `printTestDir` of a small tree leave the count unchanged. Then, as a positive control,
   two direct `printWalkedSync` calls equal the worker's answers and move the count by exactly 2, so an unchanged count is
   never empty-versus-empty.
+- **What it proves, exactly (build review):** `printWalkedSync` never runs on the main thread during `printAlTree` or
+  `printTestDir`. That is narrower than the old test's "the thread is free": other blocking work added on the main thread
+  before the worker call (a fail-fast `walkFilesSync`, or the print inlined without `printWalkedSync`) would leave it green.
+  No such path exists today (the review checked: no fallback, no cache, no error path prints inline). Counting
+  `walkFilesSync` too was considered and left out: the main thread walks legitimately elsewhere, and one seam is enough
+  for the claim the old test made about the print itself.
 - **Not chosen:** a "started" message from the worker, then a main-thread step before "done" (the orchestrator's example).
   Without a wait inside the worker, a fast worker can finish before the main thread runs, so the order is not deterministic,
   and a wait needs a test-only protocol in the product's worker. The counter needs neither.
