@@ -133,3 +133,30 @@ From B's `serve-entries (R635)` line:
 - The review: Opus spec-adversary on v1, 1 BLOCK and 4 SERIOUS findings, all folded in above (v2); its delta review of v2
   found nothing blocking, and its two LOW items and the pressure floor are folded in (v2.1).
 - `compare.py`: written after the run, from PR-357's `compare.py` and PR-332's, implementing exactly the rules above.
+
+## Amendment 2 (2026-11-23, the orchestrator's ruling, before any arm runs): two fresh arms, c3 for verdicts only
+- **Why:** c3 cannot be a speed reference. Its CPUs 12-21 were busy 0.41-0.55 every hour from 23:00 to 02:55Z (lethal-code's
+  work and the orchestrator's merge VERIFYs), and its wall (14,923 s) against c2's (13,458 s) shows it. Amendment 1's
+  correction for slowed windows is therefore withdrawn, and with it every speed rule that reads c3.
+- **The arms (`series.sh`):** **A** = the flag off (`v3.A.json`), then at once **B** = the flag on (`v3.B.json`), back to back.
+  - Both run on the same head ec78cff18, the same binary (sha and version before and after), and the same re-gated record,
+    which each arm checks before it starts (`gated-check.jq`, as before).
+  - Each has its own cold `cacheDir`. The two configs differ only in `stopGroups` and `cacheDir` (checked by `jq`).
+  - Both use PR-357's settings otherwise, and both record the per-core busy shares of 0-11 and 12-21 (`box.tsv`).
+  - Arm A refuses to run with the flag on (it must print no stop counts), and arm B refuses to run before A's report exists.
+- **The box:** both arms start only on the orchestrator's word that the box is free. The orchestrator holds merges and
+  VERIFYs during both. Time: about 2 × 6-7 h.
+- **V (hard) is now A against B** per mutant on the full site key: 0 verdict moves; `killingTest` moves only of PR-256
+  amendment 1's kind, each listed and checked as above, any other a BLOCK.
+- **Each arm against c3 is reported, not judged:** A against c3 is expected to equal (the same head, build and settings), and
+  any difference is named and filed as a nondeterminism finding. It does not block B's claim.
+- **Speed: S1 and S2 as written, B over A,** with no correction.
+- **The void rules, per arm and between the arms (the speed reading is void if any holds):**
+  - an arm's mean `cpu12_21_busy` over its mutant phase above 0.20;
+  - **the two arms' mean `cpu12_21_busy` over their mutant phases differ by more than 0.05;**
+  - an arm's outside load on 0-11 (its mean `cpu0_11_busy` minus its own CPU ÷ (12 × its elapsed wall)) above 0.10, or
+    the two arms' outside loads on 0-11 differ by more than 0.05;
+  - the suspend, watchdog, R948, decision-line and completeness rules as before.
+  - **A void arm is re-run once, at once, under its letter (A2 or B2),** and the series keeps the A-then-B order. A second
+    void leaves speed INCONCLUSIVE.
+- **What follows, unchanged:** one pair records a saving; a default flip needs an interleaved series of pairs.
