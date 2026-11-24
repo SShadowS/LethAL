@@ -185,6 +185,13 @@ const UNJUDGED: ReadonlyMap<string, string> = new Map([
   ),
   // the old wording, which no family cell produces on current
   ...word("old-wording-no-cell", "company-table-read company-findset"),
+  // PR-408: the NEW wording of the t10/t12 cells code-gl-to-biginteger and conversion-text-to-integer on edge e5176a9fd
+  // (assumption setrange-other-type-convert); `current` gives the old wording, so those cases judge their old entries,
+  // and on edge they read MOVED under them (kept, so a warn, never unkept)
+  ...word(
+    "edge-rewording-of-a-judged-case",
+    "setrange-code-gl-to-biginteger setrange-text-eq18-to-integer",
+  ),
   // no family cell yet (a later item may add cells)
   ...word(
     "no-family-cell-yet",
@@ -205,8 +212,9 @@ describe("PR-363: every keep entry is judged by a case or pinned with its reason
   // Red: add a key to V3_SERVE_SAFE_REFUSALS (or drop a name from UNJUDGED): the three sets no longer cover it.
   test("SERVE_CASES, the 47 new cases and the pinned map are exactly the keep list, with no overlap", () => {
     const pinned = new Set(UNJUDGED.keys());
-    // a name listed twice would collapse in the Map and fall short; PR-365 added 3 RelationFieldNo rows (BaseApp tables)
-    expect(UNJUDGED.size).toBe(72);
+    // a name listed twice would collapse in the Map and fall short; PR-365 added 3 RelationFieldNo rows (BaseApp tables);
+    // PR-408 the 2 edge rewordings
+    expect(UNJUDGED.size).toBe(74);
     for (const e of fresh) expect(old.has(e)).toBe(false);
     for (const e of pinned) expect(old.has(e) || fresh.has(e)).toBe(false);
     expect([...old, ...fresh, ...pinned].sort()).toEqual([...all].sort());
@@ -216,6 +224,7 @@ describe("PR-363: every keep entry is judged by a case or pinned with its reason
   test("the reasons are exactly the spec's categories", () => {
     expect([...new Set(UNJUDGED.values())].sort()).toEqual(
       [
+        "edge-rewording-of-a-judged-case", // PR-408 (spec 2026-11-24-pr408-setrange-convert-keep.md)
         "needs-dotnet-sidecar",
         "needs-dependency-or-baseapp",
         "needs-no-client",
