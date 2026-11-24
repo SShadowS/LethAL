@@ -462,6 +462,8 @@ export interface SessionFingerprintInput {
   readonly v3RefusedCutTail?: true;
   /** PR-256: `alRunnerV3.stopGroups` is on: mutant requests carry per-entry stop groups. Only when on, so no other digest moves. */
   readonly v3StopGroups?: true;
+  /** PR-402: `alRunnerV3.loginReplay` is on. Only when on, so no other digest moves. */
+  readonly v3LoginReplay?: true;
   /** PR-303: `LETHAL_V3_REACH_PRUNE=on`: test codeunits that cannot reach a mutant's site are left out. Only when on, so no other digest moves. */
   readonly v3ReachPrune?: true;
   /**
@@ -561,6 +563,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.v3Companies !== undefined ? { v3Companies: input.v3Companies } : {}), // PR-282
     ...(input.v3RefusedCutTail === true ? { v3RefusedCutTail: true } : {}), // PR-297
     ...(input.v3StopGroups === true ? { v3StopGroups: true } : {}), // PR-256
+    ...(input.v3LoginReplay === true ? { v3LoginReplay: true } : {}), // PR-402
     ...(input.v3ReachPrune === true ? { v3ReachPrune: true } : {}), // PR-303
     ...(input.v3CarryWalkOff === true ? { v3CarryWalkOff: true } : {}), // PR-340
     selectorIds: [

@@ -3462,6 +3462,10 @@ export function v3RecheckOf(a: {
         ...((a.effectiveConfig.alRunnerV3 as { stopGroups?: unknown }).stopGroups !== undefined
           ? { stopGroups: false }
           : {}),
+        // PR-402 review F1: nor the login replay, which no fact measures under method isolation.
+        ...((a.effectiveConfig.alRunnerV3 as { loginReplay?: unknown }).loginReplay !== undefined
+          ? { loginReplay: false }
+          : {}),
       },
     };
     const {
@@ -3869,6 +3873,7 @@ export function v3SectionPassThrough(c: AlRunnerV3ConfigSection) {
     ...(c.companies !== undefined ? { companies: c.companies } : {}), // PR-282
     ...(c.refusedCutTail !== undefined ? { refusedCutTail: c.refusedCutTail } : {}), // PR-297; PR-347: an explicit false must reach the backend (default on)
     ...(c.stopGroups === true ? { stopGroups: true } : {}), // PR-256
+    ...(c.loginReplay === true ? { loginReplay: true } : {}), // PR-402
   };
 }
 

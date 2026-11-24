@@ -144,10 +144,13 @@ function fakeServe(ctl: ServeCtl) {
   const bodies: string[] = [];
   const closes: number[] = [];
   const cwds: (string | undefined)[] = [];
+  /** PR-402: the environment each daemon was spawned with (the spawn options' `env`), by daemon index. */
+  const envs: (Readonly<Record<string, string | undefined>> | undefined)[] = [];
   const spawn: ServerSpawnFn = (argv, opts) => {
     const daemon = daemons.length;
     daemons.push([...argv]);
     cwds.push(opts?.cwd);
+    envs.push(opts?.env);
     const out = new Chan();
     const err = new Chan();
     let compiled = new Set<number>();
@@ -274,7 +277,7 @@ function fakeServe(ctl: ServeCtl) {
     };
     return handle;
   };
-  return { spawn, daemons, requests, bodies, closes, cwds };
+  return { spawn, daemons, requests, bodies, closes, cwds, envs };
 }
 
 /** PR-256: upstream's skip row text (PR-257, measured), naming the test `failed` (`Codeunit<n>.<Method>`). */
@@ -283,8 +286,11 @@ export const stopSkipText = (failed: string): string =>
 
 function fakeOneShot(rows: RowsFn) {
   const calls: string[][] = [];
-  const spawn: SpawnFn = async (argv) => {
+  /** PR-402: the environment of each call (the spawn options' `env`), by call index. */
+  const envs: (Record<string, string> | undefined)[] = [];
+  const spawn: SpawnFn = async (argv, opts) => {
     calls.push([...argv]);
+    envs.push(opts?.env);
     const cu = Number(argv[argv.indexOf("--codeunit") + 1]);
     const tests = rows("STATIC", cu, -1, -1).map((r) => ({
       codeunit: cu,
@@ -297,7 +303,7 @@ function fakeOneShot(rows: RowsFn) {
     }));
     return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "" };
   };
-  return { spawn, calls };
+  return { spawn, calls, envs };
 }
 
 function fakeAlc(): ArtifactIo {
@@ -361,6 +367,10 @@ export async function lanesRig(
     stopGroups?: boolean;
     /** PR-256: the `stop-groups` build fact (the seam; default: present when `stopGroups` is true). */
     stopGroupsFact?: boolean;
+    /** PR-402: `alRunnerV3.loginReplay` (true, false or absent). */
+    loginReplay?: boolean;
+    /** PR-402: the `login-replay` build fact (the seam; default: present when `loginReplay` is true). */
+    loginReplayFact?: boolean;
   } = {},
 ): Promise<LanesRig> {
   const suite = o.methods === undefined ? SUITE : o.methods.map(ref);
@@ -421,6 +431,7 @@ export async function lanesRig(
       ...(o.packEntries !== undefined ? { packEntries: o.packEntries } : {}),
       ...(o.refusedCutTail !== undefined ? { refusedCutTail: o.refusedCutTail } : {}), // PR-347: `false` is passed too
       ...(o.stopGroups !== undefined ? { stopGroups: o.stopGroups } : {}),
+      ...(o.loginReplay !== undefined ? { loginReplay: o.loginReplay } : {}),
     },
     one.spawn,
     fakeAlc(),
@@ -431,6 +442,8 @@ export async function lanesRig(
   b.seams.sleepRuleRetired = true;
   if (o.stopGroupsFact !== undefined || o.stopGroups === true)
     b.seams.stopGroupsFact = o.stopGroupsFact ?? true;
+  if (o.loginReplayFact !== undefined || o.loginReplay === true)
+    b.seams.loginReplayFact = o.loginReplayFact ?? true;
   // R778: these tests measure today's per-kill pair; the batch has its own tests.
   (b as unknown as { pairBatch: boolean }).pairBatch = o.pairBatch === true;
   if (o.afterLaneCopy !== undefined) b.seams.afterLaneCopy = o.afterLaneCopy;

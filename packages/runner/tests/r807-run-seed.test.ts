@@ -525,7 +525,9 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
     expect(r.count).toBe(4); // R907: the `test --help` read is the fourth
     expect(r.bad).toEqual([]);
     // PR-340: both branches wrap v3ChildEnv (v3MutantDaemonEnv is v3ChildEnv plus AL_STRICT_SEQUENTIAL).
-    expect(t).toContain("env: mutantRun ? v3MutantDaemonEnv(extra) : v3ChildEnv(extra)");
+    // PR-402: the same two branches, now as an early return and `v3MutantDaemonEnv(extra, replay)`.
+    expect(t).toContain("if (!mutantRun) return { env: v3ChildEnv(extra) };");
+    expect(t).toContain("env: v3MutantDaemonEnv(extra, replay)");
   });
   test("the probe, the contract probe and doctor wrap their spawns in v3ChildEnv", async () => {
     const probe = eachFollowedBy(

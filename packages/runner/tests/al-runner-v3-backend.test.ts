@@ -35,21 +35,21 @@ import {
   AlRunnerV3RowMissingError,
   AlRunnerV3SelectionError,
   AlRunnerV3UnprovenBatchError,
+  V3_NOT_RUN_SUFFIX,
   V3_REFUSED_NEARBY_TAG,
+  V3_STALE_BUFFER_NOTE,
+  V3_STALE_BUFFER_TEXT,
   V3_STATE_NOTE_TAG,
   WINDOW_BOUND_CAVEAT,
   decodeV3Rows,
   exit6Kind,
   resolveDotnetSidecar,
+  staleBufferGuard,
   stopSecondsOf,
   v3CallArgv,
   v3CallDeadlineMs,
   v3CompileRefusal,
   v3MissingDependencies,
-  V3_NOT_RUN_SUFFIX,
-  V3_STALE_BUFFER_NOTE,
-  V3_STALE_BUFFER_TEXT,
-  staleBufferGuard,
   v3RowVerdict,
   v3TestDataOffNote,
 } from "../src/al-runner-v3-backend";
@@ -1055,6 +1055,8 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
   const VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
   const COMMIT = "a1".repeat(20);
   let lastStatus: { ok: boolean; details: string } | undefined;
+  /** PR-402: what the last `batching` call's `status()` printed through console.warn. */
+  let lastWarns: string[] = [];
   async function batching(
     batchFacts: Record<string, string> | undefined,
     extra: Partial<AlRunnerV3Config> = {},
@@ -1108,6 +1110,8 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
     try {
       const s = await b.status();
       lastStatus = s;
+      if (wantOk) await b.status(); // PR-402: a second call must not print the notice again
+      lastWarns = warn.mock.calls.map((c) => String(c[0]));
       expect(s.ok).toBe(wantOk);
       return b;
     } finally {
@@ -1140,6 +1144,32 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
     await batching({ ...eight, "stop-groups": "matches" }, { stopGroups: true }, true);
     await batching(eight, { stopGroups: false }, true);
     await batching(eight, {}, true);
+  });
+
+  // PR-402 (R1182). Red: remove the `loginReplayFor` refusal in status() (refusal test), or the notice (notice test),
+  // or print it with the flag off / on every status() call.
+  const NOTICE =
+    "[lethal] al-runner-v3 login replay ON: ALRUNNER_LOGIN_REPLAY=1 on mutant daemons only (R1182; experimental, opt-in)";
+  test("PR-402: loginReplay on a build whose gate record lacks login-replay is refused by name, with no notice", async () => {
+    const eight = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
+    await batching(eight, { loginReplay: true }, false);
+    expect(lastStatus?.details).toContain("al-runner-v3-login-replay-unsupported");
+    expect(lastStatus?.details).toContain(COMMIT);
+    expect(lastWarns).not.toContain(NOTICE);
+    await batching({ ...eight, "login-replay": "diverged" }, { loginReplay: true }, false);
+    expect(lastStatus?.details).toContain("al-runner-v3-login-replay-unsupported");
+  });
+
+  test("PR-402: with the fact `matches` the flag is allowed and the notice prints once per session; flag off prints nothing", async () => {
+    const eight = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
+    await batching({ ...eight, "login-replay": "matches" }, { loginReplay: true }, true);
+    expect(lastWarns.filter((w) => w === NOTICE)).toHaveLength(1); // two status() calls, one notice
+    await batching({ ...eight, "login-replay": "matches" }, { loginReplay: false }, true);
+    expect(lastWarns.filter((w) => w.includes("login replay"))).toEqual([]);
+    await batching({ ...eight, "login-replay": "matches" }, {}, true);
+    expect(lastWarns.filter((w) => w.includes("login replay"))).toEqual([]);
+    await batching(eight, {}, true);
+    expect(lastWarns.filter((w) => w.includes("login replay"))).toEqual([]);
   });
 
   test("PR-256 amendment 1 item 1: the fact present but the §6 Sleep rule in force (probe reads sleep-is-noop present): refused by name", async () => {
