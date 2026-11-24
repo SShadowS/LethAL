@@ -622,6 +622,11 @@
       "from": "PR-408/kc/kept.json"
     },
     {
+      "entry": "setrange-text-1eq18-to-integer",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '1=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-419/kc/kept.json"
+    },
+    {
       "entry": "placeholder-pdf-read-standard-statement",
       "line": "NotRun: out-of-scope: a read of the content of a placeholder Pdf of report Standard Statement (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts with the bytes '%PDF-' matches BC; a test that reads the content tests the layout renderer)",
       "from": "PR-411/keepcheck/F1b.kept.ndjson"

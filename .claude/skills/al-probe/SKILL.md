@@ -124,6 +124,17 @@ filtered by publisher), hung BC 28.4 for about 166 s and the service tier stoppe
 host restart (R433). Read one app at a time with `HarnessVerifier.fetchExtensionInstalled(<app id>)`
 or `fetchInstalledVersions(<app id>)`; never build that API URL yourself (a source guard refuses it).
 
+**Culture data from Linux BC is not Windows BC's (R1210).** `bc1`-`bc4` run BC on Linux, which formats from ICU culture
+data. Windows BC uses NLS, and the two can differ. #8861, #8862 and #8871 (FormatRegion da-DK, fr-FR, sv-SE) were Linux ICU
+data: Windows BC matched al-runner, so they were not al-runner bugs. So for any answer that depends on culture data (Format,
+FormatRegion, a report language, dates and times, decimals, digit grouping, month or day names, sort order and collation):
+- record it as **"measured on Linux BC <build>"** (server, build, the session's language and region);
+- never file it upstream as an al-runner bug unless Windows BC gives the same answer;
+- treat a Linux-only reading as data for alrunner, not as evidence of a bug.
+
+Answers that do not depend on culture are unaffected: refusals, whether an error is raised, conversions, row counts.
+`scripts/refusal-family.ts` records each family's server (`bcMeasured`) and names its Linux culture cells on `--join`.
+
 ## Verifying names before you compile
 
 Virtual tables are easy to get wrong and the compiler error is unhelpful (`AL0118: The name

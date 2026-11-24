@@ -1281,6 +1281,14 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "setrange-text-eq18-to-integer",
     "SetRange or SetFilter of Text '=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
   ],
+  // PR-419 (R1209): the other `%INTTEXT%` variant, '1=18' (PR-105, from DO's t12 census), in edge's wording. PR-415's family
+  // re-run found it unkept on `current` (t12-refusals 51009, refused on both builds). Kept by the kept-vs-fresh check on edge
+  // with the full t12 family app (/coord/handoff/PR-419/kc/: t12-full, t10, t12-full, t12 on ONE daemon against a fresh
+  // daemon each; every row equal by name; the self-test caught). Pinned by `pr419-setrange-keep.test.ts`.
+  [
+    "setrange-text-1eq18-to-integer",
+    "SetRange or SetFilter of Text '1=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+  ],
   // PR-411 (spec 2026-11-24-pr411-r1205-keep-families.md v2 + amendment 1, R1205): three refusal families c4 (main-bf3a3e863,
   // full DO) still closed daemons on, each met only under a mutant, never at baseline. One EXACT row per captured line (c4's
   // `serve-daemon-closed` text, byte for byte); no slot, so another report, language number or tail still closes. Each kept
