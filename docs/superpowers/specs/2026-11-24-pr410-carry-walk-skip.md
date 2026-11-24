@@ -184,3 +184,23 @@ All use the backend's fake daemon, with request counters:
 - **Speed (reported, not judged):** walk time and restart warm-up time per arm, and the mutant-phase wall, between
   interleaved arms only (server1 is shared; owner's ruling, 2026-11-23). The known saving is deterministic (requests not
   sent, restarts not made), so the counts carry the claim, not the wall.
+
+## Amendment 1 (2026-11-24, before any gate or DO arm runs): `current` moved to edge-e5176a9fd
+
+lethal-bugs moved `current` to edge-e5176a9fd at 19:27:48Z, after this spec. The build's gated row is on master
+f8185a042. The orchestrator asked which predictions depend on the old build (c4 ran on main-bf3a3e863).
+- **The gates run on the new `current`, edge-e5176a9fd.** Their two skip predictions depend on what the build flags:
+  - the carry gate prints no skip line, because sandbox-carry's first walk codeunit has no flagged first row;
+  - no v3-gate leg skips a walk.
+
+  Both are re-stated for edge-e5176a9fd unchanged: 0 skips. A skip line in either gate is still a BLOCK. It would mean
+  the new build flags a first test there, and it needs a new pre-commitment of the move, not a pass.
+- **The c4-based figures stay on c4's build, by design.** The premise numbers (129 of 129) and the DO check's
+  comparison with c4 are about main-bf3a3e863.
+  - The DO check pins that build by path and sha256 (`/coord/handoff/PR-410/v.*.json`, `arm.sh`: b3e1d2550b56…,
+    "al-runner 3.0.0-alpha.15+main.20261122 (bf3a3e863)", checked before and after each arm). It is still gated (its
+    `.gated`, refreshed 2026-11-24).
+  - So both arms and c4 share one binary, and the premise check (request 2 under NONE) is measured on the build the
+    figures came from. Whether edge-e5176a9fd flags the same DO tests is not claimed here.
+- **The branch is merged with master** (including f8185a042) before the gates, and VERIFY and every leg are re-run on
+  that head.
