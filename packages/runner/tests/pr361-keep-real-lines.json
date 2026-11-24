@@ -620,6 +620,26 @@
       "entry": "setrange-text-eq18-to-integer",
       "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
       "from": "PR-408/kc/kept.json"
+    },
+    {
+      "entry": "placeholder-pdf-read-standard-statement",
+      "line": "NotRun: out-of-scope: a read of the content of a placeholder Pdf of report Standard Statement (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts with the bytes '%PDF-' matches BC; a test that reads the content tests the layout renderer)",
+      "from": "PR-411/keepcheck/F1b.kept.ndjson"
+    },
+    {
+      "entry": "placeholder-pdf-read-standard-sales-invoice",
+      "line": "NotRun: out-of-scope: a read of the content of a placeholder Pdf of report Standard Sales - Invoice (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts with the bytes '%PDF-' matches BC; a test that reads the content tests the layout renderer)",
+      "from": "PR-411/keepcheck/F1b.kept.ndjson"
+    },
+    {
+      "entry": "evaluate-boolean-global-language-1044",
+      "line": "NotRun: out-of-scope: the error of Evaluate into a Boolean under GlobalLanguage 1044 (not measured)",
+      "from": "PR-411/keepcheck/F2.kept.ndjson"
+    },
+    {
+      "entry": "run-request-page-parameters-no-xml-declaration",
+      "line": "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
+      "from": "PR-411/keepcheck/F3.kept.ndjson"
     }
   ],
   "nearMiss": [

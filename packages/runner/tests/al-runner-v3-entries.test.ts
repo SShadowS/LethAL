@@ -1706,8 +1706,9 @@ describe("R939: why each serve daemon closed", () => {
     // widening of that entry would keep it. (PERF-10's Company text is kept since bugs' widening, master c3355859.)
     const REWORDED =
       "NotRun: out-of-scope: a page opened without a record whose OnOpenPage, as the runner now explains, left Rec where its view has no row";
+    // PR-411 keeps DO's exact RunRequestPage line, so the known variant here is an unmeasured form of it (a tail added).
     const REPORT_VARIANT =
-      "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)";
+      "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned) in another form";
     const textFor =
       (text: string, who: readonly string[]): RowsFn =>
       (m, cu, d, n) =>

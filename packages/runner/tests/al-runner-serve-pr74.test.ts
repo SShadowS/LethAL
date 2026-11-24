@@ -47,8 +47,14 @@ describe("PR-74 keep entries", () => {
         false,
       ]);
     expect(k("Evaluate of `>100` into Integer (form not pinned by the corpus)")).toBe(false);
-    // review H1: RunRequestPage was measured only after a Commit(), so it closes
-    for (const r of ["RunRequestPage", "Run", "RunModal", "Print", "Execute", "SaveAsPdf"])
+    // review H1: RunRequestPage was measured only after a Commit(), so PR-74's slot stays SaveAs only. PR-411 keeps DO's
+    // exact RunRequestPage line by its own row (its own kept-vs-fresh DO check); the other methods still close.
+    expect(
+      k(
+        "a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
+      ),
+    ).toBe(true);
+    for (const r of ["Run", "RunModal", "Print", "Execute", "SaveAsPdf"])
       expect([
         r,
         k(

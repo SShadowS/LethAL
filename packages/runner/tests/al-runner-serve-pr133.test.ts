@@ -44,26 +44,27 @@ describe("PR-133 keep entries", () => {
   // PR-354: PR-133 held the SaveAs-with-layout family because an invented app cannot produce DO's texts (they need
   // BaseApp's reports). PR-354 keeps its measured texts by name after a direct kept-vs-fresh DO check (its spec section 3),
   // so that one assertion is now `true`; the other two held families still close.
-  test("P2: x2's two kept texts are kept; RunRequestPage and the placeholder PDF still close; SaveAs-with-layout is kept since PR-354", () => {
+  test("P2: x2's two kept texts are kept; SaveAs-with-layout is kept since PR-354; RunRequestPage and the placeholder PDF since PR-411", () => {
     expect(keeps("NotRun: out-of-scope: SetFilter: `C*` is not a BigInteger")).toBe(true);
     expect(keeps("NotRun: out-of-scope: RecordRef.GetTable of Integer 123")).toBe(true);
-    // RunRequestPage: DO reaches it inside an AutoRollback write transaction (spec r2 H1/H2)
+    // RunRequestPage: DO reaches it inside an AutoRollback write transaction (spec r2 H1/H2). PR-411 measured DO's exact
+    // line on DO directly (its own kept-vs-fresh check) and keeps it by name, as PR-354 did for SaveAs-with-layout.
     expect(
       keeps(
         `${P}a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)`,
       ),
-    ).toBe(false);
+    ).toBe(true);
     // SaveAs with a layout: it needs BaseApp's own reports, so PR-354 measured it on DO directly and keeps it by name
     expect(
       keeps(
         `${P}an error in a SaveAs of report "Standard Sales - Invoice", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): Tests cannot call the Commit function if TransactionModel property is set to AutoRollback.`,
       ),
     ).toBe(true);
-    // the placeholder Pdf read: the same
+    // the placeholder Pdf read: the same (PR-411, by name per report)
     expect(
       keeps(
         `${P}a read of the content of a placeholder Pdf of report Standard Sales - Invoice (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts with the bytes '%PDF-' matches BC; a test that reads the content tests the layout renderer)`,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

@@ -87,11 +87,12 @@ describe("PR-93 keep entries", () => {
         "DotNet Newtonsoft.Json.JsonTextWriter.WriteEndArray raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path 'a'.; the text AL would see is not pinned (ADR-014 section 7)",
       ),
     ).toBe(false);
-    // PR-74 review H1 stands: RunRequestPage was measured only after a Commit()
+    // PR-74 review H1 stood for PR-93 (RunRequestPage measured only after a Commit()). PR-411 keeps DO's exact line by its
+    // own row after its own kept-vs-fresh DO check; that row's entry is now this text's in pr93-measured-refusals.json.
     expect(
       k(
         "a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
