@@ -109,3 +109,37 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
 - Everything else in amendment 1 is built as written (B1's Sleep gate and `status()` refusal; skips never refusals; the N1
   counts, pinned). Build: `lethal/pr-256` 2281acb4e.
 
+## Amendment 3 (2026-11-24, lethal-bugs, after PR-359; the orchestrator's "amendment 2" for R1203): a second allowed kind
+- **Why:** PR-359's ABBA run (R1203) moved 5 `killingTest`s in codeunit 68861 ("CDO eSeal Setup UI Tests") with B's killer
+  P BEFORE A's killer F in R197's order. Amendment 1's change 3 allows only P after F, so each was a BLOCK. R1203's reading
+  (master 845051787; `/coord/handoff/R1203/rows.txt`, `cov.txt`) explains them:
+  - the walk starts at F (DisableService) in both arms;
+  - in A's whole-codeunit run, F fails only because an earlier covering test P (EnableService or OpenPage) failed under the
+    mutant before closing the codeunit-GLOBAL TestPage ("The TestPage is already open.");
+  - B's stop groups run them apart, so F passes and P fails on its own assertion;
+  - A's killer carries `[v3-codeunit-state-possible]` naming P as an earlier FAILED covering test.
+  - B's killers are what LethAL's one-method bcdev path would report (R156). BC cannot be asked: they are TestPage tests.
+- **The rule (added to change 3; it changes no default, and `alRunnerV3.stopGroups` stays off until a later A/B passes
+  both V and speed):** a `killingTest` move with P BEFORE F is the allowed kind only when ALL of these hold:
+  1. A's killer F carries `[v3-codeunit-state-possible]`, and its note names P as an earlier covering test with outcome
+     `fail` in the same v3 codeunit run;
+  2. B's P fails on its own and its kill reproduces (the mutant fails, NONE passes, the mutant fails);
+  3. the verdict is equal (both `killed`);
+  4. each such move is listed by mutant and site key in the result.
+  - Anything else with P before F stays a BLOCK.
+- **The five it covers** (PR-359 half 1, A1 against B1): M4774, M4775, M4789, M4791, M4796, all in
+  `src/Features/ESeal/CDOeSealServiceSetup.Page.al` (lines 109, 110, 137, 138, 145; site keys in R1203).
+- **M12932 is a different shape, NOT covered by this rule, and stays listed on its own** (`src/Features/HandledState/
+  CDOUnhandledServicePagesMgt.Codeunit.al`:40 remove-not 963-989):
+  - In R197's order P comes AFTER F, so amendment 1's change 3 is the kind that applies.
+  - In A, P (GetLogInfo_WhenMovedLogExists_ExcludesIt) is `error`: a cascade after a REFUSED earlier test
+    (GetLogInfo_WhenNonRecordVariant_ReturnsZero, a `RecordRef.GetTable` refusal), so A's walk went on to F
+    (GetLogInfo_WhenMultipleLogEntries_ReturnsCount).
+  - In B, P fails on its own assertion ("should exclude moved log entries"), and its kill reproduces.
+  - Change 3's checks:
+    - **same entry: holds.** P and F are both in codeunit 68910, and one entry is one codeunit's call, so every request
+      that carries the call carries both (PR-359's `serve-request-sized` names codeunit calls);
+    - **keepcheck (P alone under the mutant fails twice, alone without it passes, on a fresh daemon): PENDING.** It needs
+      the full instrumented DO build at the run's head. It runs as part of the next stop-groups A/B on a fresh head
+      (the orchestrator, 2026-11-24).
+
