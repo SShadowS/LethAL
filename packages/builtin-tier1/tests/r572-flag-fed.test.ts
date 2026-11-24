@@ -956,7 +956,9 @@ ${chain}
     );
     expect(project(files)(C, "FEED")).toBe(true);
     expect(gapsOf(files).backstopCutOffs).toBeGreaterThan(0);
-  });
+    // PR-407: inherent. 10,000 is the point ("without overflow"): deep enough to overflow the stack in any walk that
+    // recurses past R572_FLAG_DEPTH, so a short chain would not check it. 2.9 s in a full VERIFY-shaped run.
+  }, 60_000);
   it("28i. control: a two-deep flag chain to the step stays forced (skipped)", () => {
     const files = dLoop(
       `            repeat
