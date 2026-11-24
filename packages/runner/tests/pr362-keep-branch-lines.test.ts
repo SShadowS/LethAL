@@ -11,12 +11,11 @@ type Line = { readonly branch: string; readonly line: string; readonly from: str
 const raw = readFileSync(join(import.meta.dir, "pr362-keep-branch-lines.json"), "utf8");
 const fx = JSON.parse(raw) as { readonly proven: readonly Line[] };
 
-/** The branches no captured al-runner row has met yet. A new one goes red until it is measured or named here. */
-const UNPROVEN_BRANCHES = [
-  "company-table-read-named #1 FindFirst",
-  "company-table-read-named #1 IsEmpty",
-  "evaluate-decimal-comparison #1 >1000",
-];
+/**
+ * The branches no captured al-runner row has met yet. A new one goes red until it is measured or named here. Empty since
+ * PR-421: its invented cells produced the last three (Company FindFirst and IsEmpty, Evaluate `>1000`) on edge e5176a9fd.
+ */
+const UNPROVEN_BRANCHES: readonly string[] = [];
 
 const all = Object.entries(V3_SERVE_SAFE_REFUSALS).flatMap(([entry, re]) =>
   branchesOf(entry, re).map((b) => ({ ...b, entry })),
