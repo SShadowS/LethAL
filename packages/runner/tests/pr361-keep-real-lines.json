@@ -610,6 +610,16 @@
       "entry": "caption-no-source-table",
       "line": "NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table (not pinned)",
       "from": "R-942/lic-suite.json"
+    },
+    {
+      "entry": "setrange-code-gl-to-biginteger",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Code 'GL00000000' into a BigInteger field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-408/kc/kept.json"
+    },
+    {
+      "entry": "setrange-text-eq18-to-integer",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-408/kc/kept.json"
     }
   ],
   "nearMiss": [
