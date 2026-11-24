@@ -983,6 +983,21 @@ describe("v3RecheckOf (cli wiring)", () => {
     ).not.toHaveProperty("stopGroups");
   });
 
+  // PR-402 review F1. Red: drop the `loginReplay: false` override in v3RecheckOf.
+  test("PR-402: the nested recheck never carries the login replay; a config without the key is unchanged", async () => {
+    const req = { targets: [target("M1")], tests: ["T Codeunit.T1"], budgetSeconds: 60 };
+    const on = wire({ ...section, loginReplay: true });
+    await on.recheck?.runner(req);
+    expect(
+      (on.built[0]?.config as { alRunnerV3: Record<string, unknown> }).alRunnerV3.loginReplay,
+    ).toBe(false);
+    const absent = wire(section);
+    await absent.recheck?.runner(req);
+    expect(
+      (absent.built[0]?.config as { alRunnerV3: Record<string, unknown> }).alRunnerV3,
+    ).not.toHaveProperty("loginReplay");
+  });
+
   test("option off, or another backend: no recheck is built", () => {
     expect(wire({ ...section, recheckWithheldKills: false }).recheck).toBeUndefined();
     expect(wire({ ...section, recheckWithheldKills: true }, "bcdev").recheck).toBeUndefined();

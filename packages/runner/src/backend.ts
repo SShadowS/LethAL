@@ -705,6 +705,8 @@ export interface ExecutionBackend {
   readonly refusedCutTail?: boolean | undefined;
   /** PR-256, al-runner-v3 only: `alRunnerV3.stopGroups` is ON. In the fingerprint, the lending build and the report. Absent counts as off. */
   readonly stopGroups?: boolean | undefined;
+  /** PR-402 (R1182), al-runner-v3 only: `alRunnerV3.loginReplay` is ON (`ALRUNNER_LOGIN_REPLAY=1` on mutant daemons). In the fingerprint and the lending build. Absent counts as off. */
+  readonly loginReplay?: boolean | undefined;
   /**
    * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */

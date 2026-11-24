@@ -39,8 +39,14 @@ export const V3_STRICT_SEQUENTIAL_ENV = "AL_STRICT_SEQUENTIAL";
  */
 export function v3MutantDaemonEnv(
   extra?: Readonly<Record<string, string>>,
+  /** PR-402 (R1182): `alRunnerV3.loginReplay`. Set AFTER `v3ChildEnv`, which writes `=0` after `extra`. */
+  loginReplay = false,
 ): Record<string, string> {
-  return { ...v3ChildEnv(extra), [V3_STRICT_SEQUENTIAL_ENV]: "1" };
+  return {
+    ...v3ChildEnv(extra),
+    [V3_STRICT_SEQUENTIAL_ENV]: "1",
+    ...(loginReplay ? { [V3_LOGIN_REPLAY_ENV]: "1" } : {}),
+  };
 }
 
 /**

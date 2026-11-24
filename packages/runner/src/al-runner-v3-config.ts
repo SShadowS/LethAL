@@ -21,6 +21,7 @@
  *     "companies": "<optional>",                              // PR-282; passed as --companies on every al-runner call that runs tests (one-shot and serve), in al-runner's syntax: names, comma separated, the session company first, or `all` (needs test data). No default: absent passes nothing, and al-runner refuses "FindSet on the Company table" because it does not know the database's companies. In the fingerprint and the report.
  *     "refusedCutTail": false,                                // PR-297; ON by default since PR-347, only false turns it off (a resume across the change is refused by name). On: runs each green test after a baseline-refusal cut (PR-250) alone under a mutant, if it passed alone once at the end of the baseline, instead of scoring it error. Every such kill carries a note. In the fingerprint, the report and the lending build.
  *     "stopGroups": false,                                    // PR-256, OFF by default; true sends each mutant request with stopAfterFirstFailure and one stopGroup per entry, so a group's tests after its first failure do not run. Needs the build fact stop-groups (refused by name without it). In the fingerprint, the report and the lending build.
+ *     "loginReplay": false,                                   // PR-402 (R1182), OFF by default; true sets ALRUNNER_LOGIN_REPLAY=1 on MUTANT-RUN serve daemons only (baseline, probe, one-shot and fact calls keep =0). Needs the build fact login-replay (refused by name without it). In the fingerprint and the lending build. Experimental.
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *     "recheckWithheldKills": true,                          // PR-144, ON by default (PR-182); false opts out and saves about 10% of a run with many withheld rows (nothing when there are none). After the main pass, re-run the withheld-kill rows under method isolation. A row the recheck does not recover stays `error`: unmeasured, never a kill. Evidence (PR-170): 42 of 58 recovered kills confirmed on BC, 0 false, 16 unmeasurable (9 TestPage-only killers, 7 killers red at BC's baseline). Warning: kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.
  *     "recheckBudgetSeconds": 3600,                          // PR-144; the recheck's own time budget (the main pass's --time-budget does not cover it)
@@ -79,6 +80,8 @@ export interface AlRunnerV3ConfigSection {
   readonly refusedCutTail?: boolean;
   /** PR-256: per-entry stop groups on mutant requests (needs the build fact `stop-groups`). Absent: off. */
   readonly stopGroups?: boolean;
+  /** PR-402 (R1182): `ALRUNNER_LOGIN_REPLAY=1` on mutant-run serve daemons (needs the build fact `login-replay`). Absent: off. */
+  readonly loginReplay?: boolean;
   /**
    * PR-227: a folder (a relative one is resolved against the working directory, as `license` is) that
    * receives every serve daemon's full stderr, one file per daemon. One-shot and `--isolate-tests`
@@ -177,6 +180,7 @@ const KEYS = [
   "companies",
   "refusedCutTail",
   "stopGroups",
+  "loginReplay",
   "environment",
   "isolation",
   "downloadDemoData",
@@ -333,6 +337,11 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.stopGroups" must be true or false, got ${JSON.stringify(r.stopGroups)} (PR-256).`,
     );
   }
+  if (r.loginReplay !== undefined && typeof r.loginReplay !== "boolean") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.loginReplay" must be true or false, got ${JSON.stringify(r.loginReplay)} (PR-402).`,
+    );
+  }
   if (r.refusedCutTail !== undefined && typeof r.refusedCutTail !== "boolean") {
     throw new Error(
       `al-runner-v3-config-refused: "alRunnerV3.refusedCutTail" must be true or false, got ${JSON.stringify(r.refusedCutTail)} (PR-297).`,
@@ -437,6 +446,7 @@ export function validateAlRunnerV3Config(
     ...(typeof r.companies === "string" ? { companies: r.companies } : {}), // PR-282
     ...(typeof r.refusedCutTail === "boolean" ? { refusedCutTail: r.refusedCutTail } : {}), // PR-297
     ...(typeof r.stopGroups === "boolean" ? { stopGroups: r.stopGroups } : {}), // PR-256
+    ...(typeof r.loginReplay === "boolean" ? { loginReplay: r.loginReplay } : {}), // PR-402
     ...(typeof r.daemonStderrDir === "string"
       ? { daemonStderrDir: resolve(r.daemonStderrDir) }
       : {}),

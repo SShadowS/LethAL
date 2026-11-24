@@ -7634,6 +7634,7 @@ async function runSessionBody(
     ...(cfg.backend.license !== undefined ? { v3License: cfg.backend.license.sha256 } : {}), // R956
     ...(cfg.backend.companies !== undefined ? { v3Companies: cfg.backend.companies } : {}), // PR-282
     ...(cfg.backend.stopGroups === true ? { v3StopGroups: true } : {}), // PR-256
+    ...(cfg.backend.loginReplay === true ? { v3LoginReplay: true } : {}), // PR-402
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -15336,7 +15337,7 @@ function assertSameResumeInputs(
 
 /**
  * The v3 session's `runner_build` lending key. ORDER MATTERS: `store.unfinishedRunUnderOtherEnvironment`
- * strips the end-anchored ` environment-X[ license-H][ companies-H][ refused-cut-tail][ stop-groups][ isolation-auto]`, and ` isolation-auto` must be
+ * strips the end-anchored ` environment-X[ license-H][ companies-H][ refused-cut-tail][ stop-groups][ login-replay][ isolation-auto]`, and ` isolation-auto` must be
  * last (`runMayLend`). So the baseline-source tag goes BEFORE the environment tag.
  */
 export function lendingRunnerBuild(
@@ -15346,7 +15347,7 @@ export function lendingRunnerBuild(
   refusedCutTailAs?: boolean,
 ): string {
   const cutTail = refusedCutTailAs ?? backend.refusedCutTail === true;
-  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${cutTail ? " refused-cut-tail" : ""}${backend.stopGroups === true ? " stop-groups" : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
+  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${cutTail ? " refused-cut-tail" : ""}${backend.stopGroups === true ? " stop-groups" : ""}${backend.loginReplay === true ? " login-replay" : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
 }
 
 /**
