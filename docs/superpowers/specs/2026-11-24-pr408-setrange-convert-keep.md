@@ -50,3 +50,15 @@ Build: branch lethal/pr-408 (5bd783b49). Evidence: `/coord/handoff/PR-408/`.
      passes. The script moves `current` to edge-e5176a9fd.
      - Edge carries upstream's login replay; LethAL's PR-360 pin keeps it off; lethal-code is told (PR-402 step 2).
      - Any other leg moving is a STOP, named before anything else.
+
+## Amendment 1 (2026-11-24, during the build): the two keep-list guards
+- VERIFY's first run failed two guards that the plan above did not name; each requires every keep entry to be accounted for:
+  - **PR-361** (`pr361-keep-real-lines.test.ts`): every entry is proven by a REAL al-runner line in
+    `pr361-keep-real-lines.json`. Both captured edge lines are added under `proven`, from `PR-408/kc/kept.json`, checked equal
+    byte for byte to the captured rows.
+  - **PR-363** (`scripts/pr363-legc-keep-apps.test.ts`): every entry is judged by a leg-C case or pinned with a reason from a
+    fixed set of categories.
+    - A NEW category, **`edge-rewording-of-a-judged-case`**, holds both entries: the t10/t12 cells produce these texts only
+      on edge, where they read MOVED under their old entries (kept, so a warn).
+    - The pinned map grows from 72 to 74 rows.
+- With both, VERIFY FULL passes (15,927 pass, 0 fail).
