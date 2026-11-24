@@ -1261,6 +1261,22 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "relation-field-no-sales-invoice-header-dimension-set-id",
     "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Set ID' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
   ],
+  // PR-408: edge e5176a9fd rewords two shapes `code-gl-to-biginteger` and `conversion-text-to-integer` keep, when the
+  // conversion comes from SetRange/SetFilter ("assumption setrange-other-type-convert"). Caught by PR-363's leg-C family
+  // cases t10/t12 (unkept, R1000) before any DO run. One EXACT row per measured line, the edge gate's own captured text
+  // (/work/tools/al-runner-v3/failed/edge-e5176a9fd@f11300ce6.../gate.log); no slot, so another value, field type or a
+  // reworded tail still closes. Kept by the kept-vs-fresh check on edge (/coord/handoff/PR-408/kc/: t10, t12, t10, t12 on
+  // ONE daemon against a fresh daemon each; every row equal by name; the planted-difference self-test caught). On DO, c4
+  // (main-bf3a3e863, old texts) meets the Code-to-BigInteger shape in one mutant (9 rows), never at baseline, and the
+  // Text-to-Integer one never. Pinned by `pr408-setrange-keep.test.ts`.
+  [
+    "setrange-code-gl-to-biginteger",
+    "SetRange or SetFilter of Code 'GL00000000' into a BigInteger field in a shape no cell measures (assumption setrange-other-type-convert)",
+  ],
+  [
+    "setrange-text-eq18-to-integer",
+    "SetRange or SetFilter of Text '=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+  ],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),
