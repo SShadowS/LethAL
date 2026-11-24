@@ -538,9 +538,17 @@ describe("PR-256 rule 7: the key, the fact, the fingerprint, the lending build",
       );
   });
 
-  test("no shipped gate record carries the `stop-groups` fact yet; only a record reading it `matches` allows the flag", () => {
+  // The pin was "no shipped record carries the fact yet". The first that does is edge-e5176a9fd (gated row f8185a042,
+  // 2026-11-24), so the flag is now ALLOWED on that build: a real change of what a run may do. The pin is therefore
+  // the exact set of shipped records that allow it. A new record reading `matches` fails here until it is named, so
+  // every build that allows the flag is added on purpose (fix-stopgroups-pin; that row's [skip ci] push ran no unit test).
+  test("exactly the named shipped gate records allow the flag (`stop-groups` reads `matches`), and only `matches` allows it", () => {
     expect(gatedBuilds().length).toBeGreaterThan(0);
-    for (const g of gatedBuilds()) expect(stopGroupsFor(g)).toBe(false);
+    expect(
+      gatedBuilds()
+        .filter((g) => stopGroupsFor(g))
+        .map((g) => g.version),
+    ).toEqual(["al-runner 3.0.0-alpha.15+edge.20261124 (e5176a9fd)"]);
     expect(stopGroupsFor(undefined)).toBe(false);
     expect(stopGroupsFor({ batchFacts: { "stop-groups": "diverged" } })).toBe(false);
     expect(stopGroupsFor({ batchFacts: { "stop-groups": "matches" } })).toBe(true);
