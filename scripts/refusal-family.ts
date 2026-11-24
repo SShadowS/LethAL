@@ -10,6 +10,12 @@
  * refusal that al-runner would not run it. What BC does in each cell is not known here (an error or a no-op): only a later BC
  * differential measures it, so the report lists refusals, never "differs from BC". A class is NEW when no text of the family's
  * upstream issue names it (`known`, by its stable part).
+ *
+ * PR-417, the culture rule: every BC differential so far ran on bc2 or bc4, which are BC on LINUX. A culture-dependent answer
+ * (Format, FormatRegion, a report language, dates, decimals, digit grouping, sort order) is Linux ICU data, which Windows BC
+ * (NLS) need not share. Each family records where it was measured (`bcMeasured`), and `--join` names its Linux culture cells.
+ * Such a cell's difference is recorded as "measured on Linux BC <build>" and is filed upstream only after Windows BC gives the
+ * same answer.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -84,7 +90,48 @@ export interface Family {
     readonly publisher: string;
     readonly version: string;
   }[];
+  /**
+   * PR-417: where the family's BC answers were measured. bc1-bc4 run BC on LINUX, whose culture data (ICU) is not Windows BC's
+   * (NLS): see `linuxBcCultureCells`. Recorded for every family with culture cells (a test pins it); the earlier families
+   * (PR-17 to PR-33, also measured on bc2) have none and carry no record.
+   */
+  readonly bcMeasured?: {
+    readonly os: "linux" | "windows";
+    readonly server: string;
+    readonly build: string;
+    readonly task: string;
+  };
+  /**
+   * PR-417: "all" when EVERY cell's answer comes from culture data (a FormatRegion, a report language), not only the cells
+   * marked `depends: "locale"` (those follow the session's language and region).
+   */
+  readonly cultureData?: "all";
 }
+
+/**
+ * PR-417: the cells (0-based) whose BC answer is culture data measured on LINUX BC. Such an answer is recorded as "measured on
+ * Linux BC <build>" and is never filed upstream as an al-runner bug unless Windows BC gives it too: #8861, #8862 and #8871 were
+ * Linux ICU data, and Windows BC (NLS) matched al-runner.
+ */
+export function linuxBcCultureCells(f: Family): number[] {
+  if (f.bcMeasured?.os !== "linux") return [];
+  return f.cells.flatMap((c, i) => (f.cultureData === "all" || c.depends === "locale" ? [i] : []));
+}
+
+/** PR-417: the line `--join` prints for a family with Linux culture cells. */
+export function linuxBcCultureNote(f: Family, n: number): string {
+  const m = f.bcMeasured;
+  return `PR-417: ${n} of ${f.cells.length} cells of ${f.name} are culture data measured on Linux BC (${m?.server}, ${m?.build}; ${m?.task}): record each difference there as "measured on Linux BC", and file none upstream unless Windows BC gives the same answer`;
+}
+
+/** PR-417: bc2's BC-check runs (PR-52, PR-63, PR-83, PR-86, PR-87), as their results name the server and build. */
+const BC2_LINUX = { os: "linux", server: "bc2", build: "BC 28.4 W1, en-US session" } as const;
+/** PR-417: bc4's BC-check runs (PR-373, PR-374, PR-375). */
+const BC4_LINUX = {
+  os: "linux",
+  server: "bc4",
+  build: "BC 29.0.54011.57673 W1, en-US session",
+} as const;
 
 const untouched = (type: string, method: string, call: string, vars: string[] = []): Cell => ({
   type,
@@ -1901,6 +1948,7 @@ const LANGUAGE_CELLS: Cell[] = [
 
 export const FORMAT_EVALUATE: Family = {
   name: "format-evaluate",
+  bcMeasured: { ...BC2_LINUX, task: "PR-52, PR-63" },
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
   known: [],
   support: ENUM_SUPPORT,
@@ -3715,6 +3763,7 @@ const RF_CELLS: Cell[] = [
 
 export const RECORD_FILTERS: Family = {
   name: "record-filters",
+  bcMeasured: { ...BC2_LINUX, task: "PR-83" },
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
   known: [],
   support: RF_SUPPORT,
@@ -4403,6 +4452,7 @@ const DATES_CELLS: Cell[] = [
 
 export const DATES_FORMULAS: Family = {
   name: "dates-formulas",
+  bcMeasured: { ...BC2_LINUX, task: "PR-86" },
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
   known: [],
   support: "",
@@ -5062,6 +5112,7 @@ const JSON_TEXT_CELLS: Cell[] = [
 
 export const JSON_TEXT: Family = {
   name: "json-text",
+  bcMeasured: { ...BC2_LINUX, task: "PR-87" },
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
   known: [],
   support: "",
@@ -5784,6 +5835,10 @@ const frSet = (state: string, lang: number, region: string): Cell[] => [
 ];
 export const FORMAT_REGION: Family = {
   name: "format-region",
+  // PR-417: every cell reads region or language data; #8861 and #8862 (da-DK, fr-FR) came from these cells and were Linux ICU
+  // data, which Windows BC (NLS) does not share
+  bcMeasured: { ...BC4_LINUX, task: "PR-373" },
+  cultureData: "all",
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8094",
   // the two texts #8094 itself quotes; a class is matched whole, so every other region's text stays NEW
   known: [
@@ -5946,6 +6001,7 @@ const FC_METHODS: readonly (readonly [string, string, string])[] = [
 ];
 export const FIELDREF_CONVERT: Family = {
   name: "fieldref-convert",
+  bcMeasured: { ...BC4_LINUX, task: "PR-374" },
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8219",
   known: ["conversion of Boolean false to BigInteger"],
   testPermissions: "Disabled",
@@ -6027,6 +6083,9 @@ const lrCell = (lang: number, region: string): Cell => ({
 });
 export const LANGUAGE_REGION: Family = {
   name: "language-region",
+  // PR-417: every cell reads a (language, region) pair's data; #8871 (sv-SE) came from these cells and was Linux ICU data
+  bcMeasured: { ...BC4_LINUX, task: "PR-374" },
+  cultureData: "all",
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8094",
   known: [],
   testPermissions: "Disabled",
@@ -6264,6 +6323,7 @@ const ZC_SCENARIOS: readonly (readonly [string, readonly string[], number])[] = 
 ];
 export const ZIP_BLOB: Family = {
   name: "zip-blob",
+  bcMeasured: { ...BC4_LINUX, task: "PR-375" },
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
   known: [],
   testPermissions: "Disabled",
@@ -6967,6 +7027,8 @@ if (import.meta.main) {
     if (out !== undefined) writeFileSync(out, joinTsv(rows));
     else process.stdout.write(joinTsv(rows));
     console.error(JSON.stringify(joinCounts(rows), null, 2));
+    const culture = linuxBcCultureCells(family);
+    if (culture.length > 0) console.error(linuxBcCultureNote(family, culture.length));
     process.exit(0);
   }
   const f = FAMILIES[opt("--family") ?? ""];
