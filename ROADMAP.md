@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**66 of 1165 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**67 of 1166 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -407,6 +407,7 @@ that ordering is the priority.
 - **R1180** · PR-340's carry walk is not measured for what it leaves in a lane's serve daemon: the carry gate's fixture sends every ordinary request before the walks (one prefetch window), so the next full DO run must compare its unlabelled mutants with a no-walk control per mutant · [R1180.md](docs/roadmap/R1180.md) · closed 2026-11-23 — measured by PR-357 (orchestrator's ruling): c3 against its LETHAL_V3_CARRY_WALK=off…
 - **R1186** · 30 serve keep entries hold alternations, and PR-361 proves only ONE real al-runner line per entry: an unmatched branch is R1153's failure shape (a keep that never meets real output), unguarded · [R1186.md](docs/roadmap/R1186.md) · done (1f111b808) — PR-362: pr362-keep-branch-lines.test.ts splits every keep entry's non-capturing groups…
 - **R1197** · refusedCutTail's tail route reads a mutant `survived` when the test that would kill it is the one refused at baseline: v3 never runs it and has no coverage for it, so on DO 68874 9 of the 47 recovered survivors are killed on BC (false survivors); with the flag off the PR-250 cut scored them `error` · [R1197.md](docs/roadmap/R1197.md) · done (9420617d2, coord PR-381): the ruling (q-20261123T112833-7e045797 and its scope answers) is built as a…
+- **R1203** · Stop groups (alRunnerV3.stopGroups) moved 5 DO killingTests to an EARLIER covering test (codeunit 68861), not PR-256 amendment 1's kind: PR-359's V BLOCK, so the flag stays off · [R1203.md](docs/roadmap/R1203.md) · open
 
 ## Product gaps a real project hits
 
