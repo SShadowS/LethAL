@@ -1560,10 +1560,11 @@ export const KNOWN_NEAR_MISS_VARIANTS: readonly {
 }[] = [
   {
     // PR-411: DO's exact RunRequestPage line is now kept by its own row, which is the nearest entry of any other form of
-    // it; such a form stays a known variant (a plain line), as PR-244 pre-committed for this text.
+    // it; such a form stays a known variant (a plain line), as PR-244 pre-committed for this text. Edge (delta review): a
+    // form that also holds the word `SaveAs` ties PR-74's row, which wins the tie and has no known variant, so it warns.
     entry: "run-request-page-parameters-no-xml-declaration",
     contains: "given to Report.RunRequestPage",
-    why: "an unmeasured report method of a kept class",
+    why: "an unmeasured form of a kept RunRequestPage line",
   },
   {
     entry: "cascade-manual-binding",

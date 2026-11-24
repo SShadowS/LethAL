@@ -57,9 +57,7 @@ describe("PR-411: R1205's three families", () => {
   });
 
   test("F3's SaveAs sibling stays kept by PR-74's row only, never by the new RunRequestPage row", () => {
-    const names = keptBy(P + PARAMS("SaveAs"));
-    expect(names.length).toBe(1);
-    expect(names).not.toContain("run-request-page-parameters-no-xml-declaration");
+    expect(keptBy(P + PARAMS("SaveAs"))).toEqual(["report-parameters-no-xml-declaration"]);
   });
 
   test("the Pdf line's '%PDF-' is text, not a slot: the entry compiles and matches the literal", () => {

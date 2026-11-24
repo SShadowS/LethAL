@@ -20,7 +20,9 @@ const keeps = (m: string, notRun = true): boolean =>
 const names = Object.keys(V3_SERVE_SAFE_REFUSALS);
 
 describe("PR-93 keep entries", () => {
-  test("every measured text is kept by its own entry and by no other; the unkept one closes", () => {
+  // The `entry: null` branch (a measured text that closes) has had no member since PR-411 kept the RunRequestPage text by
+  // its own row; it stays, so a text measured as unkept in this file would still be checked to close.
+  test("every measured text is kept by its own entry and by no other (none is unkept since PR-411)", () => {
     expect(measured.flatMap((c) => c.texts)).toHaveLength(27);
     for (const c of measured)
       for (const t of c.texts) {
