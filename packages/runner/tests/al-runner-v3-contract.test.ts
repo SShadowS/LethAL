@@ -1662,6 +1662,34 @@ describe("PR-114a: the eight capability facts", () => {
     expect(failsAgain.f(F)?.verdict).toBe("diverged");
   });
 
+  // PR-403 (pre-commitment docs/superpowers/specs/2026-11-24-pr403-strict-order-sequential-walk.md): upstream's ADR-070 step 3
+  // (6a31851380, f479ec6c13, d328ade49f) replaced the lane re-run with a sequential walk. Edge e5176a9fd reads exactly two rows:
+  // the writer, then the reader once, both pass. That shape matches too; the re-run still matches; anything else diverges.
+  describe("batch-lane-strict-reruns after ADR-070 step 3 (PR-403)", () => {
+    const F = "batch-lane-strict-reruns";
+    const W = (s = "pass", msg?: string) => ({ ...capRow(50772, "StoresFive", s, msg) });
+    const R = (s = "pass", msg?: string) => ({ ...capRow(50773, "NeedsFive", s, msg) });
+    const withRows = (rows: Record<string, unknown>[]) =>
+      readOf((n, _q, d) => (n === F && "tests" in d ? { ...d, tests: rows } : d));
+
+    test("the sequential walk (writer pass, then the reader once, pass) reads matches", async () => {
+      expect((await withRows([W(), R()])).f(F)?.verdict).toBe("matches");
+    });
+    test("the old re-run (reader fails 'store is 0', then passes) still reads matches", async () => {
+      expect((await readOf()).f(F)?.verdict).toBe("matches");
+    });
+    test.each([
+      ["the reader fails once with no re-run", [W(), R("fail", "store is 0")]],
+      ["the reader before the writer", [R(), W()]],
+      ["a third row after the walk", [W(), R(), W()]],
+      ["the writer fails, the reader passes", [W("fail", "x"), R()]],
+      ["the reader alone", [R()]],
+      ["the reader twice, both pass (no writer)", [R(), R()]],
+    ])("neither shape: %s reads diverged", async (_name, rows) => {
+      expect((await withRows(rows as Record<string, unknown>[])).f(F)?.verdict).toBe("diverged");
+    });
+  });
+
   test("the requests: LethAL's batch body (isolation test, coverage, per-test coverage); one folder per fact; only the strict fact sends strictOrder", async () => {
     const { serve } = await readOf();
     const cap = serve.requests.filter((q) => q.command === "runTests" && isCapabilityRequest(q));
