@@ -10,8 +10,11 @@
  * `<ISO time>\t<session id>\t<target path>`. The command's text is never logged (it can hold secrets).
  *
  * Not caught on purpose: `/dev/null`, `/dev/stdout`, `/dev/stderr`, `/dev/fd/*`, fd duplications (`2>&1`, `>&2`), and a `>`
- * inside quotes or inside a heredoc body. A target the hook cannot resolve (it holds a variable it cannot expand) is caught
- * as written. Variables assigned in the same command (`H=/coord/handoff ...`) are expanded first.
+ * inside quotes or inside a heredoc body. Variables assigned in the same command (`H=/coord/handoff ...`) are expanded first.
+ * A relative target is resolved against the directory a `cd` earlier in the same command moved to (PR-401; R1132's week:
+ * 892 of 1,121 lines were `cd /coord/handoff/X && ... > name` caught at the session's directory). A target the hook cannot
+ * resolve (it holds a variable it cannot expand) is caught as written, unless its literal text before the first `$` names a
+ * scratch directory (PR-401: 82 such lines, e.g. `/coord/handoff/R-984/x1.$w.txt`).
  *
  * Log: `$SHELL_WRITE_ADVISORY_LOG`, else `/coord/logs/shell-write-advisory.tsv`. Tests always set the variable.
  */
@@ -84,15 +87,15 @@ function wordAt(command: string, at: number): string {
   return word;
 }
 
-/** Every file a command writes by redirect or tee, as written (before expansion). Exported for the test. */
-export function writeTargets(command: string): string[] {
+/** Every file a command writes by redirect or tee, as written (before expansion), with where it stands in the command. */
+function targetsAt(command: string): { word: string; at: number }[] {
   const seen = blankQuotesAndHeredocs(command);
-  const targets: string[] = [];
+  const targets: { word: string; at: number }[] = [];
   // Redirects: optional fd or &, then > or >>, not followed by & (an fd duplication) or ( (process substitution).
   for (const m of seen.matchAll(/(?:^|[^<>&0-9])(?:[0-9]|&)?>>?(?![&(])/g)) {
     const end = (m.index ?? 0) + m[0].length;
     const w = wordAt(command, end);
-    if (w !== "") targets.push(w);
+    if (w !== "") targets.push({ word: w, at: end });
   }
   // tee [-a|-i|--append|...] FILE...
   for (const m of seen.matchAll(/(?:^|[;&|(\s])tee((?:\s+[^\s;&|)`]+)*)/g)) {
@@ -102,10 +105,96 @@ export function writeTargets(command: string): string[] {
       const at = command.indexOf(raw, i);
       i = at < 0 ? i : at + raw.length;
       if (raw === "" || raw.startsWith("-")) continue;
-      targets.push(wordAt(command, at < 0 ? start : at));
+      targets.push({ word: wordAt(command, at < 0 ? start : at), at: at < 0 ? start : at });
     }
   }
-  return targets;
+  return targets.sort((a, b) => a.at - b.at);
+}
+
+/** Every file a command writes by redirect or tee, as written (before expansion). Exported for the test. */
+export function writeTargets(command: string): string[] {
+  return targetsAt(command).map((t) => t.word);
+}
+
+/**
+ * PR-401: the working directory each target is written from. A `cd DIR` (at the start of the command or after `;`, `&&`,
+ * `||`, `|`, `(` or a newline) moves it for everything after it; a subshell `( ... )` puts it back at its `)`. `cd` alone is
+ * $HOME; `cd -` or a DIR the hook cannot resolve leaves it unknown (`undefined`), so a relative target after it is caught as
+ * written. Quoted text and heredoc bodies are blanked first, so a `cd` or a paren inside them is not seen.
+ */
+function cwdAtTargets(
+  command: string,
+  cwd: string,
+  vars: Map<string, string>,
+  env: NodeJS.ProcessEnv,
+): { word: string; cwd: string | undefined }[] {
+  const seen = blankQuotesAndHeredocs(command);
+  type Ev = { at: number; kind: "cd" | "open" | "close"; dir?: string };
+  const evs: Ev[] = [];
+  for (const m of seen.matchAll(/(?:^|[;&|(\n])\s*cd(?=[\s;&|)]|$)/g)) {
+    const end = (m.index ?? 0) + m[0].length;
+    evs.push({ at: end, kind: "cd", dir: wordAt(command, end) });
+  }
+  for (let i = 0; i < seen.length; i++) {
+    if (seen[i] === "(") evs.push({ at: i, kind: "open" });
+    else if (seen[i] === ")") evs.push({ at: i, kind: "close" });
+  }
+  evs.sort((a, b) => a.at - b.at);
+  const out: { word: string; cwd: string | undefined }[] = [];
+  let cur: string | undefined = cwd;
+  const stack: (string | undefined)[] = [];
+  let e = 0;
+  for (const t of targetsAt(command)) {
+    for (; e < evs.length && (evs[e]?.at ?? 0) < t.at; e++) {
+      const ev = evs[e];
+      if (ev === undefined) continue;
+      if (ev.kind === "open") stack.push(cur);
+      else if (ev.kind === "close") cur = stack.length > 0 ? stack.pop() : cur;
+      else {
+        const dir = ev.dir ?? "";
+        if (dir === "" || dir === "~") cur = env.HOME;
+        else if (dir === "-") cur = undefined;
+        else if (
+          cur === undefined &&
+          !isAbsolute(dir) &&
+          !dir.startsWith("~/") &&
+          !dir.startsWith("$")
+        )
+          cur = undefined;
+        else cur = resolveTarget(dir, cur ?? "/", vars, env);
+      }
+    }
+    out.push({ word: t.word, cwd: cur });
+  }
+  return out;
+}
+
+/**
+ * PR-401: for a target that still holds an unknown variable, the directory its literal text names before the first `$`
+ * (everything up to the last `/` before it), resolved against `cwd`; `undefined` when there is no such directory to tell.
+ * `/coord/handoff/R-984/x1.$w.txt` -> `/coord/handoff/R-984`; `base-$w.tsv` in `cwd` -> `cwd`; `$P/v3.json` -> undefined.
+ * (A variable could still hold `../`; the hook is advisory, and a literal scratch directory is taken at its word.)
+ */
+function literalDir(
+  target: string,
+  cwd: string | undefined,
+  vars: Map<string, string>,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  let t = target;
+  for (let n = 0; n < 5 && /\$/.test(t); n++)
+    t = t.replace(
+      /\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g,
+      (all, name: string) => vars.get(name) ?? env[name] ?? all,
+    );
+  if (t.startsWith("~/")) t = `${env.HOME ?? "~"}/${t.slice(2)}`;
+  const lit = t.split("$", 1)[0] ?? "";
+  if (lit === "") return undefined; // `$X/f`: the directory is the variable's, not known
+  const slash = lit.lastIndexOf("/");
+  const dirPart = slash < 0 ? "" : lit.slice(0, slash + 1);
+  if (isAbsolute(dirPart)) return resolve(dirPart);
+  if (cwd === undefined) return undefined;
+  return resolve(cwd, dirPart === "" ? "." : dirPart);
 }
 
 /** `VAR=value` words of the command (values unquoted), for expanding targets. */
@@ -146,14 +235,23 @@ export function caught(
 ): string[] {
   const vars = assignments(command);
   const out: string[] = [];
-  for (const t of writeTargets(command)) {
-    const path = resolveTarget(t, cwd, vars, env);
+  for (const { word, cwd: at } of cwdAtTargets(command, cwd, vars, env)) {
+    // A relative target after an unresolvable `cd` cannot be placed: caught as written.
+    const path =
+      at === undefined && !isAbsolute(word) && !word.startsWith("~/") && !word.startsWith("$")
+        ? undefined
+        : resolveTarget(word, at ?? "/", vars, env);
     if (
       path !== undefined &&
       (HARMLESS.some((re) => re.test(path)) || SCRATCH.some((re) => re.test(path)))
     )
       continue;
-    out.push(path ?? t);
+    if (path === undefined) {
+      // PR-401: an unknown variable inside a literal scratch directory is scratch too.
+      const dir = literalDir(word, at, vars, env);
+      if (dir !== undefined && SCRATCH.some((re) => re.test(`${dir}/`))) continue;
+    }
+    out.push(path ?? word);
   }
   return out;
 }
