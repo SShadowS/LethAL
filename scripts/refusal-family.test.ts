@@ -46,6 +46,8 @@ import {
   joinCells,
   joinCounts,
   joinTsv,
+  linuxBcCultureCells,
+  linuxBcCultureNote,
   normalizeMessage,
   parseBcTsv,
   refusalClasses,
@@ -2051,5 +2053,47 @@ describe("PR-87: the json-text family", () => {
       "Keys count = Keys count DOC",
       "less a vs B = ordered a before B",
     ]);
+  });
+});
+
+describe("PR-417: BC answers measured on Linux BC", () => {
+  test("every family with a culture cell records where its BC answers were measured, and all of them are Linux BC", () => {
+    const culture = Object.values(FAMILIES).filter(
+      (f) => f.cultureData === "all" || f.cells.some((c) => c.depends === "locale"),
+    );
+    expect(culture.map((f) => f.name).sort()).toEqual(
+      [DATES_FORMULAS, FORMAT_EVALUATE, FORMAT_REGION, JSON_TEXT, LANGUAGE_REGION, RECORD_FILTERS]
+        .map((f) => f.name)
+        .sort(),
+    );
+    for (const f of culture) {
+      expect(f.bcMeasured?.os).toBe("linux");
+      expect(f.bcMeasured?.server).toMatch(/^bc[1-4]$/);
+    }
+  });
+
+  test("format-region and language-region are culture data in EVERY cell; the others only in their locale cells", () => {
+    expect(linuxBcCultureCells(FORMAT_REGION)).toHaveLength(FORMAT_REGION.cells.length);
+    expect(linuxBcCultureCells(LANGUAGE_REGION)).toHaveLength(LANGUAGE_REGION.cells.length);
+    expect(linuxBcCultureCells(FORMAT_EVALUATE)).toHaveLength(385);
+    expect(linuxBcCultureCells(RECORD_FILTERS)).toHaveLength(33);
+    expect(linuxBcCultureCells(DATES_FORMULAS)).toHaveLength(81);
+    expect(linuxBcCultureCells(JSON_TEXT)).toHaveLength(131);
+    expect(linuxBcCultureCells(FIELDREF_CONVERT)).toEqual([]);
+  });
+
+  test("a Windows measurement, or none, marks no cell; the --join note names the server, build and rule", () => {
+    const windows: Family = {
+      ...FORMAT_REGION,
+      bcMeasured: { os: "windows", server: "w", build: "b", task: "t" },
+    };
+    expect(linuxBcCultureCells(windows)).toEqual([]);
+    const { bcMeasured: _, ...none } = FORMAT_REGION;
+    expect(linuxBcCultureCells(none)).toEqual([]);
+    const note = linuxBcCultureNote(FORMAT_REGION, 209);
+    expect(note).toContain(
+      "209 of 209 cells of format-region are culture data measured on Linux BC (bc4",
+    );
+    expect(note).toContain("file none upstream unless Windows BC gives the same answer");
   });
 });
