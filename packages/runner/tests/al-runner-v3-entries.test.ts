@@ -3635,7 +3635,10 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       shrink: true,
     });
     expect(shrinking.sizes).toEqual([32, 16, 16, 16, 16, 16, 8]);
-  });
+    // PR-407: inherent. The peak lives only inside each 450 ms request, so the real 200 ms sampler (RSS_SAMPLE_MS)
+    // must tick during it. 7 requests take about 3.2 s (3.65 s in a VERIFY-shaped run). Shrinking both to
+    // 45 ms and 20 ms would let timer jitter under load miss the peak, so the test would flake instead of timing out.
+  }, 60_000);
 
   test("the kill-pair batches follow the measured cost: 4 pairs a request", async () => {
     const killsAll: RowsFn = (m, cu, d, n) =>

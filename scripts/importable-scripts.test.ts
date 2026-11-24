@@ -60,16 +60,33 @@ function candidates(all: string[]): string[] {
   );
 }
 
+/**
+ * For each module basename, the files that import it: the last segment of every `from "<spec>"` whose spec has a
+ * `/` (what the per-candidate pattern `from\s+["'][^"']*(?:/|\./)<name>["']` matched). PR-407: built ONCE per
+ * sources map. Scanning every source again for each candidate took 2.6 s and reached the 5 s timeout under load.
+ */
+const importIndexes = new WeakMap<Map<string, string>, Map<string, string[]>>();
+function importIndex(sources: Map<string, string>): Map<string, string[]> {
+  const cached = importIndexes.get(sources);
+  if (cached !== undefined) return cached;
+  const index = new Map<string, string[]>();
+  for (const [file, src] of sources) {
+    for (const m of src.matchAll(/from\s+["']([^"']*\/([^"'/]+))["']/g)) {
+      const name = m[2];
+      if (name === undefined) continue;
+      const files = index.get(name) ?? [];
+      if (files.at(-1) !== file) files.push(file);
+      index.set(name, files);
+    }
+  }
+  importIndexes.set(sources, index);
+  return index;
+}
+
 /** Every tracked module that imports `cand`, by module basename. */
 function importersOf(cand: string, sources: Map<string, string>): string[] {
   const name = basename(cand).replace(/\.ts$/, "");
-  const pattern = new RegExp(`from\\s+["'][^"']*(?:/|\\./)${name}["']`);
-  const out: string[] = [];
-  for (const [file, src] of sources) {
-    if (file === cand) continue;
-    if (pattern.test(src)) out.push(file);
-  }
-  return out;
+  return (importIndex(sources).get(name) ?? []).filter((f) => f !== cand);
 }
 
 describe("R186: an imported script does not execute on import", () => {
