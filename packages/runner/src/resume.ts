@@ -471,6 +471,8 @@ export interface SessionFingerprintInput {
    * walk-on (default) digest is the one a run recorded before the knob existed.
    */
   readonly v3CarryWalkOff?: true;
+  /** PR-410: `LETHAL_V3_CARRY_SKIP=off`. Only when OFF, so every default digest is unchanged. */
+  readonly v3CarrySkipOff?: true;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -566,6 +568,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.v3LoginReplay === true ? { v3LoginReplay: true } : {}), // PR-402
     ...(input.v3ReachPrune === true ? { v3ReachPrune: true } : {}), // PR-303
     ...(input.v3CarryWalkOff === true ? { v3CarryWalkOff: true } : {}), // PR-340
+    ...(input.v3CarrySkipOff === true ? { v3CarrySkipOff: true } : {}), // PR-410
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,

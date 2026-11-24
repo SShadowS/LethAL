@@ -154,6 +154,16 @@ describe("PR-100: foldTiming", () => {
     expect(text).not.toContain("x".repeat(41));
   });
 
+  // PR-410 build review FIX. Red: label every close that carries a family, not only a refusal.
+  test("PR-410: a carry walk's unkept-row close is labelled by its reason alone, though it carries a family", () => {
+    const text = foldTiming([
+      closed({ reason: "unkept-row", family: "WithEvents subscriber …", phase: "live" }),
+      finished,
+    ]);
+    expect(text).toContain("unkept-row in live 1");
+    expect(text).not.toContain("unkept-row/");
+  });
+
   test("PR-108: capped walks are counted by verdict from the cap note, and the line is omitted at 0", () => {
     const note =
       "the walk stopped after 3 timeouts (PR-108, R1057's cap); 2 covering test(s) after them were not run";

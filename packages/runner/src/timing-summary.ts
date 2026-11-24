@@ -173,8 +173,12 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
           bump(oneShots, e.reason, e.wallMs);
           break;
         case "serve-daemon-closed": {
+          // PR-410 build review FIX: only a refusal close is labelled by its family. A carry walk's unkept-row close
+          // now carries a family too (event only), and its restart line must not move.
           const label =
-            e.family !== undefined ? `${e.reason}/${e.family.slice(0, FAMILY_CUT)}` : e.reason;
+            e.family !== undefined && e.reason === "refusal"
+              ? `${e.reason}/${e.family.slice(0, FAMILY_CUT)}`
+              : e.reason;
           const key =
             e.phase !== undefined && e.phase !== "idle" ? `${label} in ${e.phase}` : label;
           restarts.set(key, (restarts.get(key) ?? 0) + 1);
