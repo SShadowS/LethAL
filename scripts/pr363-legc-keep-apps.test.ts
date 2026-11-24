@@ -187,10 +187,11 @@ const UNJUDGED: ReadonlyMap<string, string> = new Map([
   ...word("old-wording-no-cell", "company-table-read company-findset"),
   // PR-408: the NEW wording of the t10/t12 cells code-gl-to-biginteger and conversion-text-to-integer on edge e5176a9fd
   // (assumption setrange-other-type-convert); `current` gives the old wording, so those cases judge their old entries,
-  // and on edge they read MOVED under them (kept, so a warn, never unkept)
+  // and on edge they read MOVED under them (kept, so a warn, never unkept). PR-419: the '1=18' variant of the same judged
+  // entry (conversion-text-to-integer's %INTTEXT%), which leg C's t12 app does not hold; t12-refusals' full family app does
   ...word(
     "edge-rewording-of-a-judged-case",
-    "setrange-code-gl-to-biginteger setrange-text-eq18-to-integer",
+    "setrange-code-gl-to-biginteger setrange-text-eq18-to-integer setrange-text-1eq18-to-integer",
   ),
   // no family cell yet (a later item may add cells)
   ...word(
@@ -213,8 +214,8 @@ describe("PR-363: every keep entry is judged by a case or pinned with its reason
   test("SERVE_CASES, the 47 new cases and the pinned map are exactly the keep list, with no overlap", () => {
     const pinned = new Set(UNJUDGED.keys());
     // a name listed twice would collapse in the Map and fall short; PR-365 added 3 RelationFieldNo rows (BaseApp tables);
-    // PR-408 the 2 edge rewordings
-    expect(UNJUDGED.size).toBe(74);
+    // PR-408 the 2 edge rewordings; PR-419 the '1=18' one
+    expect(UNJUDGED.size).toBe(75);
     for (const e of fresh) expect(old.has(e)).toBe(false);
     for (const e of pinned) expect(old.has(e) || fresh.has(e)).toBe(false);
     expect([...old, ...fresh, ...pinned].sort()).toEqual([...all].sort());

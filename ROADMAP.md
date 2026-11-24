@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**70 of 1172 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**69 of 1172 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1215,7 +1215,7 @@ that ordering is the priority.
 - **R1204** · On full DO the PR-340 carry walk cannot succeed and is predictably dead: c4's 129 walks all failed at request 1 on a pass al-runner flags (already flagged at baseline in 129 of 129), made 0 kills, and cost about 18,600 s (about 33% of lane time) in walks plus 115 daemon restarts · [R1204.md](docs/roadmap/R1204.md) · open
 - **R1205** · After PR-354's and PR-365's keep rows, c4's remaining refusal restarts are 56 (2,244 s of warm-up): the top three families (report PDF output, Evaluate into a Boolean under GlobalLanguage, Report.RunRequestPage parameters) are 34 of them (1,376 s, 2.4% of lane time), none measured by PR-54's keep census · [R1205.md](docs/roadmap/R1205.md) · open
 - **R1208** · The al-runner update gate pushes its gated-builds row straight to master with [skip ci] and runs no unit test, though unit tests read that file: edge-e5176a9fd's row (f8185a042, the first reading `stop-groups: matches`) turned master red silently · [R1208.md](docs/roadmap/R1208.md) · done (1a374dbe0)
-- **R1209** · On current edge-e5176a9fd the t12 refusal of Text '1=18' into an Integer field has the new setrange-other-type-convert wording, which no keep row matches: PR-408 kept only '=18', so a DO run that meets '1=18' restarts the daemon · [R1209.md](docs/roadmap/R1209.md) · open
+- **R1209** · On current edge-e5176a9fd the t12 refusal of Text '1=18' into an Integer field has the new setrange-other-type-convert wording, which no keep row matches: PR-408 kept only '=18', so a DO run that meets '1=18' restarts the daemon · [R1209.md](docs/roadmap/R1209.md) · done (daaa8b3e5)
 - **R1210** · Culture-dependent BC answers from bc1-bc4 are Linux BC (ICU) data, which Windows BC (NLS) need not share: #8861, #8862 and #8871 were Linux-only. Such answers are recorded as 'measured on Linux BC' and filed upstream only when Windows BC agrees · [R1210.md](docs/roadmap/R1210.md) · open
 
 ---
