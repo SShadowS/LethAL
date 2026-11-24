@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**68 of 1169 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**69 of 1170 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1071,7 +1071,7 @@ that ordering is the priority.
 - **R1000** · edge-847b1fa5a reworded the cascade-existing-state refusal ("changed number sequence 'X' that existed before it ... (only a new NumberSequence.Insert is)"), so the serve keep-list no longer matches it: DO's serve run fell back to one-shot at the warm-up, about one covered mutant a minute · [R1000.md](docs/roadmap/R1000.md) · done (200ed4e5)
 - **R1001** · A v3 serve baseline in which every test is refused with one and the same text runs to its end (DC: 1,839 of 1,839 tests, 4,656 s, 117 daemons) instead of stopping early by name · [R1001.md](docs/roadmap/R1001.md) · done (aad4e6c8)
 - **R1002** · Three DC test codeunits still run one-shot inside a serve session: their method names use shapes serve-entries is not proven for (a lone ".", a name starting with "//", a name starting with "(") · [R1002.md](docs/roadmap/R1002.md) · done (aad4e6c8)
-- **R1003** · On al-runner v3, Continia DC's whole suite (1,839 tests) is refused: four apps with no dependency path meet in their install code, al-runner does not try more than 3 install orders, so an install stops and a row it would insert is missing (upstream #8056) · [R1003.md](docs/roadmap/R1003.md) · open — re-checked 2026-11-23 on current main-bf3a3e863 (PR-368, repro u8056-install-order): unchanged, the…
+- **R1003** · On al-runner v3, Continia DC's whole suite (1,839 tests) is refused: four apps with no dependency path meet in their install code, al-runner does not try more than 3 install orders, so an install stops and a row it would insert is missing (upstream #8056) · [R1003.md](docs/roadmap/R1003.md) · open — re-checked 2026-11-24 on current edge-e5176a9fd (PR-412): the repro now matches BC, but DC's baseline…
 - **R1004** · A test al-runner refuses by name in the serve warm-up request throws away the whole serve session (R786): DO's warm-up holds one of R982's known ZipArchive refusals, so DO cannot run on serve at all · [R1004.md](docs/roadmap/R1004.md) · done (470533c9)
 - **R1005** · R-983's unexamined tail of BC.History error mutants re-run on current: 25 of 73 now killed; the rest filed (#8084 new) or counted; Avalara finished · [R1005.md](docs/roadmap/R1005.md) · closed 2026-11-14 — measured and filed upstream (#8084; comments on #6896, #7764, #7827)
 - **R998** · A config that pins `alRunnerV3.dotnetSidecar` to a file other than the build's own sidecar ran silently: after `current` moved, every .NET call failed with 'protocol mismatch' and 13 Bank Deposits tests were lost without a word · [R998.md](docs/roadmap/R998.md) · done (354783d9)
@@ -1214,6 +1214,7 @@ that ordering is the priority.
 - **R1202** · selectLegs has no rule for .claude/hooks/ paths, so a hook-only change falls back to every gate leg (default-deny), although no gate runs a Claude Code hook · [R1202.md](docs/roadmap/R1202.md) · open
 - **R1204** · On full DO the PR-340 carry walk cannot succeed and is predictably dead: c4's 129 walks all failed at request 1 on a pass al-runner flags (already flagged at baseline in 129 of 129), made 0 kills, and cost about 18,600 s (about 33% of lane time) in walks plus 115 daemon restarts · [R1204.md](docs/roadmap/R1204.md) · open
 - **R1205** · After PR-354's and PR-365's keep rows, c4's remaining refusal restarts are 56 (2,244 s of warm-up): the top three families (report PDF output, Evaluate into a Boolean under GlobalLanguage, Report.RunRequestPage parameters) are 34 of them (1,376 s, 2.4% of lane time), none measured by PR-54's keep census · [R1205.md](docs/roadmap/R1205.md) · open
+- **R1208** · The al-runner update gate pushes its gated-builds row straight to master with [skip ci] and runs no unit test, though unit tests read that file: edge-e5176a9fd's row (f8185a042, the first reading `stop-groups: matches`) turned master red silently · [R1208.md](docs/roadmap/R1208.md) · open
 
 ---
 
