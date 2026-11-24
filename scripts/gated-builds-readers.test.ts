@@ -4,12 +4,12 @@ import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Glob } from "bun";
 import {
   GATED_BUILDS_JSON,
   READER_MODULES,
   gatedBuildsReaderTests,
   gatedBuildsReaders,
+  scanRel,
   topLevelDecls,
 } from "./gated-builds-readers";
 
@@ -41,8 +41,11 @@ describe("R1208: the reader tests of this checkout", () => {
   });
 
   test("no module outside the reader modules imports the file, so the rule's boundary holds", () => {
-    const importers = ["packages/*/src/**/*.ts", "packages/*/itest/**/*.ts", "scripts/**/*.ts"]
-      .flatMap((g) => [...new Glob(g).scanSync(REPO)])
+    const importers = scanRel(REPO, [
+      "packages/*/src/**/*.ts",
+      "packages/*/itest/**/*.ts",
+      "scripts/**/*.ts",
+    ])
       .filter((f) => !f.endsWith(".test.ts"))
       .filter((f) =>
         new RegExp(`from "[^"]*${GATED_BUILDS_JSON.replace(/\./g, "\\.")}"`).test(
@@ -103,6 +106,15 @@ export function unrelated(): number {
     expect(() => gatedBuildsReaderTests(r)).toThrow("no test file names a reader");
     const none = await tree("export const x = 1;\n", "export const y = 2;\n", {});
     expect(() => gatedBuildsReaders(none)).toThrow("reads al-runner-v3-gated-builds.json");
+  });
+
+  test("paths come back with / on every OS", async () => {
+    const r = await tree(PINS, "export const x = 1;\n", {
+      "packages/runner/tests/deep/a.test.ts": "rows();\n",
+    });
+    expect(scanRel(r, ["packages/*/tests/**/*.test.ts"])).toEqual([
+      "packages/runner/tests/deep/a.test.ts",
+    ]);
   });
 
   test("a declaration ends at the next column-0 line, so a later function is not swallowed", () => {

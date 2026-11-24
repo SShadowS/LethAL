@@ -30,6 +30,11 @@ export const TEST_GLOBS = [
 const DECL =
   /^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)/;
 
+/** Repo-relative paths matching `globs`, with `/` separators on every OS (Bun's Glob gives `\` on Windows). */
+export function scanRel(root: string, globs: readonly string[]): string[] {
+  return globs.flatMap((g) => [...new Glob(g).scanSync(root)]).map((f) => f.replaceAll("\\", "/"));
+}
+
 const word = (name: string) => new RegExp(`(?<![\\w$])${name.replace(/\$/g, "\\$")}(?![\\w$])`);
 
 /** Each top-level declaration of `text` with its text; an `import X from "...gated-builds.json"` binds X. */
@@ -71,7 +76,7 @@ export function gatedBuildsReaders(root: string): string[] {
 /** The test files (repo-relative, sorted) that name a reader. Never empty: an empty set would pass every row. */
 export function gatedBuildsReaderTests(root: string): string[] {
   const names = gatedBuildsReaders(root).map(word);
-  const files = TEST_GLOBS.flatMap((g) => [...new Glob(g).scanSync(root)])
+  const files = scanRel(root, TEST_GLOBS)
     .filter((f) => {
       const text = readFileSync(join(root, f), "utf8");
       return names.some((n) => n.test(text));
