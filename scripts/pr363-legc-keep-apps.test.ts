@@ -172,7 +172,8 @@ const UNJUDGED: ReadonlyMap<string, string> = new Map([
     `denial-read-system-table denial-read-system-table-writes denial-read-flowfield-system-table
      denial-modify-missing-row saveas-layout-statement saveas-layout-sales-invoice company-open-subscriber-writes
      relation-field-no-dimension-set-entry-dimension-code relation-field-no-sales-invoice-header-ship-to-post-code
-     relation-field-no-sales-invoice-header-dimension-set-id`,
+     relation-field-no-sales-invoice-header-dimension-set-id
+     placeholder-pdf-read-standard-statement placeholder-pdf-read-standard-sales-invoice`,
   ),
   // produced one-shot only: in serve the cell refuses with a text no entry keeps (also two of R1153's 12)
   ...word("serve-text-unkept", "geturl-company-characters geturl-object-type-or-arguments"),
@@ -193,7 +194,9 @@ const UNJUDGED: ReadonlyMap<string, string> = new Map([
     "edge-rewording-of-a-judged-case",
     "setrange-code-gl-to-biginteger setrange-text-eq18-to-integer setrange-text-1eq18-to-integer",
   ),
-  // no family cell yet (a later item may add cells)
+  // no family cell yet (a later item may add cells). PR-411's run-request-page-parameters-no-xml-declaration: the t9/t10
+  // family cells DO give its exact text, but only after a Commit (PR-74 H1); no case measures it inside a write transaction,
+  // where DO reaches it, so it is pinned here rather than judged by that cell (build review 2).
   ...word(
     "no-family-cell-yet",
     `find-empty-set-u8013 find-empty-set-time-zone file-name-got-guid sql-counter-stored
@@ -201,7 +204,8 @@ const UNJUDGED: ReadonlyMap<string, string> = new Map([
      user-windows-sid deleteall-filter-group-1 consistent-filter-group-1 autoformat-expression-procedure
      database-sid-no-user clear-xmlwriteoptions removecookie-last error-errorinfo-not-created
      query-metadata-al-namespace xml-name-empty evaluate-now-date evaluate-now-time evaluate-format-2
-     httpclient-relative-path`,
+     httpclient-relative-path evaluate-boolean-global-language-1044
+     run-request-page-parameters-no-xml-declaration`,
   ),
 ]);
 
@@ -214,8 +218,9 @@ describe("PR-363: every keep entry is judged by a case or pinned with its reason
   test("SERVE_CASES, the 47 new cases and the pinned map are exactly the keep list, with no overlap", () => {
     const pinned = new Set(UNJUDGED.keys());
     // a name listed twice would collapse in the Map and fall short; PR-365 added 3 RelationFieldNo rows (BaseApp tables);
-    // PR-408 the 2 edge rewordings; PR-419 the '1=18' one
-    expect(UNJUDGED.size).toBe(75);
+    // PR-408 the 2 edge rewordings; PR-419 the '1=18' one; PR-411 the 4 R1205 rows (2 placeholder Pdf reads of BaseApp
+    // reports, Evaluate, RunRequestPage)
+    expect(UNJUDGED.size).toBe(79);
     for (const e of fresh) expect(old.has(e)).toBe(false);
     for (const e of pinned) expect(old.has(e) || fresh.has(e)).toBe(false);
     expect([...old, ...fresh, ...pinned].sort()).toEqual([...all].sort());

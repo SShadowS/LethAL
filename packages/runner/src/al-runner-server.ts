@@ -1134,7 +1134,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // PR-54's strict census with every distinct text a refuser (`--refusers 7`, `/coord/handoff/PR-93/census2/`).
   // Not kept: Report.RunRequestPage (measured after a Commit() only; inside a write transaction v3 does not refuse,
   // so that form cannot be measured: PR-74 review H1 stands), the SaveAs-with-layout errors and the placeholder Pdf
-  // read (no invented cell can produce them). Pinned by `al-runner-serve-pr93.test.ts`.
+  // read (no invented cell can produce them). Pinned by `al-runner-serve-pr93.test.ts`. (PR-411 later keeps DO's exact
+  // RunRequestPage line and the placeholder Pdf reads by name, below, after its own kept-vs-fresh DO checks.)
   ["keyref-method-never-assigned", "KeyRef.%KEYREFM% on a KeyRef that was never assigned"], // PR-54 class "KeyRef.* on a KeyRef that was never assigned"
   ["setfilter-unexpected-gt-date-range", "SetFilter: unexpected `>` in filter `<-1M>..<CM>`"], // PR-54 class "SetFilter"
   [
@@ -1172,7 +1173,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // invented cell produces them), and the list-without-the-new-row-line text (no cell produced it). The
   // setfilter and JSON writer texts are widened in their own entries above (BIGCODE, JSONPATH); the Evaluate NUL
   // runs get their own entry below.
-  // Pinned by `al-runner-serve-pr105.test.ts`.
+  // Pinned by `al-runner-serve-pr105.test.ts`. (PR-411 later keeps DO's exact RunRequestPage line and the placeholder Pdf
+  // reads by name, below.)
   [
     "fieldref-calcfield-not-flowfield",
     "FieldRef.CalcField of a field that is not a FlowField (not pinned)",
@@ -1196,6 +1198,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // Not kept: Report.RunRequestPage (DO reaches it with no request-page handler, on a BaseApp report, inside an
   // open write transaction, and nothing measured what report code runs before the refusal: spec r2 H1/H2), the
   // SaveAs-with-layout errors and the placeholder Pdf read (they need BaseApp's own reports). Pinned by `al-runner-serve-pr133.test.ts`.
+  // (Measured on DO directly later: PR-354 keeps the SaveAs-with-layout texts, PR-411 DO's exact RunRequestPage line and the
+  // placeholder Pdf reads, by name.)
   // PR-159 (spec 2026-11-18-pr159-y1-sibling-keeps-precommitment.md): 12345 joins 123 by name (slot %GETTABLEINT%).
   ["recordref-gettable-integer-123", "RecordRef.GetTable of Integer %GETTABLEINT%"],
   // PR-191 (spec 2026-11-19-pr191-y2-xml-keeps-precommitment.md, with amendment 1): the five XML texts DO's y2 window closed
@@ -1284,6 +1288,37 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   [
     "setrange-text-1eq18-to-integer",
     "SetRange or SetFilter of Text '1=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+  ],
+  // PR-411 (spec 2026-11-24-pr411-r1205-keep-families.md v2 + amendment 1, R1205): three refusal families c4 (main-bf3a3e863,
+  // full DO) still closed daemons on, each met only under a mutant, never at baseline. One EXACT row per captured line (c4's
+  // `serve-daemon-closed` text, byte for byte); no slot, so another report, language number or tail still closes. Each kept
+  // by its own kept-vs-fresh DO check (/coord/handoff/PR-411/keepcheck/: across requests on ONE daemon against a fresh daemon
+  // per request, AND within a request [the refusing entry, the same codeunit under NONE]; every row equal by name; the
+  // family's line seen under every refusing mutant; the planted-difference self-test caught). Not kept: F1a, the SaveAs as
+  // Pdf text, which carries upstream corpus paths with line numbers. Pinned by `pr411-keep-families.test.ts`.
+  // F1b: 35 requests equal, 20 family lines (mutants M13190, M18195, M18293 in five test codeunits). The `'%PDF-'` in the text
+  // is literal: `pr56Entry` splits only on a closed `%NAME%`.
+  [
+    "placeholder-pdf-read-standard-statement",
+    "a read of the content of a placeholder Pdf of report Standard Statement (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts with the bytes '%PDF-' matches BC; a test that reads the content tests the layout renderer)",
+  ],
+  [
+    "placeholder-pdf-read-standard-sales-invoice",
+    "a read of the content of a placeholder Pdf of report Standard Sales - Invoice (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts with the bytes '%PDF-' matches BC; a test that reads the content tests the layout renderer)",
+  ],
+  // F2: 25 requests equal, 16 family lines (8 of the 10 mutants F2's census found, on test codeunit 68973). GlobalLanguage
+  // 1044 does not cross: the codeunit's language-sensitive tests, run in the request after a refusal and in the same request
+  // after it, equal fresh. PR-53 measured the same for its SetFilter row.
+  [
+    "evaluate-boolean-global-language-1044",
+    "the error of Evaluate into a Boolean under GlobalLanguage 1044 (not measured)",
+  ],
+  // F3: 16 requests equal, 14 family lines (M17956, M17958, M17960, M17962, M17977 in test codeunit 68965). A text apart from
+  // PR-74's `%REPORTM%` row, which stays SaveAs only. Under four of the five mutants a later test of the codeunit is withheld
+  // ("an earlier test of this codeunit was refused while it ran"); the `cascade` entry already keeps that row.
+  [
+    "run-request-page-parameters-no-xml-declaration",
+    "a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
   ],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
@@ -1532,9 +1567,12 @@ export const KNOWN_NEAR_MISS_VARIANTS: readonly {
   readonly why: string;
 }[] = [
   {
-    entry: "report-parameters-no-xml-declaration",
+    // PR-411: DO's exact RunRequestPage line is now kept by its own row, which is the nearest entry of any other form of
+    // it; such a form stays a known variant (a plain line), as PR-244 pre-committed for this text. Edge (delta review): a
+    // form that also holds the word `SaveAs` ties PR-74's row, which wins the tie and has no known variant, so it warns.
+    entry: "run-request-page-parameters-no-xml-declaration",
     contains: "given to Report.RunRequestPage",
-    why: "an unmeasured report method of a kept class",
+    why: "an unmeasured form of a kept RunRequestPage line",
   },
   {
     entry: "cascade-manual-binding",

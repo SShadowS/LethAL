@@ -20,7 +20,9 @@ const keeps = (m: string, notRun = true): boolean =>
 const names = Object.keys(V3_SERVE_SAFE_REFUSALS);
 
 describe("PR-93 keep entries", () => {
-  test("every measured text is kept by its own entry and by no other; the unkept one closes", () => {
+  // The `entry: null` branch (a measured text that closes) has had no member since PR-411 kept the RunRequestPage text by
+  // its own row; it stays, so a text measured as unkept in this file would still be checked to close.
+  test("every measured text is kept by its own entry and by no other (none is unkept since PR-411)", () => {
     expect(measured.flatMap((c) => c.texts)).toHaveLength(27);
     for (const c of measured)
       for (const t of c.texts) {
@@ -87,11 +89,12 @@ describe("PR-93 keep entries", () => {
         "DotNet Newtonsoft.Json.JsonTextWriter.WriteEndArray raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path 'a'.; the text AL would see is not pinned (ADR-014 section 7)",
       ),
     ).toBe(false);
-    // PR-74 review H1 stands: RunRequestPage was measured only after a Commit()
+    // PR-74 review H1 stood for PR-93 (RunRequestPage measured only after a Commit()). PR-411 keeps DO's exact line by its
+    // own row after its own kept-vs-fresh DO check; that row's entry is now this text's in pr93-measured-refusals.json.
     expect(
       k(
         "a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

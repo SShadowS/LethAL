@@ -59,14 +59,15 @@ describe("PR-105 keep entries", () => {
     expect(k("CopyStream from an untouched handle into a Text")).toBe(false);
   });
 
-  test("the close texts that stay out of reach still close", () => {
+  test("the close texts that stay out of reach still close (RunRequestPage and the Pdf read are kept since PR-411)", () => {
     const k = (m: string) => keeps(P + m);
-    // PR-74 review H1 stands: RunRequestPage was measured only after a Commit()
+    // PR-74 review H1 stood for PR-105 (RunRequestPage measured only after a Commit()). PR-411 keeps DO's exact line, and
+    // the placeholder Pdf read below, by their own rows after their own kept-vs-fresh DO checks.
     expect(
       k(
         "a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
       ),
-    ).toBe(false);
+    ).toBe(true);
     // the SaveAs-with-layout errors (the first half is al-runner's wording; the report's own error text is left out)
     for (const r of ["Standard Sales - Invoice", "Standard Statement"])
       expect(
@@ -78,7 +79,7 @@ describe("PR-105 keep entries", () => {
       k(
         "a read of the content of a placeholder Pdf of report Standard Sales - Invoice (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts with the bytes '%PDF-' matches BC; a test that reads the content tests the layout renderer)",
       ),
-    ).toBe(false);
+    ).toBe(true);
     // the list-without-the-new-row-line text no cell produced
     expect(
       k("a list without the new-row line that lost its only row to an action (not pinned)"),
