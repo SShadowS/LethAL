@@ -620,6 +620,11 @@
       "entry": "setrange-text-eq18-to-integer",
       "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
       "from": "PR-408/kc/kept.json"
+    },
+    {
+      "entry": "setrange-text-1eq18-to-integer",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '1=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-419/kc/kept.json"
     }
   ],
   "nearMiss": [
