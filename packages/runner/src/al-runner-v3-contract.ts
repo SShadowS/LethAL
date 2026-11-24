@@ -2206,18 +2206,24 @@ const BATCH_FACTS: readonly BatchFactSpec[] = [
     base: 50770,
     al: batchLaneAl(50770),
     expected:
-      'with strictOrder: true (NOT LethAL\'s body) the reader (50773) is re-run: a first reader row that fails with "store is 0", then a second that passes',
+      "with strictOrder: true (NOT LethAL's body) the reader (50773) sees the writer's state: EITHER it is re-run (a first reader row that fails with \"store is 0\", then a second that passes; before ADR-070 step 3) OR, upstream's sequential walk (ADR-070 step 3: 6a31851380, f479ec6c13, d328ade49f; PR-403), exactly two rows: the writer (50772) passes, then the reader once, passes",
     judge: async (ask) => {
       const batch = await ask({ excludeTests: ["Codeunit50774."], strictOrder: true });
       const r = rowsOf(batch, 50773);
-      return {
-        ok:
-          r.length === 2 &&
-          r[0]?.status === "fail" &&
-          r[0]?.message === "store is 0" &&
-          r[1]?.status === "pass",
-        measured: rowText(batch.rows),
-      };
+      const rerun =
+        r.length === 2 &&
+        r[0]?.status === "fail" &&
+        r[0]?.message === "store is 0" &&
+        r[1]?.status === "pass";
+      // PR-403: the sequential walk; the batch is exactly the writer then the reader, both passing.
+      const [first, second] = batch.rows;
+      const sequential =
+        batch.rows.length === 2 &&
+        first?.name === "Codeunit50772.StoresFive" &&
+        first.status === "pass" &&
+        second?.name === "Codeunit50773.NeedsFive" &&
+        second.status === "pass";
+      return { ok: rerun || sequential, measured: rowText(batch.rows) };
     },
   },
   {

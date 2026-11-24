@@ -152,9 +152,11 @@ import {
   v3InstallHint,
 } from "./al-runner-v3-pin";
 import {
+  LOGIN_REPLAY_FACT,
   STOP_GROUPS_FACT,
   baselineBatchingOffReason,
   carryWalkOffReason,
+  loginReplayFor,
   pinnedDefectCoverage,
   serveRowFieldsFor,
   sleepRuleLine,
@@ -1002,6 +1004,8 @@ export interface AlRunnerV3Config {
   readonly refusedCutTail?: boolean;
   /** PR-256: `alRunnerV3.stopGroups`: per-entry stop groups on mutant requests (needs the `stop-groups` fact). Absent: off. */
   readonly stopGroups?: boolean;
+  /** PR-402 (R1182): `alRunnerV3.loginReplay`: `ALRUNNER_LOGIN_REPLAY=1` on mutant-run serve daemons (needs the `login-replay` fact). Absent: off. */
+  readonly loginReplay?: boolean;
   /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
@@ -1806,6 +1810,26 @@ export class AlRunnerV3StopGroupsError extends Error {
     this.name = "AlRunnerV3StopGroupsError";
   }
 }
+
+/**
+ * PR-402 (R1182): `alRunnerV3.loginReplay` is on, but no `login-replay` fact was read for the build. Thrown at a
+ * mutant daemon's spawn, so a rig that skips `status()` cannot get `ALRUNNER_LOGIN_REPLAY=1` without the fact.
+ * Extends `Error` directly. Never absorbed as a skipped pair or a quiet fallback to one-shot calls.
+ */
+export class AlRunnerV3LoginReplayError extends Error {
+  readonly code = "al-runner-v3-login-replay-unsupported";
+  constructor(why: string) {
+    super(`al-runner-v3-login-replay-unsupported: ${why} (PR-402)`);
+    this.name = "AlRunnerV3LoginReplayError";
+  }
+}
+
+const loginReplayUnsupported = (lethalCommit: string | undefined): string =>
+  `al-runner-v3-login-replay-unsupported: "alRunnerV3.loginReplay" is on, but this build's gate record (lethalCommit ${lethalCommit || "none"}) does not read the capability fact ${LOGIN_REPLAY_FACT} \`matches\`; the run is refused rather than started with a replay nobody measured on this build. Turn the flag off, or gate a build that carries the replay (PR-402, R1182)`;
+
+/** PR-402: printed once per session by `status()` when the flag is on and the fact reads `matches`. */
+export const LOGIN_REPLAY_NOTICE =
+  "[lethal] al-runner-v3 login replay ON: ALRUNNER_LOGIN_REPLAY=1 on mutant daemons only (R1182; experimental, opt-in)";
 
 /** PR-256 (rule 7): the refusal of the flag on a build whose gate record lacks the fact. */
 const stopGroupsUnsupported = (lethalCommit: string | undefined): string =>
@@ -2951,6 +2975,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
   /** PR-256: the build fact `stop-groups`, read in `status()` from the build's gate record (`stopGroupsFor`). */
   private stopGroupsFact = false;
+  /** PR-402: see `ExecutionBackend.loginReplay`. */
+  get loginReplay(): boolean {
+    return this.cfg.loginReplay === true;
+  }
+  /** PR-402: the build fact `login-replay`, read in `status()` from the build's gate record (`loginReplayFor`). */
+  private loginReplayFact = false;
+  private loginReplayNoticed = false;
   /**
    * PR-256: over every lane, counted only for an entry of an answer that stood: `skipped`, the skips that are
    * a saving (rule 3's strict conditions); `uncounted`, the other skips (amendment 1 item 2: never refusals);
@@ -3378,6 +3409,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     noTailPack?: true;
     /** PR-256: forces the `stop-groups` build fact (unit tests that do not run `status()`). */
     stopGroupsFact?: boolean;
+    /** PR-402: forces the `login-replay` build fact (unit tests that do not run `status()`). */
+    loginReplayFact?: boolean;
     /** PR-256 (tests only): bends an entries body after it is built and before the shape guard. */
     entriesBodyTamper?: (body: Record<string, unknown>) => void;
     /** PR-115: replaces `BASELINE_BATCH_SIZE` (leg DBM and the unit tests). */
@@ -4005,6 +4038,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.stopGroupsFact = stopGroupsFor(gatedRecord);
     if (this.cfg.stopGroups === true && !this.stopGroupsFact)
       return { ok: false, details: stopGroupsUnsupported(gatedRecord?.lethalCommit) };
+    // PR-402 (R1182): the same rule for the login replay; the fact is the capability probe, never a version guess.
+    this.loginReplayFact = loginReplayFor(gatedRecord);
+    if (this.cfg.loginReplay === true && !this.loginReplayFact)
+      return { ok: false, details: loginReplayUnsupported(gatedRecord?.lethalCommit) };
+    if (this.cfg.loginReplay === true && !this.loginReplayNoticed) {
+      this.loginReplayNoticed = true;
+      console.warn(LOGIN_REPLAY_NOTICE);
+    }
     // Amendment 1 item 1: and the §6 Sleep rule retired (a skipped test would reach the coverage window).
     if (this.cfg.stopGroups === true && !this.sleepRuleRetired)
       return {
@@ -4742,7 +4783,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const extra =
       this.cfg.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) } : undefined;
     // PR-340 §1: a MUTANT-RUN serve daemon always carries AL_STRICT_SEQUENTIAL=1 (the walk needs it).
-    return { env: mutantRun ? v3MutantDaemonEnv(extra) : v3ChildEnv(extra) };
+    if (!mutantRun) return { env: v3ChildEnv(extra) };
+    // PR-402 (R1182): the replay is on only for a mutant-run daemon, and only with the build fact.
+    const replay = this.cfg.loginReplay === true;
+    if (replay && (this.seams.loginReplayFact ?? this.loginReplayFact) !== true)
+      throw new AlRunnerV3LoginReplayError(
+        `"alRunnerV3.loginReplay" is on, but this session read no ${LOGIN_REPLAY_FACT} fact for its build`,
+      );
+    return { env: v3MutantDaemonEnv(extra, replay) };
   }
 
   /** R807: the seed the build reported (already checked to be the pinned one); absent when none. */
@@ -10891,7 +10939,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         err instanceof AlRunnerV3DependencyMissingError ||
         err instanceof AlRunnerV3SeedError ||
         err instanceof AlRunnerV3ServeFallbackWarmupError ||
-        err instanceof AlRunnerV3StopGroupsError // PR-256 (rule 6): a shape error is never a skipped pair
+        err instanceof AlRunnerV3StopGroupsError || // PR-256 (rule 6): a shape error is never a skipped pair
+        err instanceof AlRunnerV3LoginReplayError // PR-402: the guard is never a skipped pair
       )
         throw err;
       this.notify(

@@ -1151,6 +1151,14 @@ export const baselineBatchingFor = (
 /** PR-256 (rule 7): the leg-C capability fact `alRunnerV3.stopGroups` needs (upstream #8564). */
 export const STOP_GROUPS_FACT = "stop-groups";
 
+/** PR-402 (R1182): the capability fact `alRunnerV3.loginReplay` needs. Measured by the update gate (step 2); no record carries it yet. */
+export const LOGIN_REPLAY_FACT = "login-replay";
+
+/** PR-402: does this build's gate record read the `login-replay` fact `matches`? */
+export function loginReplayFor(gated: Pick<GatedBuild, "batchFacts"> | undefined): boolean {
+  return gated?.batchFacts?.[LOGIN_REPLAY_FACT] === "matches";
+}
+
 /**
  * PR-256 (rule 7): does this build's own gate record (`.gated` or the manifest row, as PR-117's capability
  * facts) read the `stop-groups` fact `matches`? No record carries it yet: the probe and the gate of the first

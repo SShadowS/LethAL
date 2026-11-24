@@ -1449,9 +1449,9 @@ export class ResultsStore {
     // both stay in the stripped build, so another license is still a different build.
     // PR-282: the optional companies tag sits between the license tag and isolation-auto.
     const tag =
-      / environment-(saas|onprem)( license-[0-9a-f]{8})?( companies-[0-9a-f]{8})?( refused-cut-tail)?( stop-groups)?( isolation-auto)?$/;
-    // PR-297: refused-cut-tail, then PR-256's stop-groups, sit before isolation-auto
-    const strip = (b: string) => b.replace(tag, "$2$3$4$5$6");
+      / environment-(saas|onprem)( license-[0-9a-f]{8})?( companies-[0-9a-f]{8})?( refused-cut-tail)?( stop-groups)?( login-replay)?( isolation-auto)?$/;
+    // PR-297: refused-cut-tail, then PR-256's stop-groups, then PR-402's login-replay, sit before isolation-auto
+    const strip = (b: string) => b.replace(tag, "$2$3$4$5$6$7");
     for (const r of rows) {
       if (r.runner_build === q.runnerBuild || strip(r.runner_build) !== strip(q.runnerBuild))
         continue;
