@@ -43,6 +43,33 @@
     }
   },
   {
+    "id": "alpha.15-ac60a9945",
+    "track": "release",
+    "tag": "v3.0.0-alpha.15",
+    "version": "al-runner 3.0.0-alpha.15 (ac60a9945)",
+    "binarySha256": "2586ae424bf26f004a02e91577546ab139ad41bae371366826f709e2e90f78ba",
+    "readingsFrom": "main-ef9f6a222",
+    "readingsDigest": "df57baf0e46da269f6f9e685be0f473a80092eea1c972dd77b8ca6877d13bb15",
+    "lethalCommit": "5b3f271020093fb81b03d7a83202a9e31da373ab",
+    "gatedAt": "2026-11-24T16:15:00.759Z",
+    "warnFacts": {
+      "serve-keep-reasons": "diverged"
+    },
+    "batchFacts": {
+      "batch-no-cross-singleinstance": "matches",
+      "batch-no-cross-library-global": "matches",
+      "batch-no-cross-row": "matches",
+      "batch-no-cross-subscriber": "matches",
+      "batch-onrun-excluded-no-carry": "matches",
+      "batch-onrun-included-duplicates": "matches",
+      "batch-lane-hint-only": "matches",
+      "batch-lane-strict-reruns": "matches",
+      "batch-sequential-carry": "matches",
+      "stop-groups": "diverged"
+    },
+    "dotnetSidecarSha256": "ae24bc1d73ae7b5566ec798c633ca433836f455d5d42585a156492d7a5ec4675"
+  },
+  {
     "id": "edge-05d692e5e",
     "track": "edge",
     "version": "al-runner 3.0.0-alpha.13+edge.20261109 (05d692e5e)",
