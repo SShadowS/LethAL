@@ -143,8 +143,10 @@ describe("R912: --time-budget <seconds>", () => {
     const tests = join(root, "tests");
     await mkdir(join(app, "src"), { recursive: true });
     await mkdir(tests, { recursive: true });
-    // Over the 1000-site pre-flight limit, so the large-scope note shows.
-    const body = Array.from({ length: 700 }, () => "        if X > 1 then X := 2;").join("\n");
+    // Over the 1000-site pre-flight limit, so the large-scope note shows. PR-406: 260 statements give 1,042 sites
+    // (4 each, plus the exit), just over the limit. 700 gave 2,802 and about 2 s per dry run, which put this test at
+    // the 5 s timeout under load. Too few statements fail the "will refuse this scope" assertion below, never pass.
+    const body = Array.from({ length: 260 }, () => "        if X > 1 then X := 2;").join("\n");
     await writeFile(
       join(app, "src", "Big.Codeunit.al"),
       `codeunit 79000 "Big"\n{\n    procedure F(X: Integer): Integer\n    begin\n${body}\n        exit(X);\n    end;\n}\n`,
