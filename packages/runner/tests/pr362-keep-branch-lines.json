@@ -352,6 +352,21 @@
       "from": "PR-105/census/t12-refusals/serve.t12-refusals.8-conversion_of_Text_1_18_to_Integer.log"
     },
     {
+      "branch": "setrange-text-to-integer #1 =18",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-408/kc/kept.json"
+    },
+    {
+      "branch": "setrange-text-to-integer #1 1=18",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '1=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-419/kc/kept.json"
+    },
+    {
+      "branch": "setrange-text-to-integer #1 [A-Z]{0,20}",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text 'QWERTYUIOPASDFGHJKLZ' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-431/legc-smoke/raw.json"
+    },
+    {
       "branch": "recordref-gettable-integer-123 #1 123",
       "line": "NotRun: out-of-scope: RecordRef.GetTable of Integer 123",
       "from": "PR-133/probe/run1.json"
