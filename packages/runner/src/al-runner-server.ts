@@ -826,6 +826,13 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // Spec (with amendment 1): docs/superpowers/specs/2026-11-18-pr139-x3-restarts-precommitment.md.
   NULS: String.raw`(?:\x00{3}|\x00{4,6}|\x00{7}|\x00{9}|\x00{10}|\x00{11}|\x00{12}|\x00{13}|\x00{14}|\x00{16}|\x00{21}|\x00{25}|\x00{27}|\x00{30}|\x00{37}|\x00{40})`,
   INTTEXT: "(?:=18|1=18)",
+  // PR-431 (R1214): the values edge's setrange-other-type-convert texts carry are test data, some random per run, so each
+  // row takes a bounded class instead of names: a Code of up to 15 (DO's longest is 10, plus about half), and a Text of up
+  // to 20 capitals (DO's random strings are exactly 20) or the two measured filter texts.
+  CONVCODE: "[A-Z0-9]{1,15}",
+  CONVTEXT: "(?:=18|1=18|[A-Z]{0,20})",
+  // PR-431: the table a #8801 restamped-row text names (DO met four BaseApp tables; leg C's are invented).
+  ROWVERTABLE: "[A-Z][A-Za-z0-9 .-]{1,40}",
   // PR-93: the two writer states t10/t11 met for WritePropertyName, both measured.
   ARRAYSTATE: "(?:ArrayStart|Array)",
   // PR-74 review H1: SaveAs only. RunRequestPage was measured after a Commit(), never inside an open write
@@ -1265,29 +1272,29 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "relation-field-no-sales-invoice-header-dimension-set-id",
     "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Set ID' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
   ],
-  // PR-408: edge e5176a9fd rewords two shapes `code-gl-to-biginteger` and `conversion-text-to-integer` keep, when the
-  // conversion comes from SetRange/SetFilter ("assumption setrange-other-type-convert"). Caught by PR-363's leg-C family
-  // cases t10/t12 (unkept, R1000) before any DO run. One EXACT row per measured line, the edge gate's own captured text
-  // (/work/tools/al-runner-v3/failed/edge-e5176a9fd@f11300ce6.../gate.log); no slot, so another value, field type or a
-  // reworded tail still closes. Kept by the kept-vs-fresh check on edge (/coord/handoff/PR-408/kc/: t10, t12, t10, t12 on
-  // ONE daemon against a fresh daemon each; every row equal by name; the planted-difference self-test caught). On DO, c4
-  // (main-bf3a3e863, old texts) meets the Code-to-BigInteger shape in one mutant (9 rows), never at baseline, and the
-  // Text-to-Integer one never. Pinned by `pr408-setrange-keep.test.ts`.
+  // PR-431 (spec 2026-11-25-pr431-r1214-edge-keep-families.md v2, R1214): edge e5176a9fd's two daemon-closing families
+  // on full DO (c5: 24 closes, never at baseline). They REPLACE PR-408's and PR-419's exact rows (GL00000000, '=18', '1=18';
+  // their kept-vs-fresh checks: /coord/handoff/PR-408/kc/, /coord/handoff/PR-419/kc/), which the slots cover: one home per
+  // text. Each row kept by its own kept-vs-fresh DO check (/coord/handoff/PR-431/keepcheck/: across requests on ONE daemon
+  // against a fresh daemon per request, AND within a request [the refusing entry, the same codeunit under NONE]; every row
+  // equal by name; the row's own text seen under a refusing mutant; the planted-difference self-test caught). The
+  // restamped-row notes live in the session, which every codeunit run builds anew from the install baseline, so they cannot
+  // cross runs. Leg C: family `edge-refusals`. Pinned by `pr431-edge-keep-families.test.ts`.
   [
-    "setrange-code-gl-to-biginteger",
-    "SetRange or SetFilter of Code 'GL00000000' into a BigInteger field in a shape no cell measures (assumption setrange-other-type-convert)",
+    "setrange-code-to-biginteger",
+    "SetRange or SetFilter of Code '%CONVCODE%' into a BigInteger field in a shape no cell measures (assumption setrange-other-type-convert)",
   ],
   [
-    "setrange-text-eq18-to-integer",
-    "SetRange or SetFilter of Text '=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+    "setrange-text-to-integer",
+    "SetRange or SetFilter of Text '%CONVTEXT%' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
   ],
-  // PR-419 (R1209): the other `%INTTEXT%` variant, '1=18' (PR-105, from DO's t12 census), in edge's wording. PR-415's family
-  // re-run found it unkept on `current` (t12-refusals 51009, refused on both builds). Kept by the kept-vs-fresh check on edge
-  // with the full t12 family app (/coord/handoff/PR-419/kc/: t12-full, t10, t12-full, t12 on ONE daemon against a fresh
-  // daemon each; every row equal by name; the self-test caught). Pinned by `pr419-setrange-keep.test.ts`.
   [
-    "setrange-text-1eq18-to-integer",
-    "SetRange or SetFilter of Text '1=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+    "rowversion-restamped-read",
+    "SystemRowVersion of a row of %ROWVERTABLE% that the open transaction inserted before a row version sent ahead of it: BC gives the row its row version when it sends it, this runtime the Insert's",
+  ],
+  [
+    "rowversion-restamped-find",
+    "a find filtered or sorted on SystemRowVersion of a table (%ROWVERTABLE%) with rows the open transaction inserted before a row version sent ahead of them: BC gives them their row version when it sends them, this runtime the Insert's",
   ],
   // PR-411 (spec 2026-11-24-pr411-r1205-keep-families.md v2 + amendment 1, R1205): three refusal families c4 (main-bf3a3e863,
   // full DO) still closed daemons on, each met only under a mutant, never at baseline. One EXACT row per captured line (c4's

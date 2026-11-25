@@ -1251,9 +1251,9 @@ export interface V3KeepApp {
 }
 
 /** PR-363: how many family apps the generator pins; fewer in `V3ProbeEnv.keepApps` reads `unmeasurable`. */
-export const V3_KEEP_APP_FAMILIES = 10;
+export const V3_KEEP_APP_FAMILIES = 11; // PR-431: + edge-refusals
 /** PR-363 (build review L1): how many cases the family apps pin in all; a manifest with another count is `unmeasurable`. */
-export const V3_KEEP_CASES = 47;
+export const V3_KEEP_CASES = 51; // PR-431: + 4 (one per R1214 row)
 
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
 const SERVE_TEST_TIMEOUT_S = 3;

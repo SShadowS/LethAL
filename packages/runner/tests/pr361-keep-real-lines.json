@@ -612,19 +612,24 @@
       "from": "R-942/lic-suite.json"
     },
     {
-      "entry": "setrange-code-gl-to-biginteger",
-      "line": "NotRun: out-of-scope: SetRange or SetFilter of Code 'GL00000000' into a BigInteger field in a shape no cell measures (assumption setrange-other-type-convert)",
-      "from": "PR-408/kc/kept.json"
+      "entry": "setrange-code-to-biginteger",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Code 'ABCDE1' into a BigInteger field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-431/legc-smoke/raw.json"
     },
     {
-      "entry": "setrange-text-eq18-to-integer",
-      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
-      "from": "PR-408/kc/kept.json"
+      "entry": "setrange-text-to-integer",
+      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text 'QWERTYUIOPASDFGHJKLZ' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
+      "from": "PR-431/legc-smoke/raw.json"
     },
     {
-      "entry": "setrange-text-1eq18-to-integer",
-      "line": "NotRun: out-of-scope: SetRange or SetFilter of Text '1=18' into a Integer field in a shape no cell measures (assumption setrange-other-type-convert)",
-      "from": "PR-419/kc/kept.json"
+      "entry": "rowversion-restamped-read",
+      "line": "NotRun: out-of-scope: SystemRowVersion of a row of ER Row A that the open transaction inserted before a row version sent ahead of it: BC gives the row its row version when it sends it, this runtime the Insert's",
+      "from": "PR-431/legc-smoke/raw.json"
+    },
+    {
+      "entry": "rowversion-restamped-find",
+      "line": "NotRun: out-of-scope: a find filtered or sorted on SystemRowVersion of a table (ER Row A) with rows the open transaction inserted before a row version sent ahead of them: BC gives them their row version when it sends them, this runtime the Insert's",
+      "from": "PR-431/legc-smoke/raw.json"
     },
     {
       "entry": "placeholder-pdf-read-standard-statement",

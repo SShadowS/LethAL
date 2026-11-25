@@ -49,6 +49,8 @@ const FULL_APP_SHA256: Readonly<Record<string, string>> = {
   "language-region": "333844813808aa878779a1116f79dea0a0a4c000fa9c85f84191c907cb1f3e51",
   // PR-375: the app bc4 and main-bf3a3e863 ran (the emitted AL equals /coord/handoff/PR-375/bc-check/src)
   "zip-blob": "6a2d30155dd6fee92991184e7c262e1e1a72139fe8e4ef785a6bfe424ab89b0e",
+  // PR-431: the app smoked on edge e5176a9fd (/coord/handoff/PR-431/legc-smoke/)
+  "edge-refusals": "6dd6764b0ad6b67d8e3065c4dddcdad1b6c00feeff6de12e1ad9fa6158ec20a2",
 };
 
 describe("PR-363: emitApp's subset option", () => {
@@ -84,11 +86,11 @@ describe("PR-363: emitApp's subset option", () => {
 
 describe("PR-363: the generator", () => {
   // Red: delete a cell from a family, or edit a selection's state: the selector throws by name.
-  test("every one of the 47 selections names exactly one existing cell; 10 families", () => {
-    expect(KEEP_SELECTIONS).toHaveLength(V3_KEEP_CASES); // 47: the contract checks the manifest against this count
+  test("every one of the 51 selections names exactly one existing cell; 11 families", () => {
+    expect(KEEP_SELECTIONS).toHaveLength(V3_KEEP_CASES); // 51: the contract checks the manifest against this count
     const byFamily = resolveSelections();
     expect(byFamily.size).toBe(V3_KEEP_APP_FAMILIES);
-    expect([...byFamily.values()].reduce((n, v) => n + v.length, 0)).toBe(47);
+    expect([...byFamily.values()].reduce((n, v) => n + v.length, 0)).toBe(51);
   });
 
   test("a missing cell, a missing family and a doubly chosen cell each throw by name", () => {
@@ -112,7 +114,7 @@ describe("PR-363: the generator", () => {
     try {
       const manifest = writeKeepApps(out);
       expect(manifest).toHaveLength(V3_KEEP_APP_FAMILIES);
-      expect(manifest.reduce((n, m) => n + m.cases.length, 0)).toBe(47);
+      expect(manifest.reduce((n, m) => n + m.cases.length, 0)).toBe(51);
       const ids = new Set<string>();
       for (const m of manifest) {
         const al = readFileSync(join(m.dir, "src", "Cells.al"), "utf8");
@@ -186,14 +188,7 @@ const UNJUDGED: ReadonlyMap<string, string> = new Map([
   ),
   // the old wording, which no family cell produces on current
   ...word("old-wording-no-cell", "company-table-read company-findset"),
-  // PR-408: the NEW wording of the t10/t12 cells code-gl-to-biginteger and conversion-text-to-integer on edge e5176a9fd
-  // (assumption setrange-other-type-convert); `current` gives the old wording, so those cases judge their old entries,
-  // and on edge they read MOVED under them (kept, so a warn, never unkept). PR-419: the '1=18' variant of the same judged
-  // entry (conversion-text-to-integer's %INTTEXT%), which leg C's t12 app does not hold; t12-refusals' full family app does
-  ...word(
-    "edge-rewording-of-a-judged-case",
-    "setrange-code-gl-to-biginteger setrange-text-eq18-to-integer setrange-text-1eq18-to-integer",
-  ),
+  // (PR-431: PR-408's and PR-419's three edge-rewording entries are replaced by rows the edge-refusals cases judge)
   // no family cell yet (a later item may add cells). PR-411's run-request-page-parameters-no-xml-declaration: the t9/t10
   // family cells DO give its exact text, but only after a Commit (PR-74 H1); no case measures it inside a write transaction,
   // where DO reaches it, so it is pinned here rather than judged by that cell (build review 2).
@@ -215,22 +210,21 @@ describe("PR-363: every keep entry is judged by a case or pinned with its reason
   const fresh = new Set(KEEP_SELECTIONS.map(([e]) => e));
 
   // Red: add a key to V3_SERVE_SAFE_REFUSALS (or drop a name from UNJUDGED): the three sets no longer cover it.
-  test("SERVE_CASES, the 47 new cases and the pinned map are exactly the keep list, with no overlap", () => {
+  test("SERVE_CASES, the 51 new cases and the pinned map are exactly the keep list, with no overlap", () => {
     const pinned = new Set(UNJUDGED.keys());
     // a name listed twice would collapse in the Map and fall short; PR-365 added 3 RelationFieldNo rows (BaseApp tables);
-    // PR-408 the 2 edge rewordings; PR-419 the '1=18' one; PR-411 the 4 R1205 rows (2 placeholder Pdf reads of BaseApp
-    // reports, Evaluate, RunRequestPage)
-    expect(UNJUDGED.size).toBe(79);
+    // PR-411 the 4 R1205 rows (2 placeholder Pdf reads of BaseApp reports, Evaluate, RunRequestPage); PR-431 removed
+    // PR-408's 2 edge rewordings and PR-419's '1=18' one (now judged by edge-refusals' 4 cases)
+    expect(UNJUDGED.size).toBe(76);
     for (const e of fresh) expect(old.has(e)).toBe(false);
     for (const e of pinned) expect(old.has(e) || fresh.has(e)).toBe(false);
     expect([...old, ...fresh, ...pinned].sort()).toEqual([...all].sort());
-    expect(new Set(KEEP_SELECTIONS.map((s) => s[0])).size).toBe(47);
+    expect(new Set(KEEP_SELECTIONS.map((s) => s[0])).size).toBe(51);
   });
 
   test("the reasons are exactly the spec's categories", () => {
     expect([...new Set(UNJUDGED.values())].sort()).toEqual(
       [
-        "edge-rewording-of-a-judged-case", // PR-408 (spec 2026-11-24-pr408-setrange-convert-keep.md)
         "needs-dotnet-sidecar",
         "needs-dependency-or-baseapp",
         "needs-no-client",

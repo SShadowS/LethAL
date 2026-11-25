@@ -6518,6 +6518,82 @@ codeunit 51000 "ZC Probe"
   ),
 };
 
+/**
+ * PR-431 (R1214): the refusal texts edge e5176a9fd closes its serve daemon on, driven by invented cells: SetRange or SetFilter
+ * of a Code or Text value into a BigInteger or Integer field (assumption setrange-other-type-convert), and #8801's restamped
+ * rows (a SystemRowVersion read, or a find on it, of a row inserted before a row version sent ahead of it). The values are
+ * invented ones of DO's shapes. Cell i is codeunit BASE_ID + 1 + i; the support tables are 51000 and 51001. Measured on edge
+ * e5176a9fd: the Text cells refuse only through the key (a plain Field(n) fails with an Evaluate error), and inserting A then B
+ * and reading A back passes unless B is read (sent) in between.
+ */
+const ER_ROWS = ['A: Record "ER Row A";', 'B: Record "ER Row B";', "V: BigInteger;"];
+const ER_INSERT_TWO = [
+  "A.Code := 'A';",
+  "A.Insert();",
+  "B.Code := 'B';",
+  "B.Insert();",
+  "B.Get('B');",
+  "V := B.SystemRowVersion;",
+  "A.Get('A', 0);",
+];
+export const EDGE_REFUSALS: Family = {
+  name: "edge-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8801",
+  known: [],
+  testPermissions: "Disabled",
+  support: `table 51000 "ER Row A"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+        field(2; Line; Integer) { }
+        field(3; Big; BigInteger) { }
+    }
+    keys { key(PK; "Code", Line) { Clustered = true; } }
+}
+
+table 51001 "ER Row B"
+{
+    fields { field(1; "Code"; Code[20]) { } }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+`,
+  handles: {},
+  cells: [
+    t9("Conversion", "SetRangeCodeToBigInt", "ABCDE1", "RR.Field(3).SetRange(C);", {
+      vars: ["RR: RecordRef;", "C: Code[20];"],
+      setup: ['RR.Open(Database::"ER Row A");', "C := 'ABCDE1';"],
+    }),
+    t9("Conversion", "SetFilterCodeToBigInt", "ABCDE1", "RR.Field(3).SetFilter('%1', C);", {
+      vars: ["RR: RecordRef;", "C: Code[20];"],
+      setup: ['RR.Open(Database::"ER Row A");', "C := 'ABCDE1';"],
+    }),
+    // the Text cells reach the Integer field through the key (a plain Field(n) only fails with an Evaluate error on edge)
+    ...[
+      ["SetRangeTextToInt", "QWERTYUIOPASDFGHJKLZ", "FR.SetRange(T);"],
+      ["SetRangeTextToInt", "empty", "FR.SetRange(T);"],
+      ["SetFilterTextToInt", "QWERTYUIOPASDFGHJKLZ", "FR.SetFilter('%1', T);"],
+    ].map(([method = "", state = "", call = ""]) =>
+      t9("Conversion", method, state, call, {
+        vars: ["RR: RecordRef;", "FR: FieldRef;", "T: Text;"],
+        setup: [
+          'RR.Open(Database::"ER Row A");',
+          "FR := RR.KeyIndex(1).FieldIndex(2);",
+          `T := '${state === "empty" ? "" : state}';`,
+        ],
+      }),
+    ),
+    t9("RowVersion", "RestampedRead", "er", "V := A.SystemRowVersion;", {
+      vars: ER_ROWS,
+      setup: ER_INSERT_TWO,
+    }),
+    t9("RowVersion", "RestampedFind", "er", "if A.FindFirst() then;", {
+      vars: ER_ROWS,
+      setup: [...ER_INSERT_TWO, "A.SetCurrentKey(SystemRowVersion);"],
+    }),
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -6566,6 +6642,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [LANGUAGE_REGION.name]: LANGUAGE_REGION,
   // PR-375: appended (BC-check number 27): a zip kept in a Blob, through the System Application's Data Compression
   [ZIP_BLOB.name]: ZIP_BLOB,
+  // PR-431: appended (BC-check number 28): edge's setrange-other-type-convert and restamped-row texts, for leg C's keep cases
+  [EDGE_REFUSALS.name]: EDGE_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */

@@ -3729,7 +3729,9 @@ describe("PR-363: serve-keep-reasons' per-family apps, each on its own fresh dae
       expect(f?.verdict).toBe("unmeasurable");
       expect(f?.measured).toContain("the family apps are missing");
       expect(f?.measured).toContain(
-        apps === undefined ? "none given" : `9 of ${V3_KEEP_APP_FAMILIES}`,
+        apps === undefined
+          ? "none given"
+          : `${V3_KEEP_APP_FAMILIES - 1} of ${V3_KEEP_APP_FAMILIES}`,
       );
       // never the old request alone: serve-keep-reasons ran no request at all
       expect(
@@ -3847,6 +3849,7 @@ describe("PR-363: serve-keep-reasons' per-family apps, each on its own fresh dae
     const { r } = await raw(short);
     const f = keepFact(r);
     expect(f?.verdict).toBe("unmeasurable");
-    expect(f?.measured).toContain(`10 of 10 families, 10 of ${V3_KEEP_CASES} cases`);
+    const n = V3_KEEP_APP_FAMILIES; // the short manifest: n families, one case each
+    expect(f?.measured).toContain(`${n} of ${n} families, ${n} of ${V3_KEEP_CASES} cases`);
   });
 });
