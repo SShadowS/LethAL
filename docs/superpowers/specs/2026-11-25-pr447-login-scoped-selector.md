@@ -1,15 +1,23 @@
-# PR-447 (R1182): a login-scoped selector — each site reads only its own bucket — spec r2 (no build)
+# PR-447 (R1182): a login-scoped selector — each site reads only its own bucket — spec r3 (no build)
 
 lethal-code, 2026-11-25.
 - **r1** was 9adfdc5a9.
-- **r2** answers its spec-adversary: BLOCKs 1-2, SHOULDs 3-7, NITs 8-9, marked "(F1)" and so on. Those findings
-  added the on-disk activation paths and three new measurements (`price/probe2.ts`, `price/out-probe2/probe2.txt`).
+- **r2** (cbe416793) answers r1's spec-adversary: BLOCKs 1-2, SHOULDs 3-7, NITs 8-9, marked "(F1)" and so on. Those
+  findings added the on-disk activation paths and three new measurements (`price/probe2.ts`,
+  `price/out-probe2/probe2.txt`).
+- **r3** answers the delta review, marked "(N1)" to "(N7)". No BLOCKs remained.
 
 The orchestrator's ruling (PR-446):
 - No login-context guard, and no change to what is instrumented: both would change what LethAL measures.
 - Study a shape in which the login reads only what decides the login's own behaviour.
 
-This spec is r1, for review. The build is a separate task, after the orchestrator's ruling. Evidence:
+**Scope and switch (N2).**
+- This spec is r3, for review. The build is a separate task, after the orchestrator's ruling.
+- **C is emitted ONLY when `alRunnerV3.loginReplay` is on.** Otherwise today's selector stays, so a run with replay
+  off pays nothing and keeps today's echo guarantee.
+- `assertBound`'s selector comparison and `installResourceSelector` follow the same choice.
+
+Evidence:
 `/coord/handoff/PR-447/` (`census/`, `price/`, `findings.md`). Names and numbers only; no DO source.
 
 ## Why today's selector defeats replay (PR-446)
@@ -111,19 +119,35 @@ Under C, writing only that file would make every echo there answer false. So:
 - **What they write.** The set `{active-mutant.txt, lethal-bucket-<k(m)>.txt, lethal-none.txt}`:
   - `lethal-none.txt` is written FIRST and restored LAST. Any dirty bucket left by a SIGKILL then coexists with
     `lethal-none.txt ≠ NONE`, and the next NONE echo fails loudly.
-  - Measured (`probe2` B): on-disk activation of a login id L with its bucket and `lethal-none.txt` written gives
-    `LETHAL-ECHO:L:true`. Restored to NONE, it gives `LETHAL-ECHO:NONE:true`.
-- **The check outside a window.** Before any request, EVERY LethAL resource file holds its default: every bucket
-  empty, `lethal-none.txt = NONE`, `active-mutant.txt = NONE`. Today's guard checks only `active-mutant.txt`, and it
-  is widened. The bucket files stay bound by R608's no-change-since-proof check, except inside a window. They are
-  NOT added to `OTHER_FILES_UNBOUND`.
-- **(F2) Measured: an on-disk change never replays across disk states.** On a draft `=1` + `_CHECK` daemon, a request
-  with the disk at L and no overrides showed "0 seen before", with the start counters reset. So did a request with the
-  disk back at NONE. Each disk change gave a fresh engine and an empty image cache (`probe2` B, B').
-  - So the carry walk's steps (M, NONE, M) and a window's calls cannot replay one another or NONE's prefetch image,
-    and the false kill F2 describes cannot form.
-  - This becomes a leg-C fact (*disk-change-no-replay*). Until it reads `matches`, the carry walk and the coverage
-    windows run on the replay-OFF daemon, and both join R1223's D5 list.
+  - Measured (`probe2` B, with the prototype's names `b<k>.txt` / `bnone.txt`): on-disk activation of a login id L
+    with its bucket and `bnone.txt` written gives `LETHAL-ECHO:L:true`. Restored to NONE, it gives
+    `LETHAL-ECHO:NONE:true`.
+  - **(N3) A failed restore of ANY of the three files throws, or closes the lane. It is never swallowed.** Today
+    `carryWalkSend` restores with `.catch(() => undefined)`: a failed bucket restore under a good `lethal-none.txt`
+    would hide a live site from the NONE echo.
+- **The check before every request.** EVERY LethAL resource file holds its default: every bucket empty,
+  `lethal-none.txt = NONE`, `active-mutant.txt = NONE`. Today's guard checks only `active-mutant.txt`, and it is
+  widened.
+- **(N3) Binding.** The bucket files and `lethal-none.txt` are bound by R608's no-change-since-proof check, with NO
+  window exemption. A window runs `checkBound` before it writes, and its sends do not re-check.
+  - The `active-mutant.txt` window flag becomes PER LANE. Today `inWindow` is one backend field, so one lane's window
+    exempts every other lane's check. Each lane has its own `active.<k>/` (`makeLane`).
+  - The bucket files are NOT added to `OTHER_FILES_UNBOUND`.
+  - (N7) The widened check reads about 680 more files per send. The build prices `boundMs` before and after.
+- **(F2, N1) Indicated, not settled: an on-disk change gave a fresh engine.**
+  - On a draft `=1` + `_CHECK` daemon, an `entries` request with no resources and the disk at L showed "0 seen
+    before", with the image store reset ("kept" 4 → 2). So did one with the disk back at request 0's state (NONE).
+  - That was the ENTRIES shape. The carry walk sends `batchBody` + `strictOrder`, and a window sends a top-level
+    `test`. No control with the disk unchanged was run.
+  - **The *disk-change-no-replay* fact is pre-committed with the backend's OWN body builders** (`carryWalkSend`'s,
+    `plainInFlight`'s) and covers:
+    - (a) the same plain request with the disk unchanged, as the control;
+    - (b) a plain request at disk m, then an `entries` prefetch at disk NONE on the same daemon: it must not replay
+      m's image;
+    - (c) two windows back to back for two ids in one bucket, with equal-length texts and nothing in between.
+  - Until it reads `matches`, the carry walk and the coverage windows run on the replay-OFF daemon. Both are added to
+    R1223's D5 list (N6). When the `=0` daemon cannot serve them, the walk ends `failed` and the window refuses: they
+    NEVER fall back to `=1`.
 
 ## The cost (PR-447 `price/`)
 
@@ -214,7 +238,12 @@ cap: c5's mutants have many covering codeunits, so LRU-8 cycles.
        today's selector (PR-446's off arm): 1 fail and 10 error, and 4 pass and 7 error.
      - The gate: the full `itest:alrunner-v3` with ZERO figure moves, with leg C's selector copy
        (`al-runner-v3-contract.ts`) rebuilt on C.
-  3. *bucket-no-carry* (F3) and *disk-change-no-replay* (F2), as above.
+  3. *bucket-no-carry* (F3) and *disk-change-no-replay* (F2, N1), as above.
+- **(N2) Which code reads each fact:**
+  - `loginReplayFor` (the flag) needs login-replay, *bucket-keying*, *disk-change-no-replay*, *bucket-no-carry*, AND
+    R1223's built constant;
+  - the C selector is never emitted unless *bucket-answers* is recorded for the build.
+  - Each is a red test: a missing fact refuses the flag (or C) by name.
 - **R1223.**
   - With C, a non-login mutant's FIRST entry for codeunit c can replay NONE's image of c, so today's split (NONE
     replays, M logs in for real) closes for those mutants.
@@ -228,27 +257,45 @@ cap: c5's mutants have many covering codeunits, so LRU-8 cycles.
   - A mutant that is not on the login path by an earlier day's read set replays that day's image, so its login-time
     effect is lost and it may be scored survived.
   - Kill pairs confirm kills only, so nothing re-checks that survivor.
-  - The build's gate is therefore per-mutant equality of verdicts with replay ON and OFF, on the same day and on two
-    days.
-- **(F7) PR-402's guard must become code, not prose.** Today `status()` and `cacheEnv` check only
+  - (N4) The door opens when a login's read set changes WITHIN one daemon life: the date crossing midnight, or data
+    the login reads. Runs on two days each record on their own day, so they cannot reach it.
+  - **It is filed as its own roadmap item, R1226,** a precondition of the flag beside R1223. Its fix shapes are:
+    - restart every `=1` daemon when Today or WorkDate changes;
+    - or a leg-C case with a forced date change inside one daemon life.
+  - The build's ON vs OFF per-mutant equality on DO stays a gate. It is not a proof against this door.
+- **(F7, N5) PR-402's guard must become code, not prose.** Today `status()` and `cacheEnv` check only
   `loginReplayFor(gatedRecord)`. R1223 is roadmap text.
-  - BEFORE C's facts can be recorded, `loginReplayFor` also requires R1223's built constant (R1223 D6, "R1223 is
-    built"), with a red test: facts recorded, R1223 not built → the flag is refused by name.
-  - So `alRunnerV3.loginReplay` needs the login-replay fact AND R1223 in code.
+  - `loginReplayFor` also requires R1223's ONE "R1223 is built" constant, as R1223 D6 says.
+    - It sits beside `loginReplayFor`, and only R1223's own commit flips it.
+    - It is never inferred from config or a version string.
+  - **Red tests in EACH direction:**
+    - the constant set without the fact → refused;
+    - the fact recorded without the constant → refused.
+  - `cacheEnv`'s `seams.loginReplayFact` bypasses `loginReplayFor`, so it stays test-only. A test asserts that no
+    production caller sets it.
+  - "R1223 before C's facts" is an ORDER OF WORK, not something code enforces. The code-enforced part is the
+    interlock above.
+  - So `alRunnerV3.loginReplay` needs the login-replay fact, C's facts (N2), R1223 and R1226 in code.
 
 ## Before a build ruling
 
-- **Settled by measurement in r2:**
-  - F2's premise: no replay across disk states;
+- **Indicated by measurement (entries shape), to be settled by the leg-C facts:**
+  - F2's premise (no replay across disk states; N1);
   - F6's keying, on the range-64 shape, with echoes and a killing mutant;
   - F3's carry-over, on one codeunit.
 - **What the build needs:**
   - F7's interlock in code first;
-  - then the facts *bucket-keying*, *bucket-answers*, *bucket-no-carry* and *disk-change-no-replay*;
-  - the on-disk paths per F1;
+  - R1223.md amended with the carry walk and the windows in D5 (N6), done in this task's roadmap commit;
+  - R1226 filed;
+  - which code reads each fact (N2);
+  - then the facts *bucket-keying*, *bucket-answers*, *bucket-no-carry* and *disk-change-no-replay*, with N1's
+    corpus in the real request shapes;
+  - the on-disk paths per F1 and N3: three files, per-lane window flags, restores never swallowed;
   - the names, ids and Format per F4, F5 and F9;
+  - (N7) the F4 refusal also scans dependency `.app` packages, if overrides reach them;
+  - `boundMs` priced;
   - the full v3 gate with zero moves;
-  - replay ON vs OFF per-mutant equality on DO, on two days.
+  - replay ON vs OFF per-mutant equality on DO.
 - **Separately:** the cap ask to alrunner (the orchestrator relays it). The build is worth ≈ 7% at cap 8, and ≈ 24% at
   cap ≥ 112.
 
