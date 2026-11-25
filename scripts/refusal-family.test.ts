@@ -9,6 +9,7 @@ import {
   DOTNET_EXCEPTION,
   DOTNET_EXCEPTION_RSA,
   DOTNET_NO_OBJECT,
+  EDGE_REFUSALS,
   FAMILIES,
   FIELDREF_CONVERT,
   FORMAT_EVALUATE,
@@ -1770,10 +1771,34 @@ describe("PR-375: the zip-blob family", () => {
     ]);
   });
 
-  test("last of FAMILIES (place 26, BC-check number 27): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("zip-blob");
+  test("place 26 of FAMILIES (BC-check number 27): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(25);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051027");
+  });
+});
+
+describe("PR-431: the edge-refusals family", () => {
+  const f = EDGE_REFUSALS;
+
+  test("last of FAMILIES (place 27, BC-check number 28): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("edge-refusals");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(26);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051028");
+  });
+
+  // the cells smoked on edge e5176a9fd (/coord/handoff/PR-431/legc-smoke/): every one refused with its row's text
+  test("7 cells with distinct names, invented values only", () => {
+    expect(f.cells.map((c) => `${c.method}/${c.state}`)).toEqual([
+      "SetRangeCodeToBigInt/ABCDE1",
+      "SetFilterCodeToBigInt/ABCDE1",
+      "SetRangeTextToInt/QWERTYUIOPASDFGHJKLZ",
+      "SetRangeTextToInt/empty",
+      "SetFilterTextToInt/QWERTYUIOPASDFGHJKLZ",
+      "RestampedRead/er",
+      "RestampedFind/er",
+    ]);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
   });
 });
 
