@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**67 of 1176 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 1177 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1221,6 +1221,7 @@ that ordering is the priority.
 - **R1209** · On current edge-e5176a9fd the t12 refusal of Text '1=18' into an Integer field has the new setrange-other-type-convert wording, which no keep row matches: PR-408 kept only '=18', so a DO run that meets '1=18' restarts the daemon · [R1209.md](docs/roadmap/R1209.md) · done (daaa8b3e5)
 - **R1211** · heavy-slot records only admissions: a job's wait in the queue, and why it was refused, are not logged, so R992's symptom (a job waiting while memory has room) cannot be measured · [R1211.md](docs/roadmap/R1211.md) · done (1c8d943e6, PR-425): heavy-events.tsv in the lock folder logs queue, admit, small, refuse, never and the…
 - **R1210** · Culture-dependent BC answers from bc1-bc4 are Linux BC (ICU) data, which Windows BC (NLS) need not share: #8861, #8862 and #8871 were Linux-only. Such answers are recorded as 'measured on Linux BC' and filed upstream only when Windows BC agrees · [R1210.md](docs/roadmap/R1210.md) · open
+- **R1214** · On edge-e5176a9fd two refusal families close serve daemons that no keep row covers: SetRange/SetFilter of a Code or Text value into a BigInteger or Integer field (13 closes on c5), and SystemRowVersion of a row the open transaction inserted (11); PR-411's 24 closes are gone, but these keep c5's refusal restarts at 56 · [R1214.md](docs/roadmap/R1214.md) · open
 
 ---
 
