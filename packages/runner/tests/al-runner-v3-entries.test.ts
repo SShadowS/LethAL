@@ -9016,7 +9016,9 @@ describe("R948 ordering and the per-test cross-check", () => {
     }
     const lines = warned.filter((w) => w.includes("per-test baseline fill (PR-434)"));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/daemon requests 3 \(\d+\.\d s\); cross-check one-shots 2 \(\d+\.\d s, in place\)/);
+    expect(lines[0]).toMatch(
+      /daemon requests 3 \(\d+\.\d s\); cross-check one-shots 2 \(\d+\.\d s, in place\)/,
+    );
   });
 
   test("a baseline snapshot's lending key names its source: a daemon baseline is tagged, a one-shot one is not", async () => {
