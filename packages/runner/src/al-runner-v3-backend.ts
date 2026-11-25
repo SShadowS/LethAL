@@ -6274,10 +6274,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const skippedBefore = this.baselineStats.sampledSkipped.length; // R1007: this fill's skips only
     const nameOf = (r: TestMethodRef) => `${r.codeunitName}.${r.method}`;
     type Step = "ok" | "stop" | "dropped";
+    // PR-434: where this fill's wall goes (the daemon's requests vs the in-place cross-check one-shots).
+    const fillStarted = monoNow();
+    const spent = { requests: 0, requestMs: 0, samples: 0, sampleMs: 0 };
     const check = async (key: number, daemon: BaselineAnswer, pos: number): Promise<Step> => {
       const ref = refOf.get(key);
       const one = this.isolated(key);
       if (ref === undefined || one === undefined) return "ok";
+      const sampleStarted = monoNow();
+      spent.samples += 1;
       const r = await this.crossCheckSample(lane, stopSeconds, coverage, {
         key,
         name: nameOf(ref),
@@ -6286,6 +6291,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         what: "per-test baseline",
         daemon,
         only: { ref, test: one.test },
+      }).finally(() => {
+        spent.sampleMs += monoNow() - sampleStarted;
       });
       if (r.kind === "stop") return "stop";
       if (r.kind === "dropped") {
@@ -6340,6 +6347,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         let got: BaselineAnswer | undefined;
         let failed = false;
+        const requestStarted = monoNow();
+        spent.requests += 1;
         try {
           await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
           got = await this.baselineRequest(lane, mode, key, stopSeconds, coverage);
@@ -6348,6 +6357,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           failed = true;
         } finally {
           this.memoryRelease();
+          spent.requestMs += monoNow() - requestStarted;
         }
         if (this.stopHandle?.signalled() === true) {
           stopped = true;
@@ -6414,6 +6424,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       for (const [k, v] of answers) this.daemonBaseline.set(k, v);
     } finally {
+      // Printed before the close, so a close that throws does not lose it; the wall leaves the close out.
+      const s = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+      console.warn(
+        `[lethal] al-runner-v3 per-test baseline fill (PR-434): wall ${s(monoNow() - fillStarted)}; daemon requests ${spent.requests} (${s(spent.requestMs)}); cross-check one-shots ${spent.samples} (${s(spent.sampleMs)}, in place); one daemon, in sequence.`,
+      );
       await this.closeLane(lane, "baseline-end");
     }
   }

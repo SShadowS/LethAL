@@ -15,7 +15,7 @@
 import { writeFile } from "node:fs/promises";
 import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
 import type { AlRunnerV3Config, V3EntriesStats } from "../src/al-runner-v3-backend";
-import { STOP_GROUPS_FACT } from "../src/al-runner-v3-contract";
+import { ENTRY_CARRY_PREFIX, STOP_GROUPS_FACT, V3_ENTRY_FACTS } from "../src/al-runner-v3-contract";
 import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
 import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
@@ -623,7 +623,7 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
- * `refusal-row-shape` since r9, R639). Every other fact of the 38 is a contract or capability fact and
+ * `refusal-row-shape` since r9, R639). Every other fact of the 52 is a contract or capability fact and
  * must read `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
@@ -647,9 +647,10 @@ export const V3_DEFECT_FACTS = [
  * `batch-sequential-carry` (`V3_CARRY_FACT`, outside `V3_CAPABILITY_FACTS`; pre-committed `matches`).
  * PR-342: 38, the fact `stop-groups` (`STOP_GROUPS_FACT`, also outside `V3_CAPABILITY_FACTS`; its
  * `diverged` only keeps PR-256's flag off). So: 9 defect, 18 contract, 1 warn, 8 capability, the carry
- * fact and stop-groups.
+ * fact and stop-groups. PR-442: 52, the 14 `entry-no-cross-*` facts (`V3_ENTRY_FACTS`, outside
+ * `V3_CAPABILITY_FACTS`; a `diverged` only prints `al-runner-v3-entry-carry` or `al-runner-v3-entry-probe-dead`).
  */
-export const V3_LEG_C_FACTS = 38;
+export const V3_LEG_C_FACTS = 52;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {
@@ -762,6 +763,12 @@ export function classifyLegC(
       // PR-342: a build without #8564 (or with a stop PR-256 cannot read) keeps `alRunnerV3.stopGroups` refused,
       // through its record; the flag is off by default, so it costs the build nothing.
       lines.push(`al-runner-v3-stop-groups-off: ${f.fact}: diverged${m}`);
+    } else if ((V3_ENTRY_FACTS as readonly string[]).includes(f.fact) && f.verdict === "diverged") {
+      // PR-442: never fails the gate; the consumers (C1, the echo drop) read the record and stay off.
+      const code = (f.measured ?? "").startsWith(ENTRY_CARRY_PREFIX)
+        ? "al-runner-v3-entry-carry"
+        : "al-runner-v3-entry-probe-dead";
+      lines.push(`${code}: ${f.fact}${m}`);
     } else if (want === "defect-present" && f.verdict === "gone") {
       held = true;
       lines.push(`held: ${f.fact}: defect-present -> gone (an upstream fix; re-pre-commit)${m}`);

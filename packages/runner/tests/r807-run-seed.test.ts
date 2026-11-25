@@ -542,9 +542,16 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
     // PR-360: the probe's own env now goes INTO v3ChildEnv (`v3ChildEnv({ ...opts?.env })`), so the pins win.
     expect(eachFollowedBy(c, /spawnIn\(argv/g, "v3ChildEnv({", 150)).toEqual({ count: 1, bad: [] });
     // serve-keep-reasons' daemon, (PR-114a) the capability facts' daemon and (PR-342) the stop-groups daemon
-    expect(
-      eachFollowedBy(c, /env\.serveSpawn \?\? defaultServerSpawn\)\(/g, "v3ChildEnv(", 150),
-    ).toEqual({ count: 3, bad: [] });
+    // PR-442: the entry facts' daemons are mutant-shaped (v3MutantDaemonEnv wraps v3ChildEnv), as the backend's serve spawns since PR-340.
+    // Four sites: three need `v3ChildEnv(`, exactly ONE (the entry facts') needs `v3MutantDaemonEnv(`, and no site has neither.
+    const serveSites = /env\.serveSpawn \?\? defaultServerSpawn\)\(/g;
+    const child = eachFollowedBy(c, serveSites, "v3ChildEnv(", 150);
+    const mutant = eachFollowedBy(c, serveSites, "v3MutantDaemonEnv(", 150);
+    expect(child.count).toBe(4);
+    expect(mutant.count).toBe(4);
+    expect(child.bad.length).toBe(1);
+    expect(mutant.bad.length).toBe(3);
+    expect(mutant.bad).not.toContain(child.bad[0]);
     expect(
       eachFollowedBy(await read("cli.ts"), /spawn\(\[c\.path, "--version"\]/g, "v3ChildEnv()", 100),
     ).toEqual({ count: 1, bad: [] });

@@ -101,6 +101,18 @@ export const KEEP_SELECTIONS: readonly KeepSelection[] = [
   ["xml-node-as-content", "y2-xml", "XmlCell", "NodeAsContent", "y2"],
   ["xml-attribute-collection-other", "y2-xml", "XmlCell", "AttrCollectionGet", "y2"],
   ["xml-name-measured-chars", "y2-xml", "XmlCell", "Name1Plus", "y2"],
+  // PR-431 (R1214): edge's two families, one case per row (the t10/t12 cases above keep judging their old entries, and on
+  // edge read MOVED under these rows' entries: a warn, as since PR-408)
+  ["setrange-code-to-biginteger", "edge-refusals", "Conversion", "SetRangeCodeToBigInt", "ABCDE1"],
+  [
+    "setrange-text-to-integer",
+    "edge-refusals",
+    "Conversion",
+    "SetRangeTextToInt",
+    "QWERTYUIOPASDFGHJKLZ",
+  ],
+  ["rowversion-restamped-read", "edge-refusals", "RowVersion", "RestampedRead", "er"],
+  ["rowversion-restamped-find", "edge-refusals", "RowVersion", "RestampedFind", "er"],
   // y2-collation
   ["collation-no-weight-measured", "y2-collation", "Collation", "CjkPlain", "y2c"],
 ];

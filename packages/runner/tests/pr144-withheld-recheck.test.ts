@@ -919,6 +919,8 @@ describe("v3RecheckOf (cli wiring)", () => {
     kind: "al-runner-v3" | "bcdev" = "al-runner-v3",
     /** PR-277: the nested session waits on this before it returns. */
     gate?: Promise<void>,
+    /** PR-434: the nested session throws this after its events. */
+    fail?: Error,
   ) {
     const built: { config: unknown; dir: string }[] = [];
     const ran: SessionConfig[] = [];
@@ -947,6 +949,7 @@ describe("v3RecheckOf (cli wiring)", () => {
         ] as const)
           for (const f of sink) f({ ...e, seq: 0 } as never);
         await gate;
+        if (fail !== undefined) throw fail;
         return {
           mutants: [],
           sourceSha256: "s",
@@ -981,6 +984,56 @@ describe("v3RecheckOf (cli wiring)", () => {
     expect(
       (absent.built[0]?.config as { alRunnerV3: Record<string, unknown> }).alRunnerV3,
     ).not.toHaveProperty("stopGroups");
+  });
+
+  // PR-434. Red: drop the nested fold's print in v3RecheckOf's finally.
+  test("PR-434: the nested session prints its own TIMING, under its own heading", async () => {
+    const warned: string[] = [];
+    const was = console.warn;
+    console.warn = (...a: unknown[]) => {
+      warned.push(a.map(String).join(" "));
+    };
+    try {
+      await wire(section).recheck?.runner({
+        targets: [target("M1")],
+        tests: ["T Codeunit.T1"],
+        budgetSeconds: 60,
+      });
+    } finally {
+      console.warn = was;
+    }
+    const block = warned.find((w) => w.startsWith("recheck (nested session) TIMING"));
+    expect(block).toBeDefined();
+    expect(block).toContain("generate 0.0 s");
+    expect(block).toContain("teardown 0.0 s");
+  });
+
+  // PR-434 build review F3. Red: move the print out of the runner's finally (after the session's return).
+  test("PR-434: a nested session that throws still prints its partial TIMING, and its own error surfaces", async () => {
+    const warned: string[] = [];
+    const was = console.warn;
+    console.warn = (...a: unknown[]) => {
+      warned.push(a.map(String).join(" "));
+    };
+    const boom = new Error("nested boom");
+    let caught: unknown;
+    try {
+      await wire(section, "al-runner-v3", undefined, boom).recheck?.runner({
+        targets: [target("M1")],
+        tests: ["T Codeunit.T1"],
+        budgetSeconds: 60,
+      });
+    } catch (err) {
+      caught = err;
+    } finally {
+      console.warn = was;
+    }
+    expect(caught).toBe(boom);
+    expect(
+      warned.some((w) =>
+        w.startsWith("recheck (nested session) TIMING (partial: the run did not finish)"),
+      ),
+    ).toBe(true);
   });
 
   // PR-402 review F1. Red: drop the `loginReplay: false` override in v3RecheckOf.
