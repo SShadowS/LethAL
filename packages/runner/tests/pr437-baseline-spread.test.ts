@@ -183,6 +183,8 @@ interface ServeScript {
   holdUntil?: (q: Req, ev: Events) => Promise<void> | undefined;
   /** Answer nothing and end stdout (a request error: the daemon is closed). */
   eof?: (q: Req) => boolean;
+  /** Answer a summary with no test rows: no usable answer, and the daemon stays up. */
+  noRows?: (q: Req) => boolean;
   /** Coverage with unhit statements. */
   unhit?: boolean;
 }
@@ -291,7 +293,7 @@ function fakeServe(script: ServeScript, ev: Events) {
           ev.push(`ans:${picked.join("+")}`);
           const sums = { passed: 0, failed: 0, errors: 0, notRun: 0, total: 0 };
           const cov = { coverage: [] as unknown[], perTestCoverage: [] as unknown[] };
-          for (const cu of picked) {
+          for (const cu of script.noRows?.(req) === true ? [] : picked) {
             const r = rows(cu);
             push(
               JSON.stringify({
@@ -874,7 +876,7 @@ describe("PR-437 change 5: one-shots", () => {
 
   // Red: before any join, samples take the two slots (no `admit` read), so one overlaps at 23 GiB used.
   test("with no lane joined, at most one sample runs beside, admitted by the memory read", async () => {
-    const run = async (used: number) => {
+    const run = async (used: number, beside: boolean) => {
       const box: { ev?: Events } = {};
       const r = await rig({
         n: 6,
@@ -887,21 +889,16 @@ describe("PR-437 change 5: one-shots", () => {
             return GIB;
           },
         },
-        // 79302's answer waits until the first sample's one-shot started, so the request for 79303 starts after it
+        // beside (room): 79302's answer waits until the sample's one-shot started, so the request for 79303 starts
+        // after it. In place (no room) nothing is forced: the one-shot waits for a request in flight (F1).
         serve: {
-          holdUntil: (q, ev) => (q.cus.includes(79302) ? ev.when("start:79301") : undefined),
+          holdUntil: (q, ev) =>
+            beside && q.cus.includes(79302) ? ev.when("start:79301") : undefined,
         },
-        // that one-shot runs until the request for 79303 has arrived (beside it), or, in place with no room, until
-        // the worker's S1 check has read the room (the request then waits for it)
+        // beside, that one-shot runs until the request for 79303 has arrived (a request beside it); in place it is
+        // not held (a request then waits for it: S1)
         hooks: {
-          hold: (cu, ev) =>
-            cu === 79301
-              ? ev.until(
-                  () =>
-                    ev.list.includes("req:79303") ||
-                    ev.list.slice(ev.list.indexOf("start:79301")).includes("rss"),
-                )
-              : undefined,
+          hold: (cu, ev) => (beside && cu === 79301 ? ev.when("req:79303") : undefined),
         },
       });
       box.ev = r.ev;
@@ -910,57 +907,81 @@ describe("PR-437 change 5: one-shots", () => {
       expect(r.lanes()?.mostOneShots).toBeLessThanOrEqual(1);
       return r.rep();
     };
-    expect((await run(GIB)).samplesOverlapped).toBeGreaterThanOrEqual(1);
-    expect((await run(23 * GIB)).samplesOverlapped).toBe(0); // 23 + 3 (size) + 3 (estimate) over the 28 GiB bound
+    expect((await run(GIB, true)).samplesOverlapped).toBeGreaterThanOrEqual(1);
+    expect((await run(23 * GIB, false)).samplesOverlapped).toBe(0); // 23 + 3 (size) + 3 (estimate) over the 28 GiB bound
   });
 
-  // Red (S1): the loop's in-place one-shot not registered, so lane 0 sends 79304 beside the too-slow run of 79302
-  // with no room.
-  test("with no lane joined, a request goes beside an in-place one-shot only with room", async () => {
-    const run = async (used: number, releaseOnRoomCheck: boolean) => {
+  // Red (S1): the in-place one-shot not registered, so a request lane 0 starts during it goes out with no room.
+  // Red (F1): lane 0's request not registered, so the loop starts the too-slow run of 79302 beside 79303, which lane 0
+  // sent in the same tick it stored 79302, with no room.
+  test("with no lane joined, a request and an in-place one-shot run side by side only with room, in either order", async () => {
+    /** Did request `cu` (its `req:` to its `ans:`) overlap 79302's too-slow one-shot? */
+    const overlaps = (r: Rig, cu: number) =>
+      r.idx(`req:${cu}`) < r.idx("end:79302") && r.idx(`ans:${cu}`) > r.idx("start:79302");
+    const ROOMLESS = 23 * GIB; // 23 + 3 held + 3 over the 28 GiB bound
+    /** An event matching `pred` was pushed at or after `mark`. */
+    const seenAfter = (ev: Events, mark: string, pred: (e: string) => boolean) =>
+      ev.list.indexOf(mark) >= 0 && ev.list.slice(ev.list.indexOf(mark)).some(pred);
+    const run = async (used: number) => {
       const box: { ev?: Events } = {};
+      const room = used !== ROOMLESS;
       const r = await rig({
         n: 6,
-        used: () => used,
+        // 1 GiB until the first sample's one-shot (79301, beside) has ended, then `used`
+        used: () => (box.ev?.list.includes("end:79301") === true ? used : GIB),
         realAdmission: true,
         seams: {
           anonReader: () => 0, // unmeasured: no join
           sampleRss: () => {
-            box.ev?.push("rss"); // read by admit (79301) and by S1's check
+            box.ev?.push("rss"); // read by admit, by S1's check (worker) and by F1's check (loop)
             return GIB;
           },
         },
         serve: {
           rows: (cu) => (cu === 79302 ? { status: "fail", message: SLOW } : pass(cu)),
-          // 79303's answer waits until 79302's too-slow one-shot started, so 79304's request comes during it
-          holdUntil: (q, ev) => (q.cus.includes(79303) ? ev.when("start:79302") : undefined),
-        },
-        // the too-slow one-shot runs until 79304's request arrived, or (no room) until S1 read the room after it started
-        hooks: {
-          hold: (cu, ev) =>
-            cu === 79302
+          // 79303 is in flight when the loop reaches the too-slow 79302; it is answered once the loop read the room
+          // for that one-shot (F1: the only room read after 79301's one-shot ended), or once the one-shot started
+          // (room, or F1 broken)
+          holdUntil: (q, ev) =>
+            q.cus.includes(79303)
               ? ev.until(
                   () =>
-                    ev.list.includes("req:79304") ||
-                    (releaseOnRoomCheck &&
-                      ev.list.slice(ev.list.indexOf("start:79302")).includes("rss")),
+                    (!room && seenAfter(ev, "end:79301", (e) => e === "rss")) ||
+                    ev.list.includes("start:79302"),
                 )
               : undefined,
+        },
+        // 79301's sample (beside) runs until 79303's request arrived. The too-slow one-shot runs until 79303 is
+        // answered and then, with no room, until a worker request after its start read the room (S1) or went out
+        // (S1 broken), or every request was answered.
+        hooks: {
+          hold: (cu, ev) =>
+            cu === 79301
+              ? ev.when("req:79303")
+              : cu === 79302
+                ? ev.until(
+                    () =>
+                      ev.list.includes("ans:79303") &&
+                      (room ||
+                        seenAfter(ev, "ans:79303", (e) => e === "rss") ||
+                        seenAfter(ev, "start:79302", (e) => e.startsWith("req:")) ||
+                        ev.list.filter((e) => e.startsWith("ans:")).length === 6),
+                  )
+                : undefined,
         },
       });
       box.ev = r.ev;
       await r.fill();
       expect(r.lanes()?.unitsByLane).toEqual({ 0: 6 });
-      return { start: r.idx("start:79302"), end: r.idx("end:79302"), req: r.idx("req:79304") };
+      expect(r.idx("start:79302")).toBeGreaterThan(-1);
+      return r;
     };
-    // 23 + 3 held + 3 over the 28 GiB bound: 79304 waits for the one-shot's end
-    const no = await run(23 * GIB, true);
-    expect(no.start).toBeGreaterThan(-1);
-    expect(no.req).toBeGreaterThan(no.end);
-    // room: 79304 goes out while the one-shot runs
-    const yes = await run(GIB, false);
-    expect(yes.req).toBeGreaterThan(yes.start);
-    expect(yes.req).toBeLessThan(yes.end);
+    // no room: no request is in flight while the one-shot runs, whichever started first
+    const no = await run(ROOMLESS);
+    for (const cu of no.ids) expect(overlaps(no, cu)).toBe(false);
+    // room: 79303 runs beside the one-shot
+    const yes = await run(GIB);
+    expect(overlaps(yes, 79303)).toBe(true);
   });
 
   // Red: LETHAL_V3_SEQUENTIAL_SAMPLES / concurrentSamples:false ignored by the laned loop.
@@ -1386,6 +1407,40 @@ describe("PR-437 change 6: per-lane samples", () => {
     expect(new Set(shotCus(three))).toEqual(new Set([79301, 79302]));
     expect(three.rep().laneSampled).toBe(0);
     expect(three.rep().dropped).toBeUndefined();
+  });
+
+  // Red (F2): "first" read as the lane's first USABLE request, so after an unusable 79300 the planned 79301 (the
+  // daemon's second request: warm) does not count, and a needless lane sample runs on 79302.
+  test("an unusable first request still makes it the daemon's first: the next request is warm", async () => {
+    const r = await rig({
+      n: 4,
+      realAdmission: true,
+      seams: { anonReader: () => 0 }, // no join
+      serve: { noRows: (q) => q.cus.includes(79300) }, // no usable answer, the daemon stays up
+    });
+    await r.fill();
+    expect(r.serve.cwds).toHaveLength(1); // one daemon throughout
+    expect(new Set(shotCus(r))).toEqual(new Set([79301, 79303])); // the planned samples only
+    expect(r.rep().laneSampled).toBe(0);
+    expect(r.rep().dropped).toBeUndefined();
+  });
+
+  // Red (F2): a restarted daemon's first answer counted as warm, so the forward pick 79302 satisfies the lane and
+  // no warm sample runs.
+  test("a restarted daemon's first answer is cold and does not satisfy the lane's sample", async () => {
+    const r = await rig({
+      n: 6,
+      realAdmission: true,
+      seams: { anonReader: () => 0 }, // no join
+      // 79301 fails (a request error closes the daemon), so 79302 is a NEW daemon's first request
+      serve: { eof: (q) => q.cus.includes(79301) },
+    });
+    await r.fill();
+    expect(r.serve.cwds).toHaveLength(2); // the daemon was restarted
+    expect(r.rep().replacements).toEqual({ Codeunit79301: "Codeunit79302" }); // 79302 replaced the planned 79301
+    expect(shotCus(r)).toContain(79303); // the lane's warm sample, after the restart's cold first answer
+    expect(r.rep().laneSampled).toBe(1);
+    expect(r.rep().dropped).toBeUndefined();
   });
 
   // Red: a lane sample that keeps the daemon's answer on a too-slow codeunit (B1).

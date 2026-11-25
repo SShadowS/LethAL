@@ -6397,8 +6397,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       | {
           readonly got: BaselineAnswer | undefined;
           readonly lane: number;
-          /** S3: the lane's request it came from (0 = its first; a batch is one request). */
-          readonly req: number;
+          /** S3, F2: it came from its daemon's FIRST request (a batch is one request), usable or not: cold. */
+          readonly first: boolean;
         }
       | { readonly threw: unknown };
     /** Per position: the KEPT answer (never the raw one, r2-A1) and its lane, or a worker's throw. */
@@ -6429,6 +6429,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let mostOneShots = 0;
     /** The loop's IN-PLACE one-shot now running (too-slow, `check`, a backward replacement), for S1's admission. */
     let inPlace: Promise<void> | undefined;
+    /** F1: lane 0's request now in flight (registered past S1's check), for an in-place one-shot's admission. */
+    let lane0Sending: Promise<void> | undefined;
     const oneShot = <T>(run: () => Promise<T>, place = false): Promise<T> => {
       running += 1;
       mostOneShots = Math.max(mostOneShots, running);
@@ -6546,6 +6548,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           readonly got?: BaselineAnswer | undefined;
           readonly batch?: Map<number, BaselineAnswer>;
           readonly batchFailed?: true;
+          /** F2: the request was its daemon's first (see `sendNow`). */
+          readonly fresh?: boolean;
         }
     > => {
       if (loopHalt) return "stop"; // C7
@@ -6558,19 +6562,57 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           if (!roomForRequest(s.size)) await s.promise;
           if (loopHalt || this.stopHandle?.spent() === true) return "stop";
         }
-        // S1 (build review 1): the loop's in-place one-shot is charged too: send beside it only with room.
-        const place = inPlace;
-        if (place !== undefined) {
+        // S1 (build review 1): the loop's in-place one-shot is charged too: send beside it only with room. Read
+        // again after every wait, so a one-shot started meanwhile is seen; the last read and the registration
+        // of this request below (F1) have no wait between them.
+        for (;;) {
+          const place = inPlace;
+          if (place === undefined) break;
           await this.memoryChain;
+          if (inPlace !== place) continue;
           const size = sampleSize();
-          if (size === undefined || !roomForRequest(size)) await place;
+          if (size !== undefined && roomForRequest(size)) break;
+          await place;
           if (loopHalt || this.stopHandle?.spent() === true) return "stop";
         }
       }
+      // F1 (delta review): lane 0's request is registered from here to its end, so an in-place one-shot the loop
+      // starts while it is in flight (before any join) is admitted against it (`inPlaceShot`). It never waits on
+      // the loop from here, so the loop's wait for it cannot deadlock.
+      let sent: (() => void) | undefined;
+      const sending =
+        l === lane0
+          ? new Promise<void>((r) => {
+              sent = r;
+            })
+          : undefined;
+      if (sending !== undefined) lane0Sending = sending;
+      try {
+        return await sendNow(l, id, group);
+      } finally {
+        if (lane0Sending === sending) lane0Sending = undefined;
+        sent?.();
+      }
+    };
+    /** The gate, the bound check, the request and the signal check after it (the rest of today's `send`). */
+    const sendNow = async (
+      l: Lane,
+      id: number,
+      group?: readonly number[],
+    ): Promise<
+      | "stop"
+      | {
+          readonly got?: BaselineAnswer | undefined;
+          readonly batch?: Map<number, BaselineAnswer>;
+          readonly batchFailed?: true;
+          readonly fresh?: boolean;
+        }
+    > => {
       if (!(await this.memoryGate(true))) return "stop"; // R948
       let got: BaselineAnswer | undefined;
       let batch: Map<number, BaselineAnswer> | undefined;
       let batchFailed = false;
+      let fresh = false;
       // M1 (build review 1): the lane is busy from here, so an over-bound close never hits the daemon this
       // request starts or uses (plain/batchRequest set it only once the daemon is in hand).
       const prevFlight = l.inFlight;
@@ -6581,6 +6623,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (loopHalt) return "stop";
         this.baselineStats.requests += 1;
         for (const x of inflight) if (!x.done) x.overlapped = true;
+        // F2 (delta review): this request is its daemon's FIRST when the lane has no baseline daemon at this stop
+        // now (`baselineDaemonFor` starts one): read with no wait before the send.
+        fresh = l.daemonFor(mode)?.baselineStop !== stopSeconds;
         if (group !== undefined && scan !== undefined) {
           try {
             batch = await this.batchRequest(
@@ -6608,15 +6653,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         this.memoryRelease();
       }
       if (this.stopHandle?.signalled() === true) return "stop"; // R955: that request, a batch included, is dropped
-      if (batchFailed) return { batchFailed: true };
-      return batch !== undefined ? { batch } : { got };
+      if (batchFailed) return { batchFailed: true, fresh };
+      return batch !== undefined ? { batch, fresh } : { got, fresh };
     };
-    const keep = (l: Lane, pos: number, got: BaselineAnswer | undefined, req: number) => {
+    const keep = (l: Lane, pos: number, got: BaselineAnswer | undefined, first: boolean) => {
       if (l === lane0 && got !== undefined) lane0Answered = true;
       store(pos, {
         got: got === undefined ? undefined : this.keptAnswer(got),
         lane: l.index,
-        req,
+        first,
       });
     };
     const workers: Promise<void>[] = [];
@@ -6640,7 +6685,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const worker = async (l: Lane): Promise<void> => {
       let pos = -1;
       let first = true;
-      let reqNo = 0; // S3: this lane's requests answered so far
       try {
         for (;;) {
           if (loopHalt || workerHalt) return; // B9: at unit start
@@ -6657,21 +6701,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           if (asBatch) {
             const r = await request(l, unitIds[0] ?? Number.NaN, unitIds);
             if (r === "stop") return;
-            const req = reqNo;
-            reqNo += 1;
             if (r.batchFailed === true)
               alone = true; // the batch is gone: each codeunit alone, in order
             else
               for (const [j, p] of u.entries())
-                keep(l, p, r.batch?.get(unitIds[j] ?? Number.NaN), req);
+                keep(l, p, r.batch?.get(unitIds[j] ?? Number.NaN), r.fresh === true);
           }
           if (alone) {
             for (const [j, p] of u.entries()) {
               pos = p;
               const r = await request(l, unitIds[j] ?? Number.NaN);
               if (r === "stop") return;
-              keep(l, p, r.got, reqNo);
-              reqNo += 1;
+              keep(l, p, r.got, r.fresh === true);
             }
           }
           tryJoin(); // a unit boundary
@@ -6700,17 +6741,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
     // ---- the loop's one-shot helpers (today's, generalised to two in flight) ----
     const laneOf = new Map<number, number>(); // walked id -> the lane that answered it
-    const reqOf = new Map<number, number>(); // walked id -> the lane's request it came from
-    // S3 (build review 1, amendment 2): a lane's "first answer" is every position of its first answered REQUEST
-    // (a batch is one request): all of them came from a cold daemon.
-    const laneFirstReq = new Map<number, number>(); // lane -> the request of its first walked answer
-    const laneWarm = new Set<number>(); // lanes with a walked answer past their first request
-    const laneClean = new Set<number>(); // lanes with a clean compare past their first request
+    // S3, F2 (amendment 2, delta review): an answer is COLD when it came from its daemon's first request (a batch is
+    // one request), usable or not, a restarted daemon's included; every other answer is warm.
+    const coldIds = new Set<number>(); // walked ids answered by their daemon's first request
+    const laneWarm = new Set<number>(); // lanes with a warm walked answer
+    const laneClean = new Set<number>(); // lanes with a clean compare of a warm answer
     const laneWaiting = new Map<number, number>(); // lane -> counting samples not yet applied
-    /** A sample counts for its lane only past the lane's first answered request (C1, S3). */
+    /** A sample counts for its lane only on a warm answer (C1, S3, F2). */
     const counting = (id: number): number | undefined => {
       const k = laneOf.get(id);
-      return k !== undefined && reqOf.get(id) !== laneFirstReq.get(k) ? k : undefined;
+      return k !== undefined && !coldIds.has(id) ? k : undefined;
     };
     const countStart = (id: number) => {
       const k = counting(id);
@@ -6790,10 +6830,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.baselineStats.samplesSequential += 1;
       let r: CrossCheckResult;
       try {
-        r = await oneShot(
-          () =>
-            this.crossCheckSample(lane0, stopSeconds, coverage, sampleArgs(id, daemon), laneSample),
-          true,
+        r = await inPlaceShot(() =>
+          this.crossCheckSample(lane0, stopSeconds, coverage, sampleArgs(id, daemon), laneSample),
         );
       } catch (err) {
         if ((await settleAll()) === "dropped") return "dropped";
@@ -6823,6 +6861,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (s === undefined) return false;
       const e = this.memoryEstimate();
       return s.usedBytes + this.memoryHeld * e + Math.max(0, size - e) + e <= g.boundBytes;
+    };
+    /**
+     * F1 (delta review): an in-place one-shot. Before any join, a request lane 0 has in flight is charged first: the
+     * one-shot starts beside it only with room, else after it. Read again after every wait; the last read and the
+     * one-shot's registration (`oneShot(.., true)`, which S1 reads) have no wait between them.
+     */
+    const inPlaceShot = async <T>(run: () => Promise<T>): Promise<T> => {
+      while (!anyJoined()) {
+        const s = lane0Sending;
+        if (s === undefined) break;
+        await this.memoryChain;
+        if (lane0Sending !== s) continue;
+        const size = sampleSize();
+        if (size !== undefined && roomForRequest(size)) break;
+        await s;
+      }
+      return oneShot(run, true);
     };
     const replace = async (skipped: string, pos: number): Promise<Step> => {
       const forward = plan.next(pos, () => true);
@@ -6939,9 +6994,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (got !== undefined) {
           const k = o.lane;
           laneOf.set(id, k);
-          reqOf.set(id, o.req);
-          if (!laneFirstReq.has(k)) laneFirstReq.set(k, o.req);
-          if (laneFirstReq.get(k) !== o.req) {
+          if (o.first) coldIds.add(id);
+          else {
             laneWarm.add(k);
             if (!laneClean.has(k) && (laneWaiting.get(k) ?? 0) === 0 && !plan.has(id))
               laneSample = true;
@@ -7068,9 +7122,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             loopHalt = true;
             break;
           }
-          const shot = await oneShot(
-            () => this.oneShotBaselineAnswer(lane0, id, stopSeconds, coverage, "too-slow"),
-            true,
+          const shot = await inPlaceShot(() =>
+            this.oneShotBaselineAnswer(lane0, id, stopSeconds, coverage, "too-slow"),
           );
           if ("noAnswer" in shot) continue;
           if (this.stopHandle?.signalled() === true) {
