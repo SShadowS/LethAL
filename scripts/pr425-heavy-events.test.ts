@@ -2,11 +2,14 @@
 // the readings it compared, and heavy-slot.sh writes a `queue` line when a --wait ticket is taken. Admission-neutral: the
 // same inputs give the same exit code whether or not the ledger can be written. Every lock folder and cgroup here is a temp
 // folder: nothing touches /coord.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, test as bunTest, describe, expect } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EVENTS_LEDGER, eventLine } from "./heavy-slot-class.ts";
+
+// The slot mechanism (flock, cgroup v2, bash) is Linux-only, as in heavy-slot-class.test.ts and pr60-gate-memory.test.ts.
+const test = process.platform === "win32" ? bunTest.skip : bunTest;
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -169,7 +172,8 @@ describe("PR-425: heavy-slot.sh's queue event", () => {
   });
 });
 
-test("eventLine: a missing reading is `-`", () => {
+// Pure: runs on every platform.
+bunTest("eventLine: a missing reading is `-`", () => {
   expect(
     eventLine(new Date(0), "count-admit", "heavy.2", "baseapp", 12, "7", undefined, undefined, 4),
   ).toBe("1970-01-01T00:00:00.000Z\tcount-admit\theavy.2\tbaseapp\t12\t7\t-\t-\t-\t-\t-\n");
