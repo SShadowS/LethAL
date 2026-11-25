@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**69 of 1173 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 1173 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1062,7 +1062,7 @@ that ordering is the priority.
 - **R988** · LethAL's own process, not the serve daemon, reached 20 GB in DO's daemon baseline: it kept every codeunit's whole coverage answer (67 MB, nearly all unhit statements); kept coverage now holds what its readers use, and DO's baseline ran to its end at 3.9 GiB · [R988.md](docs/roadmap/R988.md) · done (7fb1cc07)
 - **R990** · BC.History outside BaseApp is done: the last 54 test projects on al-runner v3 (edge-c8fe56e05); two more wrong results (AutoFormatTranslate ignored; Linux time-zone DST) and the final tally (143 run, 33 blocked behind #7920/#7914) · [R990.md](docs/roadmap/R990.md) · closed 2026-11-14 — measured and filed upstream…
 - **R991** · heavy-slot.sh lets later, smaller jobs pass a waiting head ticket the memory check refused, so a large job can wait without end (R-974's --peak 20 ticket 211 was overtaken twice) · [R991.md](docs/roadmap/R991.md) · done (b4b09cb8) — a refused waiter is passed only for LETHAL_HEAVY_STARVE_S (default 900 s) after its first…
-- **R992** · heavy-slot's declared-peaks check refuses a 1 GiB build while the container uses 17 of 32 GiB: three held slots that declared 28 GiB block every small job until one ends · [R992.md](docs/roadmap/R992.md) · revisited 2026-11-25 (PR-424): keep f = 0.8…
+- **R992** · heavy-slot's declared-peaks check refuses a 1 GiB build while the container uses 17 of 32 GiB: three held slots that declared 28 GiB block every small job until one ends · [R992.md](docs/roadmap/R992.md) · done (4e61a2aba, PR-426): f = 0.8 kept and the gate preset raised 2 -> 3 GiB on kraken's ruling for the owner…
 - **R993** · On al-runner v3, JsonObject.ReadFromYaml raises 'not valid YAML' for a flow mapping with two entries ({"a": 1, "b": 2}), even when its return value is tested (upstream #8027) · [R993.md](docs/roadmap/R993.md) · open
 - **R994** · On al-runner v3, two refusals met only under Permission Sets' mutants: Metadata Permission rows of a 'table * = X' grant (any unfiltered read, the platform's BaseSystemPermissionSet has one), and an XMLport table element skipped after its child rows (upstream #8032) · [R994.md](docs/roadmap/R994.md) · open
 - **R995** · BC.History's `error` mutants, mined across every v3 store (3,459 in 166 projects): seven unfiled al-runner refusals met only under mutation, filed as upstream #8036; most of the rest is fixed on current, by design, or already filed · [R995.md](docs/roadmap/R995.md) · open
