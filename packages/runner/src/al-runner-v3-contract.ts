@@ -39,7 +39,7 @@ import {
   v3MissingDependencyStop,
 } from "./al-runner-v3-backend";
 import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
-import { v3ChildEnv } from "./al-runner-v3-seed";
+import { v3ChildEnv, v3MutantDaemonEnv } from "./al-runner-v3-seed";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
 import { monoNow } from "./clock";
@@ -2610,6 +2610,636 @@ async function stopGroupsFact(env: V3ProbeEnv, root: string): Promise<V3Fact> {
   }
 }
 
+/**
+ * PR-442: the leg-C facts that no state crosses the ENTRIES of one serve request (what R1221's C1 and R1220's echo drop
+ * need). GATE-ONLY in effect, like `stop-groups`: they sit outside `V3_CAPABILITY_FACTS`, a `diverged` never fails the
+ * gate, and the build's record (`batchFacts`) carries the readings for the consumers. Live channels (their positive
+ * control must carry, or the probe is dead) first, then the rollback channels (clean across entries is all that is asked).
+ */
+export const V3_ENTRY_FACTS = [
+  "entry-no-cross-selector-cache",
+  "entry-no-cross-singleinstance",
+  "entry-no-cross-test-singleinstance",
+  "entry-no-cross-codeunit-global",
+  "entry-no-cross-library-global",
+  "entry-no-cross-workdate",
+  "entry-no-cross-globallanguage",
+  "entry-no-cross-temp-table",
+  "entry-no-cross-manual-subscriber",
+  "entry-no-cross-static-subscriber",
+  "entry-no-cross-rows",
+  "entry-no-cross-isolatedstorage",
+  "entry-no-cross-numbersequence",
+  "entry-no-cross-lasterror",
+] as const;
+
+/** The reader message's `key=value` key of each fact, and whether its positive control is live. */
+const ENTRY_CHANNELS: Readonly<
+  Record<(typeof V3_ENTRY_FACTS)[number], { readonly key: string; readonly live: boolean }>
+> = {
+  "entry-no-cross-selector-cache": { key: "selector", live: true },
+  "entry-no-cross-singleinstance": { key: "appSI", live: true },
+  "entry-no-cross-test-singleinstance": { key: "testSI", live: true },
+  "entry-no-cross-codeunit-global": { key: "global", live: true },
+  "entry-no-cross-library-global": { key: "lib", live: true },
+  "entry-no-cross-workdate": { key: "workdate", live: true },
+  "entry-no-cross-globallanguage": { key: "language", live: true },
+  "entry-no-cross-temp-table": { key: "temp", live: true },
+  "entry-no-cross-manual-subscriber": { key: "manual", live: true },
+  "entry-no-cross-static-subscriber": { key: "static", live: true },
+  "entry-no-cross-rows": { key: "rows", live: false },
+  "entry-no-cross-isolatedstorage": { key: "iso", live: false },
+  "entry-no-cross-numbersequence": { key: "seq", live: false },
+  "entry-no-cross-lasterror": { key: "lasterr", live: false },
+};
+
+/** The measured text of a `diverged` entry fact starts with one of these; the gate prints the code that fits. */
+export const ENTRY_CARRY_PREFIX = "carry:";
+export const ENTRY_DEAD_PREFIX = "dead probe:";
+
+/**
+ * PR-442's invented AL, ids 50450-50469 (free in this file, the fixtures and the other probes): the TARGET app
+ * (ids 50450-50459: the selector, shaped like `emitResourceSelector`, and the app-side state) and the TESTS app
+ * (ids 50460-50469: a test-side SingleInstance and the test codeunit 50460). Test order: A_Reader1, B_Writer, C_Reader2.
+ * Readers ALWAYS fail with `MEASURED` and every channel's value (`key=value` pairs the judge parses).
+ */
+const ENTRY_TARGET_AL = `codeunit 50450 "P442 Selector"
+{
+    SingleInstance = true;
+
+    var
+        Loaded: Boolean;
+        ActiveId: Text;
+
+    procedure Current(): Text
+    begin
+        if not Loaded then begin
+            ActiveId := NavApp.GetResourceAsText('active-mutant.txt', TextEncoding::UTF8);
+            Loaded := true;
+        end;
+        exit(ActiveId);
+    end;
+
+    procedure Fresh(): Text
+    begin
+        exit(NavApp.GetResourceAsText('active-mutant.txt', TextEncoding::UTF8));
+    end;
+}
+
+table 50452 "P442 Buf"
+{
+    fields
+    {
+        field(1; "Entry No."; Integer) { }
+    }
+    keys
+    {
+        key(PK; "Entry No.") { Clustered = true; }
+    }
+}
+
+codeunit 50451 "P442 SI State"
+{
+    SingleInstance = true;
+
+    var
+        Value: Integer;
+        TempBuf: Record "P442 Buf" temporary;
+        Sub: Codeunit "P442 Manual Sub";
+
+    procedure SetValue(V: Integer)
+    begin
+        Value := V;
+    end;
+
+    procedure GetValue(): Integer
+    begin
+        exit(Value);
+    end;
+
+    procedure AddTemp(N: Integer)
+    begin
+        TempBuf.Init();
+        TempBuf."Entry No." := N;
+        TempBuf.Insert();
+    end;
+
+    procedure CountTemp(): Integer
+    begin
+        exit(TempBuf.Count());
+    end;
+
+    procedure BindSub()
+    begin
+        BindSubscription(Sub);
+    end;
+}
+
+codeunit 50453 "P442 Events"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnPing(var Hits: Integer)
+    begin
+    end;
+
+    procedure Ping(): Integer
+    var
+        Hits: Integer;
+    begin
+        OnPing(Hits);
+        exit(Hits);
+    end;
+}
+
+codeunit 50454 "P442 Manual Sub"
+{
+    EventSubscriberInstance = Manual;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"P442 Events", 'OnPing', '', false, false)]
+    local procedure HandlePing(var Hits: Integer)
+    begin
+        Hits += 1;
+    end;
+}
+
+codeunit 50456 "P442 Static SI Sub"
+{
+    SingleInstance = true;
+    EventSubscriberInstance = StaticAutomatic;
+
+    var
+        Seen: Integer;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"P442 Events", 'OnPing', '', false, false)]
+    local procedure CountPing(var Hits: Integer)
+    begin
+        Seen += 1;
+    end;
+
+    procedure GetSeen(): Integer
+    begin
+        exit(Seen);
+    end;
+}
+
+codeunit 50455 "P442 Lib"
+{
+    var
+        Stored: Integer;
+
+    procedure SetStored(V: Integer)
+    begin
+        Stored := V;
+    end;
+
+    procedure GetStored(): Integer
+    begin
+        exit(Stored);
+    end;
+}
+
+codeunit 50457 "P442 Stores"
+{
+    procedure InsertRow(N: Integer)
+    var
+        Buf: Record "P442 Buf";
+    begin
+        Buf.Init();
+        Buf."Entry No." := N;
+        Buf.Insert();
+    end;
+
+    procedure CountRows(): Integer
+    var
+        Buf: Record "P442 Buf";
+    begin
+        exit(Buf.Count());
+    end;
+
+    procedure SetIso()
+    begin
+        IsolatedStorage.Set('P442', 'written', DataScope::Module);
+    end;
+
+    procedure HasIso(): Boolean
+    begin
+        exit(IsolatedStorage.Contains('P442', DataScope::Module));
+    end;
+
+    procedure InsertSeq()
+    begin
+        if not NumberSequence.Exists('P442Seq') then
+            NumberSequence.Insert('P442Seq', 100, 1);
+    end;
+
+    procedure HasSeq(): Boolean
+    begin
+        exit(NumberSequence.Exists('P442Seq'));
+    end;
+}
+`;
+
+const ENTRY_TESTS_AL = `codeunit 50461 "P442 Test SI"
+{
+    SingleInstance = true;
+
+    var
+        Value: Integer;
+
+    procedure SetValue(V: Integer)
+    begin
+        Value := V;
+    end;
+
+    procedure GetValue(): Integer
+    begin
+        exit(Value);
+    end;
+}
+
+codeunit 50460 "P442 Entry Tests"
+{
+    Subtype = Test;
+
+    var
+        GlobalInt: Integer;
+        Lib: Codeunit "P442 Lib";
+
+    [Test]
+    procedure A_Reader1()
+    begin
+        Report();
+    end;
+
+    [Test]
+    procedure B_Writer()
+    var
+        Selector: Codeunit "P442 Selector";
+        AppSI: Codeunit "P442 SI State";
+        TestSI: Codeunit "P442 Test SI";
+        Stores: Codeunit "P442 Stores";
+        Events: Codeunit "P442 Events";
+        Seen: Text;
+        Hits: Integer;
+    begin
+        Seen := Selector.Current();
+        AppSI.SetValue(7);
+        TestSI.SetValue(8);
+        GlobalInt := 9;
+        Lib.SetStored(5);
+        WorkDate(DMY2Date(1, 1, 2031));
+        GlobalLanguage(1030);
+        AppSI.AddTemp(1);
+        AppSI.BindSub();
+        Stores.InsertRow(1);
+        Stores.SetIso();
+        Stores.InsertSeq();
+        Hits := Events.Ping();
+        asserterror Error('P442-WRITER-ERROR');
+    end;
+
+    [Test]
+    procedure C_Reader2()
+    begin
+        Report();
+    end;
+
+    local procedure Report()
+    var
+        Selector: Codeunit "P442 Selector";
+        AppSI: Codeunit "P442 SI State";
+        TestSI: Codeunit "P442 Test SI";
+        Stores: Codeunit "P442 Stores";
+        Events: Codeunit "P442 Events";
+        StaticSub: Codeunit "P442 Static SI Sub";
+        LastErr: Text;
+        StaticSeen: Integer;
+        Part1: Text;
+        Part2: Text;
+    begin
+        LastErr := GetLastErrorText();
+        StaticSeen := StaticSub.GetSeen();
+        Part1 := StrSubstNo('MEASURED lasterr=[%1] selector=%2 fresh=%3 appSI=%4 testSI=%5 global=%6 lib=%7 workdate=%8',
+            LastErr, Selector.Current(), Selector.Fresh(), AppSI.GetValue(), TestSI.GetValue(), GlobalInt, Lib.GetStored(),
+            Format(WorkDate(), 0, 9));
+        Part2 := StrSubstNo(' language=%1 temp=%2 static=%3 manual=%4 rows=%5 iso=%6 seq=%7',
+            GlobalLanguage(), AppSI.CountTemp(), StaticSeen, Events.Ping(), Stores.CountRows(), Stores.HasIso(),
+            Stores.HasSeq());
+        Error(Part1 + Part2);
+    end;
+}
+`;
+
+const ENTRY_TARGET_ID = "5b6a2c1e-4f3d-4e8a-9c21-442000000011";
+const ENTRY_TARGET_APP_JSON = JSON.stringify({
+  id: ENTRY_TARGET_ID,
+  name: "PR442 Entry Probe Target",
+  publisher: "LethAL",
+  version: "1.0.0.0",
+  idRanges: [{ from: 50450, to: 50459 }],
+  resourceFolders: ["Res"],
+  runtime: "17.0",
+  platform: "28.0.0.0",
+  application: null,
+});
+const ENTRY_TESTS_APP_JSON = JSON.stringify({
+  id: "5b6a2c1e-4f3d-4e8a-9c21-442000000012",
+  name: "PR442 Entry Probe Tests",
+  publisher: "LethAL",
+  version: "1.0.0.0",
+  dependencies: [
+    {
+      id: ENTRY_TARGET_ID,
+      name: "PR442 Entry Probe Target",
+      publisher: "LethAL",
+      version: "1.0.0.0",
+    },
+  ],
+  idRanges: [{ from: 50460, to: 50469 }],
+  runtime: "17.0",
+  platform: "28.0.0.0",
+  application: null,
+});
+
+export type EntryMode = "T-flag" | "T-plain" | "C-method";
+export const ENTRY_MODES: readonly EntryMode[] = ["T-flag", "T-plain", "C-method"];
+
+const ENTRY_CU = "Codeunit50460";
+const ENTRY_RESOURCE = "active-mutant.txt";
+/** The resource LethAL sends each entry. */
+const ENTRY_SENT: Readonly<Record<string, string>> = { e0: "MUT-Z", e1: "MUT-A", e2: "MUT-B" };
+
+/** The rows a request must stream, in order: `[entry, method, status]`. */
+const ENTRY_EXPECTED_ROWS: Readonly<
+  Record<EntryMode, readonly (readonly [string, string, string])[]>
+> = {
+  "T-flag": [
+    ["e1", "A_Reader1", "fail"],
+    ["e1", "B_Writer", "pass"],
+    ["e1", "C_Reader2", "fail"],
+    ["e2", "A_Reader1", "fail"],
+  ],
+  "T-plain": [
+    ["e1", "A_Reader1", "fail"],
+    ["e1", "B_Writer", "pass"],
+    ["e1", "C_Reader2", "fail"],
+    ["e2", "A_Reader1", "fail"],
+  ],
+  "C-method": [
+    ["e0", "A_Reader1", "fail"],
+    ["e0", "B_Writer", "pass"],
+    ["e0", "C_Reader2", "fail"],
+    ["e1", "B_Writer", "pass"],
+    ["e2", "A_Reader1", "fail"],
+  ],
+};
+
+/** PR-442: the three request bodies (probe v2's): whole-codeunit entries with LethAL's `excludeTests` cut; no coverage. */
+export function entryRequestBody(
+  mode: EntryMode,
+  roots: readonly string[],
+): Record<string, unknown> {
+  const res = (id: string) => ({ [ENTRY_RESOURCE]: ENTRY_SENT[id] });
+  const cut = [`${ENTRY_CU}.B_Writer`, `${ENTRY_CU}.C_Reader2`];
+  const base = { command: "runTests", sourcePaths: [...roots] };
+  const tEntries = [
+    { id: "e1", resources: res("e1"), test: `${ENTRY_CU}.` },
+    { id: "e2", resources: res("e2"), test: `${ENTRY_CU}.`, excludeTests: cut },
+  ];
+  if (mode === "T-flag")
+    return { ...base, testIsolation: "test", runSelectedOnly: true, entries: tEntries };
+  if (mode === "T-plain") return { ...base, testIsolation: "test", entries: tEntries };
+  return {
+    ...base,
+    testIsolation: "codeunit",
+    runSelectedOnly: true,
+    entries: [
+      { id: "e0", resources: res("e0"), test: `${ENTRY_CU}.` },
+      { id: "e1", resources: res("e1"), test: `${ENTRY_CU}.B_Writer` },
+      { id: "e2", resources: res("e2"), test: `${ENTRY_CU}.A_Reader1` },
+    ],
+  };
+}
+
+export interface EntryRow {
+  readonly entry: string;
+  readonly name: string;
+  readonly status: string;
+  readonly message: string | undefined;
+}
+export type EntryAnswer = { readonly rows: readonly EntryRow[] } | { readonly failed: string };
+export interface EntryRun {
+  readonly replay: boolean;
+  readonly mode: EntryMode;
+  readonly answer: EntryAnswer;
+}
+
+/** `key=value` pairs of a reader message; a value is `[...]` or a run of non-space characters. */
+function parseReaderMessage(m: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const x of (m ?? "").matchAll(/(\w+)=(\[[^\]]*\]|\S+)/g)) {
+    const [, k, v] = x;
+    if (k !== undefined && v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+interface EntryReading {
+  readonly problem?: string;
+  readonly def: Record<string, string>;
+  readonly ctrl: Record<string, string>;
+  readonly e2: Record<string, string>;
+  readonly ctrlEntry: string;
+}
+
+/** One run's rows against the expected ones (count, entry ids, names, statuses, order); the three readers' values. */
+function readEntryRun(mode: EntryMode, rows: readonly EntryRow[]): EntryReading {
+  const want = ENTRY_EXPECTED_ROWS[mode];
+  const got = rows.map((r) => `${r.entry}:${r.name.replace(`${ENTRY_CU}.`, "")}=${r.status}`);
+  const wanted = want.map(([e, n, s]) => `${e}:${n}=${s}`);
+  const empty = { def: {}, ctrl: {}, e2: {}, ctrlEntry: "" };
+  if (got.length !== wanted.length || got.some((g, i) => g !== wanted[i]))
+    return {
+      ...empty,
+      problem: `rows are not the expected ones (got ${got.join(" ") || "none"}; expected ${wanted.join(" ")})`,
+    };
+  const [first, , third] = rows;
+  const last = rows[rows.length - 1];
+  if (first === undefined || third === undefined || last === undefined) return empty;
+  return {
+    def: parseReaderMessage(first.message),
+    ctrl: parseReaderMessage(third.message),
+    e2: parseReaderMessage(last.message),
+    ctrlEntry: first.entry,
+  };
+}
+
+/** The first reader's literal default of a channel: a dirty state before the probe must not read as "clean". */
+function isCleanDefault(key: string, v: string): boolean {
+  if (key === "lasterr") return v === "[]";
+  if (key === "language") return v === "1033";
+  if (key === "workdate") return v !== "2031-01-01";
+  if (key === "iso" || key === "seq") return !["Yes", "Ja", "true"].includes(v);
+  return v === "0";
+}
+
+/**
+ * PR-442: the 14 `entry-no-cross-*` verdicts from the six answers (three modes, login replay off and on). A channel
+ * `matches` only when in ALL six runs: the rows are the expected ones; e2's reader value equals the channel's default
+ * (the first reader's value in the run's own first entry, so a date or a localized boolean needs no literal; for the
+ * selector, both `selector` and `fresh` equal the resource sent to e2); and, for a live channel, the positive control
+ * (the first entry's last reader, after the writer) does NOT read the default. A cross-entry value is `diverged`
+ * ("carry:"); a dead probe (wrong rows, a control that reads the default) is `diverged` ("dead probe:"); a run with no
+ * answer, or a missing run, is `unmeasurable`.
+ */
+export function judgeEntryFacts(runs: readonly EntryRun[]): V3Fact[] {
+  const labelOf = (r: { replay: boolean; mode: EntryMode }): string =>
+    `replay=${r.replay ? 1 : 0} ${r.mode}`;
+  const missing: string[] = [];
+  const readings: { label: string; r: EntryReading }[] = [];
+  for (const replay of [false, true])
+    for (const mode of ENTRY_MODES) {
+      const label = labelOf({ replay, mode });
+      const run = runs.find((x) => x.replay === replay && x.mode === mode);
+      if (run === undefined) missing.push(`${label}: no run`);
+      else if ("failed" in run.answer) missing.push(`${label}: ${run.answer.failed.slice(0, 200)}`);
+      else readings.push({ label, r: readEntryRun(mode, run.answer.rows) });
+    }
+  return V3_ENTRY_FACTS.map((name) => {
+    const { key, live } = ENTRY_CHANNELS[name];
+    const expected = `${key} of the channel does not cross entries of one serve request: e2's reader reads the default, in all six runs (T-flag, T-plain, C-method; login replay off and on)${live ? "; the positive control reads another value" : ""}`;
+    if (missing.length > 0)
+      return fact(name, "capability", "unmeasurable", expected, `no answer: ${missing.join("; ")}`);
+    const carry: string[] = [];
+    const dead: string[] = [];
+    const seen: string[] = [];
+    for (const { label, r } of readings) {
+      if (r.problem !== undefined) {
+        dead.push(`${label}: ${r.problem}`);
+        continue;
+      }
+      const sentCtrl = ENTRY_SENT[r.ctrlEntry];
+      if (name === "entry-no-cross-selector-cache") {
+        const [sel, fresh] = [r.e2.selector, r.e2.fresh];
+        seen.push(
+          `${label}: e2 selector=${sel} fresh=${fresh} (sent ${ENTRY_SENT.e2}), control ${r.ctrl.selector}`,
+        );
+        if (sel === undefined || fresh === undefined)
+          dead.push(`${label}: the e2 reader does not report selector and fresh`);
+        else if (sel !== ENTRY_SENT.e2 || fresh !== ENTRY_SENT.e2) carry.push(label);
+        if (r.def.selector !== sentCtrl || r.ctrl.selector !== sentCtrl)
+          dead.push(
+            `${label}: the first entry's readers do not read the resource sent to it (${sentCtrl})`,
+          );
+        continue;
+      }
+      const [d, e, c] = [r.def[key], r.e2[key], r.ctrl[key]];
+      seen.push(`${label}: e2 ${key}=${e} (default ${d}), control ${c}`);
+      if (d === undefined || e === undefined || c === undefined)
+        dead.push(`${label}: the readers do not report ${key}`);
+      else if (!isCleanDefault(key, d))
+        dead.push(`${label}: the first reader's ${key}=${d} is not the clean default`);
+      // workdate: a carry only when e2 reads the WRITTEN value (the control's), never merely another date (midnight).
+      else if (key === "workdate" ? e === c : e !== d) carry.push(label);
+      else if (live && c === d) dead.push(`${label}: the control reads the default ${d}`);
+    }
+    const text = seen.join("; ");
+    if (carry.length > 0)
+      return fact(
+        name,
+        "capability",
+        "diverged",
+        expected,
+        `${ENTRY_CARRY_PREFIX} ${carry.join(", ")}: ${text}`,
+      );
+    if (dead.length > 0)
+      return fact(
+        name,
+        "capability",
+        "diverged",
+        expected,
+        `${ENTRY_DEAD_PREFIX} ${dead.join("; ")}; ${text}`,
+      );
+    return fact(name, "capability", "matches", expected, text);
+  });
+}
+
+/** PR-442: the entry facts, on two serve daemons (login replay off, on), each on the three modes. The apps are written under `root` (the probe's scratch folder, also the daemons' cwd). */
+async function entryFacts(env: V3ProbeEnv, root: string): Promise<V3Fact[]> {
+  const dir = join(root, "entry-no-cross");
+  const app = join(dir, "app");
+  const tests = join(dir, "tests");
+  const runs: EntryRun[] = [];
+  try {
+    await mkdir(join(app, "src"), { recursive: true });
+    await mkdir(join(app, "Res"), { recursive: true });
+    await mkdir(join(tests, "src"), { recursive: true });
+    await writeFile(join(app, "app.json"), ENTRY_TARGET_APP_JSON);
+    await writeFile(join(app, "src", "Probe.al"), ENTRY_TARGET_AL);
+    await writeFile(join(app, "Res", ENTRY_RESOURCE), "NONE");
+    await writeFile(join(tests, "app.json"), ENTRY_TESTS_APP_JSON);
+    await writeFile(join(tests, "src", "ProbeTests.al"), ENTRY_TESTS_AL);
+  } catch (err) {
+    for (const replay of [false, true])
+      for (const mode of ENTRY_MODES) runs.push({ replay, mode, answer: { failed: String(err) } });
+    return judgeEntryFacts(runs);
+  }
+  const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
+  for (const replay of [false, true]) {
+    const spawn: ServerSpawnFn = (argv) =>
+      (env.serveSpawn ?? defaultServerSpawn)(argv, {
+        cwd: root,
+        env: v3MutantDaemonEnv(cache, replay),
+      });
+    const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
+    let broken: string | undefined;
+    try {
+      // The argv of probe442b, which measured the premise: the packages folder, the BC version, no download.
+      await server.start(SERVE_DEADLINE_MS, [env.packagesDir], SERVE_TEST_TIMEOUT_S, [
+        "--bc-version",
+        env.bcVersion,
+        "--no-download",
+        ...(env.environment !== undefined ? ["--environment", env.environment] : []),
+      ]);
+    } catch (err) {
+      broken = String(err);
+    }
+    try {
+      for (const mode of ENTRY_MODES) {
+        if (broken !== undefined) {
+          runs.push({ replay, mode, answer: { failed: broken } });
+          continue;
+        }
+        try {
+          const a = await server.runEntries(
+            entryRequestBody(mode, [app, tests]),
+            env.serveDeadlineMs ?? SERVE_DEADLINE_MS,
+          );
+          runs.push({
+            replay,
+            mode,
+            answer: {
+              rows: a.tests.map((t) => ({
+                entry: String(t.entry),
+                name: String(t.name),
+                status: String(t.status),
+                message: typeof t.message === "string" ? t.message : undefined,
+              })),
+            },
+          });
+        } catch (err) {
+          // a request that failed may still be running: the daemon answers no more requests.
+          broken = String(err);
+          runs.push({ replay, mode, answer: { failed: broken } });
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  }
+  return judgeEntryFacts(runs);
+}
+
 /** The probe. Never throws for a v3 answer; a fact it could not read is `unmeasurable`. */
 export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractResult> {
   const root = await mkdtemp(join(tmpdir(), "lethal-r586-contract-"));
@@ -3246,6 +3876,8 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     facts.push(...(await batchCapabilityFacts(env, root)));
     // PR-342: stop-groups, GATE-ONLY (PR-256 reads the gate's reading from the build's record, never a session's).
     if (env.gateOnlyTrusted === undefined) facts.push(await stopGroupsFact(env, root));
+    // PR-442: the 14 entry-no-cross facts (two daemons), GATE-ONLY like stop-groups.
+    if (env.gateOnlyTrusted === undefined) facts.push(...(await entryFacts(env, root)));
     // duplicate-key-insert-raises (#5603), r9 §6 (branch F): bc1 FAILS the test at its end.
     const keys = await call(["--codeunit", "50655"], { codeunit: 50655 });
     const k = onlyRow(keys, "DuplicateNamedKey");

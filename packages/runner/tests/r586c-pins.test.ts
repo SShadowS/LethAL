@@ -20,6 +20,7 @@ import {
   BC_HTTP_HUB_TEXT,
   V3_CAPABILITY_FACTS,
   V3_CARRY_FACT,
+  V3_ENTRY_FACTS,
 } from "../src/al-runner-v3-contract";
 import type { V3ContractResult } from "../src/al-runner-v3-contract";
 import {
@@ -191,7 +192,7 @@ describe("R586c pins: the table", () => {
 // Leg C
 // ---------------------------------------------------------------------------------------------
 
-/** The 38 facts as alpha.5 read them: 9 defect, 18 contract, 1 warn, 8 capability, the carry fact and stop-groups (all matches). */
+/** The 52 facts as alpha.5 read them: 9 defect, 18 contract, 1 warn, 8 capability, the carry fact, stop-groups and the 14 entry facts (all matches). */
 function alpha5Facts(): { fact: string; verdict: string; measured?: string }[] {
   const facts: { fact: string; verdict: string; measured?: string }[] = [];
   for (const d of V3_DEFECT_FACTS) {
@@ -207,6 +208,7 @@ function alpha5Facts(): { fact: string; verdict: string; measured?: string }[] {
   // PR-340: the carry fact has no per-build pin entry, so every pin judges it by the default table (matches).
   facts.push({ fact: V3_CARRY_FACT, verdict: "matches", measured: "ok" });
   facts.push({ fact: "stop-groups", verdict: "matches", measured: "ok" }); // PR-342
+  for (const e of V3_ENTRY_FACTS) facts.push({ fact: e, verdict: "matches", measured: "ok" }); // PR-442
   return facts;
 }
 const withFact = (
@@ -224,7 +226,8 @@ const runC = (facts: ReturnType<typeof alpha5Facts>, withPin = true) =>
   );
 
 describe("R586c leg C: the pin", () => {
-  test("the 38 facts: 9 defect, 18 contract, 1 warn, 8 capability, the carry fact (no pin entry), stop-groups", () => {
+  test("the 52 facts: 9 defect, 18 contract, 1 warn, 8 capability, the carry fact (no pin entry), stop-groups, 14 entry facts", () => {
+    expect(V3_LEG_C_FACTS).toBe(52);
     expect(alpha5Facts().length).toBe(V3_LEG_C_FACTS);
   });
   test("C-pin-1: alpha.5's readings with the pin pass, with seven pinned lines and no held line", () => {
@@ -641,6 +644,7 @@ describe("R756 edge pin: the edge readings are pinned and pass", () => {
       facts.push({ fact: c, verdict: "matches", measured: "ok" });
     facts.push({ fact: V3_CARRY_FACT, verdict: "matches", measured: "ok" }); // PR-340
     facts.push({ fact: "stop-groups", verdict: "diverged", measured: "refused" }); // PR-342: no #8564
+    for (const e of V3_ENTRY_FACTS) facts.push({ fact: e, verdict: "matches", measured: "ok" }); // PR-442
     return facts;
   };
   const runEdge = (withPin: boolean) =>
