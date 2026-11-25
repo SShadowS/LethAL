@@ -181,3 +181,30 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
   - a DO speed series with interleaved arms.
   - Turning the default on is a separate ruling.
 
+## Amendment 5 (2026-11-25, coord PR-452): the six checked, and the flag-on gates on `current`, pre-committed
+- **Amendment 4's checks: all six hold** (`/coord/handoff/PR-452/alone/RESULT.md`).
+  - On edge-e5176a9fd, with PR-190's workspace, each P alone on a fresh daemon failed twice under its mutant, with the same
+    message both times, and passed under NONE. None of the failures is a cascade, a refusal or a timeout.
+  - The five TestPage moves have F's note naming P as an earlier FAILED covering test.
+  - All six verdicts are equal (killed).
+  - So R1203's BLOCK is lifted for these six.
+- **The flag-on gates.** PR-371's method, repeated on `current` (edge-e5176a9fd; its `.gated` records
+  `stop-groups: matches`), from ONE master commit:
+  - **two runs of `itest:alrunner-v3`** (V3_TABLES, the CDO leg), each with `LETHAL_ITEST_V3_REPORT_DIR`, in sequence on
+    CPUs 12-21:
+    1. control: master as it is;
+    2. forced: PR-371's uncommitted scratch edit, re-applied by the Edit tool. The stop is forced on where supported (flag
+       not explicitly false, fact present, Sleep rule retired), the stop counts print with it, and the report is kept
+       before the warning check (R1196).
+  - **Judged per mutant** on the full site key, forced against control, leg by leg (PR-371's `compare.py`). The gate's own
+    pass or fail is recorded, but is not the judge.
+- **Predictions (a difference is a BLOCK on the flag):**
+  1. Verdicts are equal in every leg.
+  2. A `killingTest` moves only of amendment 1's kind (P after F, re-run alone) or amendment 4's kind (P before F, all three
+     conditions). Each move is listed, and an amendment-4 kind is checked by (i)-(iii) before it counts. PR-371 saw 0 moves
+     on main-bf3a3e863, so 0 is the expectation here too.
+  3. No new refusal, error class, cut or close from the stop.
+  4. The stop is forced ON in every session (the print). The stop counts are reported per leg.
+- **Still to be pre-committed, each in its own section before it runs:** the leg-C (or session) fact with lethal-bugs, and
+  the DO speed series.
+
