@@ -1138,7 +1138,8 @@ describe("PR-437 change 2 and 4: the halt, the walk, the throws", () => {
     );
   });
 
-  // Red: C4 dropped (a gap with memoryStopped and no stop handle read as a stop, the loud error swallowed).
+  // Red: C4's rethrow at the fill's end dropped (a gap with memoryStopped and no stop handle read as a stop, the loud
+  // error swallowed).
   test("a gap with memoryStopped and no stop handle rethrows the memory-bound error", async () => {
     let threw = false;
     const r = await rig({ n: 6, seams: { holdBaselineLaneZero: true } });
@@ -1163,6 +1164,40 @@ describe("PR-437 change 2 and 4: the halt, the walk, the throws", () => {
     await expect(r.fill()).rejects.toThrow(AlRunnerV3MemoryBoundError);
     expect(threw).toBe(true);
     expect(r.serve.requests.some((q) => q.cus.includes(79302))).toBe(false); // lane 0 stopped at its gate: a gap at 2
+  });
+
+  // Red: the memory-bound error rethrown before the in-flight samples are applied, so an earlier dropping sample loses
+  // to a later throw.
+  test("an earlier dropping sample in flight beats a memory-bound error at a later gap", async () => {
+    const r = await rig({
+      n: 6,
+      seams: { holdBaselineLaneZero: true }, // samples beside: 79301's is in flight when the loop reaches the gap
+      oneShotRows: (cu) => (cu === 79301 ? { status: "fail", message: "differs" } : pass(cu)),
+      // 79301's one-shot (it passed its memory gate) finishes only after the memory-bound error is recorded
+      hooks: { hold: (cu, ev) => (cu === 79301 ? ev.when("threw") : undefined) },
+    });
+    const realGate = r.priv.memoryGate.bind(r.b);
+    let gates = 0;
+    r.priv.memoryGate = async (hold) => {
+      gates += 1;
+      // Gate 3 is lane 0's request for 79302: it waits for the memory stop and answers no, so position 2 is a gap.
+      if (gates === 3) await r.ev.when("threw");
+      return realGate(hold);
+    };
+    const realReq = r.priv.baselineRequest.bind(r.b);
+    r.priv.baselineRequest = async (...a) => {
+      if ((a[2] as number) === 79303) {
+        await r.ev.when("start:79301"); // the earlier sample is running before the memory stop
+        r.priv.memoryStopped = true;
+        r.ev.push("threw");
+        throw new AlRunnerV3MemoryBoundError(30 * GIB, 28 * GIB, "/sys/fs/cgroup/memory.max");
+      }
+      return realReq(...a);
+    };
+    await r.fill(); // drops and returns: no throw
+    expect(r.log).toContain("threw");
+    expect(r.serve.requests.some((q) => q.cus.includes(79302))).toBe(false); // the gap at 2
+    expect(r.rep().dropped).toContain("codeunit 79301");
   });
 
   // Red: throws rethrown in completion order (a worker's throw before the loop reaches the earlier drop).

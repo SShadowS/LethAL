@@ -6885,10 +6885,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         const o = await outcomeAt(pos);
         if (o === "gap") {
-          // Change 4: a position whose outcome will never come.
-          if (this.memoryStopped && this.stopHandle === undefined && memErr !== undefined) {
-            if ((await rethrowAfterSettle(memErr)) === "dropped") return; // C4
-          }
+          // Change 4: a position whose outcome will never come. A memory stop with no stop handle (C4) is read
+          // as a stop here; the fill's end settles the in-flight samples first, then rethrows the recorded
+          // memory-bound error (the rule's one home, below).
           if (
             this.stopHandle?.spent() === true ||
             this.stopHandle?.signalled() === true ||
@@ -7091,8 +7090,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const last = await settleAll(stopped ? "stop" : "settle", true);
       if (last === "dropped") return;
       if (last === "stop") stopped = true;
-      // C4, extended to every stop: with no stop handle, a memory stop is today's loud throw. A worker's
-      // memory-bound error recorded past the position where the loop read that stop is not swallowed.
+      // C4 (the rule's one home), for every stop, a gap included: with no stop handle, a memory stop is today's
+      // loud throw. A worker's memory-bound error recorded at or past the position where the loop read that stop
+      // is not swallowed; the in-flight samples were settled first (above), so an earlier sample's drop wins.
       if (stopped && this.memoryStopped && this.stopHandle === undefined && memErr !== undefined)
         throw memErr;
       // Change 6 (S3): every lane with a walked answer past its first request needs one clean compare, on a stop too.
