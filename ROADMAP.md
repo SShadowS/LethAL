@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**68 of 1172 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**69 of 1173 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1062,7 +1062,7 @@ that ordering is the priority.
 - **R988** · LethAL's own process, not the serve daemon, reached 20 GB in DO's daemon baseline: it kept every codeunit's whole coverage answer (67 MB, nearly all unhit statements); kept coverage now holds what its readers use, and DO's baseline ran to its end at 3.9 GiB · [R988.md](docs/roadmap/R988.md) · done (7fb1cc07)
 - **R990** · BC.History outside BaseApp is done: the last 54 test projects on al-runner v3 (edge-c8fe56e05); two more wrong results (AutoFormatTranslate ignored; Linux time-zone DST) and the final tally (143 run, 33 blocked behind #7920/#7914) · [R990.md](docs/roadmap/R990.md) · closed 2026-11-14 — measured and filed upstream…
 - **R991** · heavy-slot.sh lets later, smaller jobs pass a waiting head ticket the memory check refused, so a large job can wait without end (R-974's --peak 20 ticket 211 was overtaken twice) · [R991.md](docs/roadmap/R991.md) · done (b4b09cb8) — a refused waiter is passed only for LETHAL_HEAVY_STARVE_S (default 900 s) after its first…
-- **R992** · heavy-slot's declared-peaks check refuses a 1 GiB build while the container uses 17 of 32 GiB: three held slots that declared 28 GiB block every small job until one ends · [R992.md](docs/roadmap/R992.md) · open — measured…
+- **R992** · heavy-slot's declared-peaks check refuses a 1 GiB build while the container uses 17 of 32 GiB: three held slots that declared 28 GiB block every small job until one ends · [R992.md](docs/roadmap/R992.md) · revisited 2026-11-25 (PR-424): keep f = 0.8…
 - **R993** · On al-runner v3, JsonObject.ReadFromYaml raises 'not valid YAML' for a flow mapping with two entries ({"a": 1, "b": 2}), even when its return value is tested (upstream #8027) · [R993.md](docs/roadmap/R993.md) · open
 - **R994** · On al-runner v3, two refusals met only under Permission Sets' mutants: Metadata Permission rows of a 'table * = X' grant (any unfiltered read, the platform's BaseSystemPermissionSet has one), and an XMLport table element skipped after its child rows (upstream #8032) · [R994.md](docs/roadmap/R994.md) · open
 - **R995** · BC.History's `error` mutants, mined across every v3 store (3,459 in 166 projects): seven unfiled al-runner refusals met only under mutation, filed as upstream #8036; most of the rest is fixed on current, by design, or already filed · [R995.md](docs/roadmap/R995.md) · open
@@ -1216,6 +1216,7 @@ that ordering is the priority.
 - **R1205** · After PR-354's and PR-365's keep rows, c4's remaining refusal restarts are 56 (2,244 s of warm-up): the top three families (report PDF output, Evaluate into a Boolean under GlobalLanguage, Report.RunRequestPage parameters) are 34 of them (1,376 s, 2.4% of lane time), none measured by PR-54's keep census · [R1205.md](docs/roadmap/R1205.md) · done (c3ea942c9, PR-411): four exact keep rows…
 - **R1208** · The al-runner update gate pushes its gated-builds row straight to master with [skip ci] and runs no unit test, though unit tests read that file: edge-e5176a9fd's row (f8185a042, the first reading `stop-groups: matches`) turned master red silently · [R1208.md](docs/roadmap/R1208.md) · done (1a374dbe0)
 - **R1209** · On current edge-e5176a9fd the t12 refusal of Text '1=18' into an Integer field has the new setrange-other-type-convert wording, which no keep row matches: PR-408 kept only '=18', so a DO run that meets '1=18' restarts the daemon · [R1209.md](docs/roadmap/R1209.md) · done (daaa8b3e5)
+- **R1211** · heavy-slot records only admissions: a job's wait in the queue, and why it was refused, are not logged, so R992's symptom (a job waiting while memory has room) cannot be measured · [R1211.md](docs/roadmap/R1211.md) · open
 - **R1210** · Culture-dependent BC answers from bc1-bc4 are Linux BC (ICU) data, which Windows BC (NLS) need not share: #8861, #8862 and #8871 were Linux-only. Such answers are recorded as 'measured on Linux BC' and filed upstream only when Windows BC agrees · [R1210.md](docs/roadmap/R1210.md) · open
 
 ---
