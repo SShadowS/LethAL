@@ -211,9 +211,14 @@ function fakeServe(script: ServeScript, ev: Events) {
       if (w !== undefined) w({ value: v, done: false });
       else q.push(v);
     };
+    // stderr writes nothing; its pending read ENDS with the process, as a real pipe does. (A read that never
+    // ended made AlRunnerServer.terminate wait out its 1 s stderr-pump bound at every daemon close, so a test
+    // that closes several daemons could cross bun's 5 s timeout.)
+    const errWaiting: ((r: IteratorResult<Uint8Array>) => void)[] = [];
     const end = () => {
       closed = true;
       for (const w of waiting.splice(0)) w({ value: undefined, done: true });
+      for (const w of errWaiting.splice(0)) w({ value: undefined, done: true });
     };
     const stdout: AsyncIterable<Uint8Array> = {
       [Symbol.asyncIterator]: () => ({
@@ -231,8 +236,14 @@ function fakeServe(script: ServeScript, ev: Events) {
     };
     const stderr: AsyncIterable<Uint8Array> = {
       [Symbol.asyncIterator]: () => ({
-        next: () => new Promise<IteratorResult<Uint8Array>>(() => {}),
-        return: async () => ({ value: undefined, done: true }),
+        next: () =>
+          closed
+            ? Promise.resolve({ value: undefined, done: true })
+            : new Promise<IteratorResult<Uint8Array>>((r) => errWaiting.push(r)),
+        return: async () => {
+          for (const w of errWaiting.splice(0)) w({ value: undefined, done: true });
+          return { value: undefined, done: true };
+        },
       }),
     };
     push(JSON.stringify({ ready: true }));
@@ -483,19 +494,20 @@ async function rig(o: Opts = {}) {
     memoryStopped: boolean;
   };
   /** The fill alone, laned, as `takeDaemonBaseline` enters it (with coverage, stop 1 s). */
-  const fill = () => priv.fillDaemonBaselineLaned(priv.lane, 1, true);
+  const fill = () => awake(() => priv.fillDaemonBaselineLaned(priv.lane, 1, true));
   /** The orchestrator's baseline step on lane 0's view: the bracket, a null activation, one run per test. */
-  const baseline = async () => {
-    const v = views[0];
-    if (v === undefined) throw new Error("no lane views");
-    b.baselinePhase(true);
-    try {
-      await v.activate(null);
-      for (const r of suite) await v.run(r, OPTS);
-    } finally {
-      b.baselinePhase(false); // as al-runner-v3-entries.test.ts's `baseline`
-    }
-  };
+  const baseline = () =>
+    awake(async () => {
+      const v = views[0];
+      if (v === undefined) throw new Error("no lane views");
+      b.baselinePhase(true);
+      try {
+        await v.activate(null);
+        for (const r of suite) await v.run(r, OPTS);
+      } finally {
+        b.baselinePhase(false); // as al-runner-v3-entries.test.ts's `baseline`
+      }
+    });
   /** Lane -> the codeunits it answered, in ids order (from the serve log). */
   const answeredBy = () => {
     const by = new Map<number, number[]>();
@@ -528,6 +540,22 @@ async function rig(o: Opts = {}) {
 }
 type Rig = Awaited<ReturnType<typeof rig>>;
 
+/**
+ * Keeps Bun's event loop turning while `run` is pending. NOT an ordering device: every order in this file comes from
+ * latches and counters, and the interval's callback does nothing. Why it is needed (measured, 2026-11-25): with the
+ * in-process fakes there is no I/O, and Bun 1.4.4's loop then sleeps with a `setImmediate` pending (the backend's
+ * `refuseDaemonDependencySkip` awaits one after every serve answer) until some timer happens to fire. A fill then took
+ * 2-4 s instead of ~60 ms, waking only on unrelated timers (the bound-print workers' 2 s idle timers, a close's 500 ms
+ * wait), and could cross bun's 5 s test timeout: the gap tests' timeouts. With this tick the same fill takes ~60 ms.
+ */
+async function awake<T>(run: () => Promise<T>): Promise<T> {
+  const tick = setInterval(() => {}, 5);
+  try {
+    return await run();
+  } finally {
+    clearInterval(tick);
+  }
+}
 const timedOut = { timedOut: true, wallMs: 1 };
 const shotCus = (r: Rig) => r.shots.map((s) => s.cu);
 
