@@ -507,6 +507,9 @@ export interface DaemonBaselineFacts {
   readonly sampledSkipped: readonly string[];
   /** R951: skipped samples replaced by another item (that item leaves the served pool and joins the sample). */
   readonly replaced: number;
+  /** PR-437 (C3): per-lane samples compared clean and skipped (laned fills only; 0 where absent). */
+  readonly laneSampled?: number;
+  readonly laneSampledSkipped?: readonly string[];
 }
 
 /**
@@ -544,9 +547,12 @@ export function judgeDaemonBaseline(
       notes,
     };
   }
-  if (d.served + skipped + d.replaced !== expected) {
+  // PR-437 (C3): a lane sample takes its item out of the served pool too, compared clean or skipped.
+  const laneSampled = d.laneSampled ?? 0;
+  const laneSkipped = d.laneSampledSkipped?.length ?? 0;
+  if (d.served + skipped + d.replaced + laneSampled + laneSkipped !== expected) {
     return {
-      fail: `${leg}: ${d.served} daemon answers taken, ${skipped} skipped by name and ${d.replaced} moved to the sample, pre-committed ${expected} in all (a silent drop is not a skip)`,
+      fail: `${leg}: ${d.served} daemon answers taken, ${skipped} skipped by name, ${d.replaced} moved to the sample and ${laneSampled + laneSkipped} lane-sampled (${laneSkipped} skipped), pre-committed ${expected} in all (a silent drop is not a skip)`,
       notes,
     };
   }

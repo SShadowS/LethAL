@@ -459,6 +459,14 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   // one-shot baseline none.
   "al-runner-v3/dbm-daemon": ["al-runner-v3-memory-guard", "al-runner-v3-serve-flagged-unknown"],
   "al-runner-v3/dbm-oneshot": [],
+  // PR-437 (R1217, DBM-W): DBM's daemon session laned with two workers. PREDICTED, never observed: DBM's set plus
+  // the lanes-started line every --workers 2 session prints (runMutantsParallel); the first live run may move it,
+  // and a difference is pre-committed in an amendment before it is pinned.
+  "al-runner-v3/dbm-w-daemon": [
+    "al-runner-v3-lanes-started",
+    "al-runner-v3-memory-guard",
+    "al-runner-v3-serve-flagged-unknown",
+  ],
   // R948: leg DBI runs under --isolate-tests (which says so) with the same fixed-reader guard line.
   // R949 (pre-commitment master 02d2139b): DBI serves a daemon answer, whose flagged state is unknown (#7954).
   "al-runner-v3/DBI": [

@@ -951,11 +951,13 @@ async function legDBMRun(scratch: string): Promise<void> {
   const deps = await microsoftDeps(scratch);
   let dbmSeam = false;
   let dbmSeamWhy = "";
-  const run = async (name: "dbm-daemon" | "dbm-oneshot") => {
+  const run = async (name: "dbm-daemon" | "dbm-oneshot" | "dbm-w-daemon") => {
     // Own scratch per session: GATE_WARNINGS keys on its name, and the two sessions warn differently.
     const dir = join(scratch, name);
     await mkdir(dir, { recursive: true });
-    const daemon = name === "dbm-daemon";
+    const daemon = name !== "dbm-oneshot";
+    // PR-437 (DBM-W): the daemon session again, laned with two workers (see the end of this leg).
+    const laned = name === "dbm-w-daemon";
     const b = new AlRunnerV3Backend(
       backendCfg({
         instrumentedDir: join(dir, "backend"),
@@ -1018,11 +1020,18 @@ async function legDBMRun(scratch: string): Promise<void> {
             : "the Sleep rule is not retired";
       }
       b.seams.baselineBatching = dbmSeam;
+      if (laned) {
+        // PR-437 (B8): admission forced open, and lane 0 held after its first unit until lane 1 has taken one,
+        // so lane 0 answers [0, 1] and lane 1 [2, 3] on every host.
+        b.seams.baselineLanesAdmit = true;
+        b.seams.holdBaselineLaneZero = true;
+      }
     }
     const r = await session(dir, b, {
       projectDir: fixture("sandbox-optin"),
       testDir: fixture("sandbox-optin-tests"),
       selectorIds: DBM_IDS,
+      ...(laned ? { workers: 2 } : {}),
     });
     console.log(`  DBM ${name}: ${counts(r)} over ${r.mutants.length}`);
     must(r.mutants.length > 0, `DBM ${name}: the session measured no mutant`);
@@ -1163,6 +1172,39 @@ async function legDBMRun(scratch: string): Promise<void> {
     fresh.baselineBatchingOffWhy() === expectedWhy,
     `DBM: baselineBatchingOffWhy() is ${JSON.stringify(fresh.baselineBatchingOffWhy())}, the build's record, probe and Sleep rule say ${JSON.stringify(expectedWhy)}`,
   );
+  // PR-437 (R1217, outcome 3): DBM-W, DBM's daemon session laned with two workers. Its pre-commitment rests on the
+  // units [0, 1] and [2, 3] (batches of 2), so it runs only when batching runs through the seam.
+  if (!dbmSeam) {
+    console.log(`  DBM-W: not applicable: batching is off through the seam (${dbmSeamWhy})`);
+  } else {
+    const dw = await run("dbm-w-daemon");
+    const w = table(dw.r);
+    const wDiffs = [...new Set([...c.keys(), ...w.keys()])]
+      .filter((k) => c.get(k) !== w.get(k))
+      .map((k) => `${k}: DBM ${c.get(k) ?? "absent"} -> DBM-W ${w.get(k) ?? "absent"}`);
+    for (const x of wDiffs) console.log(`    - ${x}`);
+    must(
+      wDiffs.length === 0 && w.size === dw.r.mutants.length,
+      `DBM-W: ${wDiffs.length} per-mutant difference(s) from DBM's daemon session`,
+    );
+    const dd = dw.b.daemonBaselineReport();
+    console.log(`  DBM-W: daemon baseline ${JSON.stringify(dd)}`);
+    // B8: equal to DBM's, except the two timing counters.
+    const { samplesOverlapped: _o1, samplesSequential: _s1, ...dmRest } = d;
+    const { samplesOverlapped: _o2, samplesSequential: _s2, ...dwRest } = dd;
+    must(
+      JSON.stringify(dwRest) === JSON.stringify(dmRest),
+      `DBM-W: daemonBaselineReport differs from DBM's (timing counters aside): DBM ${JSON.stringify(dmRest)}, DBM-W ${JSON.stringify(dwRest)}`,
+    );
+    // baselineSampleIds(4) = {1, 3}: lane 1's sample is the planned last one, so no lane sample runs.
+    must(dd.laneSampled === 0, `DBM-W: ${dd.laneSampled} lane sample(s), pre-committed 0`);
+    const lanes = dw.b.baselineLanesReport();
+    console.log(`  DBM-W: lanes ${JSON.stringify(lanes)}`);
+    must(
+      lanes !== undefined && Object.keys(lanes.unitsByLane).length === 2,
+      `DBM-W: the receipt shows ${lanes === undefined ? "no laned fill" : `${Object.keys(lanes.unitsByLane).length} daemon(s)`}, pre-committed 2`,
+    );
+  }
   // Recorded by the receipt only when batching ran and every check above held.
   dbmBatched = dbmSeam;
 }
