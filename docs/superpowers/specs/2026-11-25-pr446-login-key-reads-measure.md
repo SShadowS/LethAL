@@ -45,8 +45,11 @@ lethal-code, 2026-11-25.
 
 ## The builds
 
-- **draft:** fork `SShadowS/BusinessCentral.AL.Runner` branch `login-key-reads` at a09d4bbb8, on main efa411fea
-  (#8211).
+- **draft:** fork `SShadowS/BusinessCentral.AL.Runner` branch `login-key-reads` at **9e64be018** (upstream draft
+  #9074; issue #8211), on main efa411fea.
+  - The branch moved from a09d4bbb8 before any measurement (kraken, 2026-11-25).
+  - Its 3 new commits touch only `login_reads_tests.rs` and the ADR-073 text.
+  - The a09d4bbb8 build was never gated or measured.
 - **base:** efa411fea.
 - **Build:** each from a clean clone, `cargo build --release --locked -p alrunner-cli`, in its own target dir, under a
   heavy-slot.
