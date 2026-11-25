@@ -143,3 +143,41 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
       the full instrumented DO build at the run's head. It runs as part of the next stop-groups A/B on a fresh head
       (the orchestrator, 2026-11-24).
 
+## Amendment 4 (2026-11-25, coord PR-452, lethal-preproc): the orchestrator's ruling on R1203, which supersedes amendment 3's rule
+- **The ruling (orchestrator, 2026-11-25), verbatim in substance:** an earlier-killer move (B's killer P BEFORE A's killer F
+  in R197's order) is acceptable ONLY if all three hold:
+  - **(i)** A's killer F carries the codeunit-state note `[v3-codeunit-state-possible]`.
+  - **(ii)** B's earlier killer P, run ALONE on a FRESH daemon:
+    - under the mutant, fails on its OWN assertion, twice;
+    - with no mutant (NONE), passes.
+  - **(iii)** The verdict is equal (both `killed`).
+  - Anything else with P before F stays a BLOCK.
+- **What (ii) means in practice:**
+  - "Its own assertion": the failure message is the one P's own body raises. It is NOT a cascade text ("The TestPage is
+    already open."), NOT a refusal (`NotRun: out-of-scope: ...`), and NOT a timeout.
+  - "Twice": two separate requests, each on a fresh daemon, both fail with that kind of message.
+  - "Alone": the request selects only P (the entry's `test` names P's method exactly; `runSelectedOnly`).
+- **How it supersedes amendment 3:**
+  - (ii) is stricter than amendment 3's item 2 (a fresh daemon per run, and P's own assertion).
+  - Amendment 3's item 1 (the note names P as an earlier FAILED covering test) is kept as part of (i).
+  - Amendment 3's item 4 (each move listed by mutant and site key) is kept.
+- **The six checked (orchestrator: "all 5 moves plus M12932"):**
+  - **M4774, M4775, M4789, M4791, M4796:** `CDOeSealServiceSetup.Page.al`; codeunit 68861 "CDO eSeal Setup UI Tests".
+    Their P is EnableService_FieldsNotEditable or OpenPage_NewRecord_DefaultValuesSet, as R1203's table pairs them.
+  - **M12932:** `CDOUnhandledServicePagesMgt.Codeunit.al`:40; codeunit 68910; P = GetLogInfo_WhenMovedLogExists_ExcludesIt.
+    It is P AFTER F (amendment 1's kind). The orchestrator asks that its (ii) check be run too: amendment 3 left it pending.
+- **Where (ii) runs:**
+  - PR-411's kept-vs-fresh kit in fresh mode (a daemon per request), on `current` (edge-e5176a9fd, sha 9b0e90bd...).
+  - The instrumented DO workspace is PR-190's (`/coord/handoff/PR-190/full/active`), the one c5 and PR-431 used.
+  - PR-359's mutant codes map onto its manifest by the full site key (file, line, operator, start, end). A code that does
+    not map is reported as unmeasured, never guessed.
+  - Per mutant: [P under M], [P under NONE], [P under M]. Each is its own fresh daemon, `testIsolation` test (c5's mode).
+- **Pre-committed prediction (from R1203's reading):** all six satisfy (i), (ii) and (iii).
+  - (i) and (iii) are already read from PR-359's A1/B1 stores (`/coord/handoff/R1203/rows.txt`).
+  - Any one that fails any of the three is a BLOCK on the flag, and is filed in R1203.
+- **What follows only if all six hold** (each pre-committed in its own section before it runs):
+  - the flag-on gates (PR-371's method on `current`);
+  - the leg-C fact (with lethal-bugs);
+  - a DO speed series with interleaved arms.
+  - Turning the default on is a separate ruling.
+
