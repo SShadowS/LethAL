@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 1185 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**73 of 1186 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -413,6 +413,7 @@ that ordering is the priority.
 - **R1212** · LethAL's static hang refusal misses two loop-hang shapes met on a real project: a negated Next() test that ends a repeat-until loop, and the removal of a Get that puts the loop's record cursor back in place · [R1212.md](docs/roadmap/R1212.md) · done (ef772d98a, PR-429; gaps in R1213)
 - **R1213** · PR-429's loop-cursor hang refusals leave three known gaps: an end test grouped below an outer or/and, a paren-less `R.Next = 0`, and the removal of a filter call before a loop that inserts into its own table (PR-427's M2284) · [R1213.md](docs/roadmap/R1213.md) · open — gaps (1) and (2) closed 2026-11-25 by ruling (PR-430: 0 sites on DO and 0 in the fixtures, by parse)…
 - **R1215** · R949 marks every serve-daemon row `flaggedUnknown`, but both builds in use write `flagged` on serve rows: an unflagged daemon pass may be refused as unknown although the build reported it sound · [R1215.md](docs/roadmap/R1215.md) · closed 2026-11-25 — by ruling (PR-433): current's serve daemon omits `flagged` on an unflagged pass…
+- **R1223** · Login replay can split a mutant from its NONE confirm (NONE replays its warm-up image, a mutant's first entry logs in for real), so a kill could stand on replay evidence alone: run the kill pairs on a replay-OFF daemon before `alRunnerV3.loginReplay` may turn on · [R1223.md](docs/roadmap/R1223.md) · open — a precondition of PR-402's flag (orchestrator ruling, PR-443): the flag needs this item AND the…
 
 ## Product gaps a real project hits
 
