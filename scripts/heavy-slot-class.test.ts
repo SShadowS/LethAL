@@ -556,7 +556,7 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
 
   // R991: a large waiter the memory rule refuses must not be overtaken forever. Injected readings: the
   // container uses 4 of 32 GiB; slot 1 holds a job that declared 12 GiB, so a --peak 20 waiter is
-  // refused (12 + 20 + 4 = 36 > 32) while a --peak gate (2 GiB) caller fits on every rule.
+  // refused (12 + 20 + 4 = 36 > 32) while a --peak 2 (2 GiB) caller fits on every rule.
   describe("R991: a waiter refused for long holds the head", () => {
     // `poll`: the big waiter's poll. Its out-of-turn retry holds a free slot (declaring 20 GiB) for the
     // length of its guard, so where a small caller must race it, it polls every 30 s (R967's cure).
@@ -575,7 +575,8 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
       return { dir, cg, p1, w, big, marker: () => join(dir, "heavy-queue", refused() ?? "") };
     };
     const small = (dir: string, cg: string) =>
-      startIn(dir, cg, "0.05", "--peak", "gate", "other", "touch", join(dir, "small"));
+      // PR-426: a 2 GiB job (the small-job size), named by number since the gate preset is 3
+      startIn(dir, cg, "0.05", "--peak", "2", "other", "touch", join(dir, "small"));
 
     test("refused for longer than the limit: a later small job that fits is NOT admitted", async () => {
       // poll 30 s: the waiter does not retry during the small call, so only the queue can refuse it
@@ -714,7 +715,7 @@ describe("R952 (R953) admission by memory", () => {
   });
   test("parsePeak: the four names, a positive number, nothing else", () => {
     expect(["serve", "baseline", "gate", "build", "2.5"].map(parsePeak)).toEqual([
-      8, 12, 2, 3, 2.5,
+      8, 12, 3, 3, 2.5,
     ]);
     expect(["0", "-1", "x", "", "toString", "1e3"].map(parsePeak)).toEqual([
       undefined,
@@ -766,7 +767,7 @@ describe("R952 (R953) admission by memory", () => {
     };
     test("a job whose default peak does not fit exits 75 and does not run; --peak gate fits and runs", () => {
       const dir = fresh();
-      const cg = cgroup(21, 32); // 21 + 8 (other's default) + 4 = 33 > 32; 21 + 2 + 4 = 27
+      const cg = cgroup(21, 32); // 21 + 8 (other's default) + 4 = 33 > 32; 21 + 3 + 4 = 28
       const ran = join(dir, "ran");
       const r = run(dir, cg, "other", "touch", ran);
       expect(r.exitCode).toBe(75);
@@ -774,7 +775,7 @@ describe("R952 (R953) admission by memory", () => {
       expect(r.stderr.toString()).toContain("REFUSED (used + peak + reserve = 33.0 > 32.0)");
       const g = run(dir, cg, "--peak", "gate", "other", "sh", "-c", `cat "${dir}/heavy.1.class"`);
       expect(g.exitCode).toBe(0);
-      expect(g.stdout.toString()).toMatch(/^other \d+ 2\n$/);
+      expect(g.stdout.toString()).toMatch(/^other \d+ 3\n$/); // PR-426: the gate preset is 3
     });
     test("a held slot's declared peak counts while its job is young; two capped serve runs fit", async () => {
       const dir = fresh();
@@ -813,7 +814,7 @@ describe("R952 (R953) admission by memory", () => {
         writeFileSync(join(dir, `heavy.${n}.class`), `baseapp ${pid} 2\n`); // small declared peaks
       }
       const ran = join(dir, "ran");
-      const fits = run(dir, cgroup(5, 32), "--peak", "gate", "baseapp", "touch", ran); // 5+2+4, 6+2+4
+      const fits = run(dir, cgroup(5, 32), "--peak", "gate", "baseapp", "touch", ran); // 5+3+4, 6+3+4
       expect(fits.exitCode).toBe(0);
       expect(existsSync(ran)).toBe(true);
       // the same slots on a host with no cgroup limit: the count rule (two jobs with BaseApp) refuses
@@ -846,7 +847,7 @@ describe("R952 (R953) admission by memory", () => {
           dir,
           cgroup(3, 32),
           "--peak",
-          "gate",
+          "2", // PR-426: a 2 GiB (small) job by number; the gate preset is 3, over the allowance
           "other",
           "sh",
           "-c",
@@ -870,7 +871,7 @@ describe("R952 (R953) admission by memory", () => {
       test("used memory does not fit: refused, no ledger line", async () => {
         const dir = fresh();
         await holdDeclared(dir, 1, 27);
-        const g = run(dir, cgroup(27, 32), "--peak", "gate", "other", "true"); // 27 + 2 + 4 = 33
+        const g = run(dir, cgroup(27, 32), "--peak", "2", "other", "true"); // 27 + 2 + 4 = 33
         expect(g.exitCode).toBe(75);
         expect(ledger(dir)).toEqual([]);
       });
@@ -879,7 +880,7 @@ describe("R952 (R953) admission by memory", () => {
         const dir = fresh();
         await holdDeclared(dir, 1, 20);
         await hold(dir, 2, "none"); // counted at the larger default, 12: 20 + 12 + 2 + 4 = 38
-        expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "true").exitCode).toBe(75);
+        expect(run(dir, cgroup(3, 32), "--peak", "2", "other", "true").exitCode).toBe(75);
         expect(ledger(dir)).toEqual([]);
       });
 
@@ -888,10 +889,10 @@ describe("R952 (R953) admission by memory", () => {
         await holdDeclared(dir, 1, 1, true);
         await holdDeclared(dir, 2, 1, true);
         await holdDeclared(dir, 3, 27); // 27 + 1 + 1 + 2 + 4 = 35 > 32; used 3 + 2 + 4 fits
-        expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "true").exitCode).toBe(75);
+        expect(run(dir, cgroup(3, 32), "--peak", "2", "other", "true").exitCode).toBe(75);
         const pid2 = holders.at(-2);
         writeFileSync(join(dir, "heavy.2.class"), `other ${pid2} 1\n`); // now only one small job held
-        expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "true").exitCode).toBe(0);
+        expect(run(dir, cgroup(3, 32), "--peak", "2", "other", "true").exitCode).toBe(0);
         expect(ledger(dir)).toHaveLength(1);
       });
 
@@ -906,7 +907,7 @@ describe("R952 (R953) admission by memory", () => {
 
       test("every admitted job leaves a declared-vs-measured line in heavy-peaks.tsv", () => {
         const dir = fresh();
-        expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "sleep", "0.5").exitCode).toBe(0);
+        expect(run(dir, cgroup(3, 32), "--peak", "2", "other", "sleep", "0.5").exitCode).toBe(0);
         const lines = readFileSync(join(dir, "heavy-peaks.tsv"), "utf8").trim().split("\n");
         expect(lines).toHaveLength(1);
         const f = lines[0]?.split("\t") ?? [];
@@ -923,7 +924,7 @@ describe("R952 (R953) admission by memory", () => {
         // becomes bun (it removed the class file and the ticket).
         const dir = fresh();
         for (let i = 0; i < 4; i++)
-          expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "true").exitCode).toBe(0);
+          expect(run(dir, cgroup(3, 32), "--peak", "2", "other", "true").exitCode).toBe(0);
         const lines = readFileSync(join(dir, "heavy-peaks.tsv"), "utf8").trim().split("\n");
         expect(lines).toHaveLength(4);
         for (const l of lines) {
@@ -943,7 +944,7 @@ describe("R952 (R953) admission by memory", () => {
             dir,
             cgroup(3, 32),
             "--peak",
-            "gate",
+            "2",
             "other",
             "sh",
             "-c",
@@ -1066,6 +1067,13 @@ describe("PR-179 (R992 ruling) partial counting of held slots", () => {
     usedBytes: usedGiB * GIB,
     maxBytes: 32 * GIB,
     source: "/fake/memory.max",
+  });
+  // PR-426 (R992 revisit, kraken's ruling for the owner): v3 gates measured up to 3.06 GiB (PR-424: 21 of 124 above 2).
+  // Red: either definition back at 2, or the two apart.
+  test("gate declares 3 GiB, in heavy-slot.sh's --peak case and in PEAK_GIB alike", () => {
+    expect(parsePeak("gate")).toBe(3);
+    const sh = readFileSync(join(import.meta.dir, "heavy-slot.sh"), "utf8");
+    expect(sh.match(/^\s*gate\) peak=(\d+(?:\.\d+)?) ;;/m)?.[1]).toBe(String(PEAK_GIB.gate));
   });
   test("build declares 3 GiB, over the small-job allowance", () => {
     expect(parsePeak("build")).toBe(3);
