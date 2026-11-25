@@ -31,10 +31,12 @@ import {
   GATED_BUILDS_FILE,
   GATE_STEPS,
   GATE_WORKTREE,
+  GatedBuildsReaderTestsError,
   HEAVY_JOB,
   type Outcome,
   type PublishResult,
   ROOT,
+  ReaderTestsRedError,
   type UpdateDeps,
   type UpdateHandlers,
   V3_CDO_DEFAULT,
@@ -2213,6 +2215,25 @@ linuxOnly("R814: the two tracks", () => {
     expect(await readFile(join(root, "gated-builds.published"), "utf8")).toBe("edge-c893e3633\n");
   });
 
+  test("R1208: red reader tests are logged as a REFUSAL a person decides, never as a retry", async () => {
+    await setupPinned();
+    const { deps, seen } = edgeOf({
+      ...pinnedPass,
+      tags: ["edge"],
+      publish: async (e) => {
+        throw new GatedBuildsReaderTestsError(
+          e.map((x) => x.id),
+          "(fail) PR-256 rule 7 > pin",
+        );
+      },
+    });
+    await dailyOnce(deps);
+    const log = seen.logs.join("\n");
+    expect(log).toContain("gated-builds rows REFUSED: gated-builds publish refused (R1208)");
+    expect(log).toContain("(fail) PR-256 rule 7 > pin; a person decides");
+    expect(log).not.toContain("next run retries");
+  });
+
   test("release candidates count the ledger too: a passed release is not re-gated", async () => {
     await setupPinned();
     const first = fake({ ...pinnedPass, tags: TAGS });
@@ -2452,6 +2473,8 @@ linuxOnly("PR-255: --main", () => {
 describe("R814: publishToMaster, on real git repositories", () => {
   /** Master's hand pins, as `--pin-digests` reports them. */
   const digestsOf = async () => ({ "root-pin": sha("d") });
+  /** R1208: master's reader tests, green. */
+  const readerTestsOf = async () => {};
   const row = (id: string, from = "root-pin") => ({
     id,
     track: "edge",
@@ -2503,7 +2526,7 @@ describe("R814: publishToMaster, on real git repositories", () => {
   test("adds the row in one [skip ci] commit touching only the file; a second run adds nothing", async () => {
     const { clone, worktree } = await repos();
     const e = row("b") as unknown as GatedBuildEntry;
-    const o = { repo: clone, worktree, digestsOf };
+    const o = { repo: clone, worktree, digestsOf, readerTestsOf };
     expect(await publishToMaster([e], o)).toEqual({ published: ["b"], refused: [] });
     expect(onMaster(clone)).toEqual(["b"]);
     expect(git(clone, "log", "-1", "--format=%s", "origin/master")).toContain("[skip ci]");
@@ -2518,7 +2541,12 @@ describe("R814: publishToMaster, on real git repositories", () => {
     const { clone, worktree } = await repos();
     const bad = row("a", "unmerged-pin") as unknown as GatedBuildEntry;
     const good = row("b") as unknown as GatedBuildEntry;
-    const r = await publishToMaster([bad, good], { repo: clone, worktree, digestsOf });
+    const r = await publishToMaster([bad, good], {
+      repo: clone,
+      worktree,
+      digestsOf,
+      readerTestsOf,
+    });
     expect(r.published).toEqual(["b"]);
     expect(r.refused.map((x) => x.id)).toEqual(["a"]);
     expect(r.refused[0]?.why).toContain("is no hand pin");
@@ -2532,7 +2560,12 @@ describe("R814: publishToMaster, on real git repositories", () => {
       readingsDigest: sha("an older pin"),
     } as unknown as GatedBuildEntry;
     const good = row("b") as unknown as GatedBuildEntry;
-    const r = await publishToMaster([stale, good], { repo: clone, worktree, digestsOf });
+    const r = await publishToMaster([stale, good], {
+      repo: clone,
+      worktree,
+      digestsOf,
+      readerTestsOf,
+    });
     expect(r.published).toEqual(["b"]);
     expect(r.refused[0]?.why).toContain("is not the pin a was gated by");
     expect(onMaster(clone)).toEqual(["b"]);
@@ -2567,6 +2600,7 @@ describe("R814: publishToMaster, on real git repositories", () => {
       repo: clone,
       worktree,
       digestsOf,
+      readerTestsOf,
     });
     expect(r.published).toEqual(["b"]);
     expect(onMaster(clone)).toEqual(["b"]);
@@ -2581,6 +2615,7 @@ describe("R814: publishToMaster, on real git repositories", () => {
         repo: clone,
         worktree,
         digestsOf,
+        readerTestsOf,
       }),
     ).rejects.toThrow();
     expect((await readFile(count, "utf8")).trim()).toBe("3");
@@ -2593,6 +2628,7 @@ describe("R814: publishToMaster, on real git repositories", () => {
       repo: clone,
       worktree,
       digestsOf,
+      readerTestsOf,
     });
     const other = join(top, "other");
     git(top, "clone", "-q", join(top, "origin.git"), other);
@@ -2607,10 +2643,82 @@ describe("R814: publishToMaster, on real git repositories", () => {
       repo: clone,
       worktree,
       digestsOf,
+      readerTestsOf,
     });
     git(clone, "fetch", "-q", "origin");
     expect(git(clone, "merge-base", "--is-ancestor", laneHead, "origin/master")).toBe("");
     expect(onMaster(clone)).toEqual(["b", "c"]);
+  });
+
+  test("R1208: the reader tests run on the worktree WITH the new row, before any commit", async () => {
+    const { clone, worktree } = await repos();
+    const seen: { ids: string[]; head: string }[] = [];
+    await publishToMaster([row("b") as unknown as GatedBuildEntry], {
+      repo: clone,
+      worktree,
+      digestsOf,
+      readerTestsOf: async (w) => {
+        const ids = JSON.parse(await readFile(join(w, GATED_BUILDS_FILE), "utf8")).map(
+          (e: { id: string }) => e.id,
+        );
+        seen.push({ ids, head: git(w, "log", "-1", "--format=%s") });
+      },
+    });
+    expect(seen).toEqual([{ ids: ["b"], head: "init" }]);
+    expect(onMaster(clone)).toEqual(["b"]);
+  });
+
+  test("R1208: a red reader test refuses by name; nothing is committed or pushed, and no retry runs", async () => {
+    const { clone, worktree } = await repos();
+    let runs = 0;
+    const planted = row("planted") as unknown as GatedBuildEntry;
+    const err = await publishToMaster([planted], {
+      repo: clone,
+      worktree,
+      digestsOf,
+      readerTestsOf: async () => {
+        runs++;
+        throw new ReaderTestsRedError("(fail) PR-256 rule 7 > pr256 pin");
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GatedBuildsReaderTestsError);
+    expect(String(err)).toContain("row(s) planted");
+    expect(String(err)).toContain("(fail) PR-256 rule 7 > pr256 pin");
+    expect(runs).toBe(1);
+    expect(onMaster(clone)).toEqual([]);
+    expect(git(worktree, "log", "-1", "--format=%s")).toBe("init");
+  });
+
+  test("R1208: a setup failure (not a red test) propagates as itself, never blamed on the row; nothing pushed", async () => {
+    const { clone, worktree } = await repos();
+    const err = await publishToMaster([row("b") as unknown as GatedBuildEntry], {
+      repo: clone,
+      worktree,
+      digestsOf,
+      readerTestsOf: async () => {
+        throw new Error("bun scripts/build-native-parser.ts: exit 1: LLVM_BIN not set");
+      },
+    }).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(GatedBuildsReaderTestsError);
+    expect(String(err)).toBe("Error: bun scripts/build-native-parser.ts: exit 1: LLVM_BIN not set");
+    expect(onMaster(clone)).toEqual([]);
+  });
+
+  test("R1208: no reader run when every row is already on master (nothing to commit)", async () => {
+    const { clone, worktree } = await repos();
+    const e = row("b") as unknown as GatedBuildEntry;
+    await publishToMaster([e], { repo: clone, worktree, digestsOf, readerTestsOf });
+    let runs = 0;
+    const r = await publishToMaster([e], {
+      repo: clone,
+      worktree,
+      digestsOf,
+      readerTestsOf: async () => {
+        runs++;
+      },
+    });
+    expect(r).toEqual({ published: ["b"], refused: [] });
+    expect(runs).toBe(0);
   });
 });
 

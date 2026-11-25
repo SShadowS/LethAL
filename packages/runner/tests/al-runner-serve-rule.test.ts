@@ -19,8 +19,9 @@ describe("PR-244: keepNearMiss", () => {
   // widening of that entry would accept, so it stays unkept.
   const REWORDED =
     "NotRun: out-of-scope: a page opened without a record whose OnOpenPage, as the runner now explains, left Rec where its view has no row";
+  // PR-411 keeps DO's exact RunRequestPage line, so the near-miss here is an unmeasured variant of it (a tail added).
   const REPORT =
-    "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)";
+    "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned) in another form";
   const CASCADE_TAIL =
     "NotRun: out-of-scope: a test before this one in the codeunit did not pass (SomeInventedTest: failed (Assert.IsTrue failed. invented message) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: An error was expected inside an ASSERTERROR statement.";
 
@@ -107,7 +108,8 @@ describe("PR-244: keepNearMiss", () => {
   });
   test("the Report.RunRequestPage variant is a near-miss of its entry and a known variant", () => {
     const nm = keepNearMiss(REPORT);
-    expect(nm?.entry).toBe("report-parameters-no-xml-declaration");
+    // PR-411: the nearest entry is now the row that keeps DO's exact RunRequestPage line
+    expect(nm?.entry).toBe("run-request-page-parameters-no-xml-declaration");
     expect(knownNearMissVariant(nm?.entry ?? "", REPORT)).toBeDefined();
   });
   test("the ASSERTERROR cascade tail is a near-miss of cascade-manual-binding and a known variant", () => {

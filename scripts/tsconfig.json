@@ -214,6 +214,8 @@
     "fixtures/r393/late-write.fixture.ts",
     "gate-worktree-setup.ts",
     "gate-worktree-setup.test.ts",
+    "gated-builds-readers.test.ts",
+    "gated-builds-readers.ts",
     "generate-schemas.ts",
     "gift-card-refreeze.ts",
     "gift-card-refreeze.test.ts",

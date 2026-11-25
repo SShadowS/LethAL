@@ -67,6 +67,7 @@ import {
   CARRY_WALK_ENV,
   REACH_PRUNE_ENV,
   V3_SINGLEINSTANCE_NOTE,
+  readCarrySkip,
 } from "./al-runner-v3-backend";
 import {
   type AppJsonPathChange,
@@ -7002,6 +7003,8 @@ async function runSessionBody(
   const reachPrune = cfg.reachPrune === false ? false : readReachPrune(process.env, cfg.backend);
   // PR-340: `LETHAL_V3_CARRY_WALK=off|on` (default on), refused by name when it is anything else.
   const carryWalk = readCarryWalk(process.env);
+  // PR-410: `LETHAL_V3_CARRY_SKIP=off` (only "off" or unset), refused by name when it is anything else.
+  const carrySkip = readCarrySkip(process.env);
   reachTrace?.start();
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
@@ -7698,6 +7701,7 @@ async function runSessionBody(
       ...(cutTail ? { v3RefusedCutTail: true as const } : {}), // PR-297
       ...(prune ? { v3ReachPrune: true as const } : {}),
       ...(carryApplies && !carryOn ? { v3CarryWalkOff: true as const } : {}),
+      ...(carryApplies && !carrySkip ? { v3CarrySkipOff: true as const } : {}), // PR-410
       ...(resolvedOperators === undefined ? { defaultOperators: 2 as const } : {}),
     });
   const configFingerprint = fingerprintWith(reachPrune);
@@ -7710,6 +7714,7 @@ async function runSessionBody(
           ...(cutTailOn ? { v3RefusedCutTail: true as const } : {}),
           ...(reachPrune ? { v3ReachPrune: true as const } : {}),
           ...(carryApplies && !carryWalk ? { v3CarryWalkOff: true as const } : {}),
+          ...(carryApplies && !carrySkip ? { v3CarrySkipOff: true as const } : {}), // PR-410
         })
       : undefined;
   const resolvedResume = resolveResume(

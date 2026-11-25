@@ -580,6 +580,21 @@
       "branch": "recordref-not-open #1 SetLoadFields",
       "line": "NotRun: out-of-scope: RecordRef.SetLoadFields on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
       "from": "R-998/probe/out/oneshot.json"
+    },
+    {
+      "branch": "company-table-read-named #1 FindFirst",
+      "line": "NotRun: out-of-scope: FindFirst on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)",
+      "from": "PR-421/probe/run.json"
+    },
+    {
+      "branch": "company-table-read-named #1 IsEmpty",
+      "line": "NotRun: out-of-scope: IsEmpty on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)",
+      "from": "PR-421/probe/run.json"
+    },
+    {
+      "branch": "evaluate-decimal-comparison #1 >1000",
+      "line": "NotRun: out-of-scope: Evaluate of `>1000` into Decimal (form not pinned by the corpus)",
+      "from": "PR-421/probe/run.json"
     }
   ]
 }

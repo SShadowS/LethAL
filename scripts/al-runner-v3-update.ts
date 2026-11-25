@@ -119,6 +119,7 @@ import {
   parsePs,
   slotHeld,
 } from "./corpus-snapshot";
+import { gatedBuildsReaderTests } from "./gated-builds-readers";
 import {
   MEMORY_RESERVE_GIB,
   PEAK_GIB,
@@ -803,7 +804,10 @@ export async function publishPending(deps: UpdateDeps): Promise<void> {
     for (const x of r.refused)
       await deps.log(`${deps.now()} ${x.id}: gated-builds row REFUSED: ${x.why}; a person decides`);
   } catch (err) {
-    await deps.log(`${deps.now()} gated-builds publish failed, next run retries: ${String(err)}`);
+    if (err instanceof GatedBuildsReaderTestsError)
+      await deps.log(`${deps.now()} gated-builds rows REFUSED: ${err.message}; a person decides`);
+    else
+      await deps.log(`${deps.now()} gated-builds publish failed, next run retries: ${String(err)}`);
   }
 }
 
@@ -2220,7 +2224,11 @@ export function realDeps(
       return s;
     },
     publishEntries: (entries) =>
-      publishToMaster(entries, { repo: dirname(import.meta.dir), worktree: PIN_WORKTREE }),
+      publishToMaster(entries, {
+        repo: dirname(import.meta.dir),
+        worktree: PIN_WORKTREE,
+        readerTestsOf: masterReaderTests,
+      }),
     listedBuilds: gatedBuilds,
     // R886: al-runner ships the sidecar as source only (tools/dotnet-sidecar), not in any release
     // or edge asset. Fetch that folder at the build's commit, publish it with the SDK, and run
@@ -2296,11 +2304,62 @@ async function masterPinDigests(worktree: string): Promise<Record<string, string
   return JSON.parse(out) as Record<string, string>;
 }
 
+/** R1208: the unit tests that read the gated-builds file failed on the new rows, so nothing was pushed. */
+export class GatedBuildsReaderTestsError extends Error {
+  constructor(ids: readonly string[], cause: string) {
+    super(
+      `gated-builds publish refused (R1208): the unit tests that read ${GATED_BUILDS_FILE} fail with row(s) ${ids.join(", ")}; ` +
+        `a row that changes what a test pins goes to master through a branch with the pin updated. ${cause}`,
+    );
+    this.name = "GatedBuildsReaderTestsError";
+  }
+}
+
+/**
+ * R1208: the reader tests ran and at least one is red. Only this one is blamed on the rows; anything else `readerTestsOf`
+ * throws (the parser build, a missing reader module) is the setup's and propagates as itself.
+ */
+export class ReaderTestsRedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReaderTestsRedError";
+  }
+}
+
+/** R1208: verify.ts's per-test timeout under io pressure; this run shares the box with the daily update's heavy jobs. */
+const READER_TEST_TIMEOUT_MS = 15000;
+
+/**
+ * R1208: runs, in the publish worktree with the new rows written, the test files `gatedBuildsReaderTests` finds there
+ * (this checkout's rule on master's files; the daily update runs from a checkout of master). The native parser is built
+ * first, as some of them parse. A red test throws `ReaderTestsRedError`; a setup failure throws as itself.
+ */
+export async function masterReaderTests(worktree: string): Promise<void> {
+  const files = gatedBuildsReaderTests(worktree).map((f) => `./${f}`);
+  await runToLog(["bun", "scripts/build-native-parser.ts"], {}, worktree);
+  const log = `${worktree}.reader-tests.log`;
+  try {
+    await runToLog(
+      ["bun", "test", "--timeout", String(READER_TEST_TIMEOUT_MS), ...files],
+      { CI: "true" },
+      worktree,
+      log,
+    );
+  } catch (err) {
+    const text = await readFile(log, "utf8").catch(() => "");
+    const failed = text.split("\n").filter((l) => l.startsWith("(fail)"));
+    throw new ReaderTestsRedError(
+      `${failed.length > 0 ? failed.join("; ") : err instanceof Error ? err.message : String(err)} (log ${log})`,
+    );
+  }
+}
+
 /**
  * R814: adds `entries` to origin/master's gated-builds file, from its own worktree, and pushes. It
  * checks each row against MASTER's pins, not this checkout's: a row whose hand pin is unmerged, or
  * differs on master, is refused alone. The commit touches that one file or nothing. Never forced: a rejected push refetches
- * and tries again, twice.
+ * and tries again, twice. R1208: before the commit, the unit tests that read the file run on it (`readerTestsOf`); a red one
+ * throws `GatedBuildsReaderTestsError` and nothing is committed or pushed.
  */
 export async function publishToMaster(
   entries: readonly GatedBuildEntry[],
@@ -2309,6 +2368,11 @@ export async function publishToMaster(
     readonly worktree: string;
     /** Each hand pin's digest as master has it (tests fake it; master's own script computes it). */
     readonly digestsOf?: (worktree: string) => Promise<Readonly<Record<string, string>>>;
+    /**
+     * R1208: runs the reader tests in the worktree; `ReaderTestsRedError` when one is red, anything else for a setup
+     * failure. Required, so no caller skips it by omission.
+     */
+    readonly readerTestsOf: (worktree: string) => Promise<void>;
   },
 ): Promise<PublishResult> {
   const git = (...a: string[]) => runToLog(["git", "-C", o.worktree, ...a]);
@@ -2346,6 +2410,15 @@ export async function publishToMaster(
     const touched = (await git("diff", "--cached", "--name-only")).trim();
     if (touched !== GATED_BUILDS_FILE)
       throw new Error(`gated-builds publish refused: the commit would touch ${touched}`);
+    try {
+      await o.readerTestsOf(o.worktree);
+    } catch (err) {
+      if (!(err instanceof ReaderTestsRedError)) throw err;
+      throw new GatedBuildsReaderTestsError(
+        fresh.map((e) => e.id),
+        err.message,
+      );
+    }
     await git(
       "commit",
       "-q",
