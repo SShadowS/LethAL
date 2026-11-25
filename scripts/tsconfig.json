@@ -85,6 +85,7 @@
     "measure-gui-guarded.ts",
     "measure-testpage-exclusive.ts",
     "pr60-gate-memory.test.ts",
+    "pr425-heavy-events.test.ts",
     "probe-5cb1.ts",
     "probe-grammar-corpus.ts",
     "probe-grammar-crosscheck.ts",
