@@ -1227,7 +1227,7 @@ that ordering is the priority.
 - **R1217** · On full DO, the main session's whole-codeunit daemon baseline runs all its requests on ONE lane (c5: 104 requests, 1,403 s, in a 1,628 s phase, 6.8% of the run): spreading it over the lanes is bounded at about 4-5% of the run · [R1217.md](docs/roadmap/R1217.md) · open
 - **R1218** · On full DO, LethAL's own per-request time is about 4.8% of the mutants phase's lane-seconds (request wall outside al-runner 2.7%, lane time in no request 2.1%), not yet decomposed · [R1218.md](docs/roadmap/R1218.md) · open
 - **R1219** · On full DO, about 43% of the mutants phase's lane-seconds is a fixed al-runner cost per serve entry (~260-270 ms outside every test row), not yet attributable: needs a timing split inside `tests` from al-runner · [R1219.md](docs/roadmap/R1219.md) · open — waits on an al-runner timing split (asked via the orchestrator, PR-436's alrunner-ask.md)
-- **R1220** · On full DO, LethAL sends about 124k-157k serve entries where one per (mutant, covering codeunit) is about 106k: each extra entry pays al-runner's fixed per-entry cost and its rows, about 9-27% of the mutants phase · [R1220.md](docs/roadmap/R1220.md) · open — cause breakdown is coord PR-438
+- **R1220** · On full DO, LethAL sends about 124k-157k serve entries where one per (mutant, covering codeunit) is about 106k: each extra entry pays al-runner's fixed per-entry cost and its rows, about 9-27% of the mutants phase · [R1220.md](docs/roadmap/R1220.md) · open — broken down (PR-438): echo entries ~10%, kill pairs ~8-11%, other re-sends ~3%; nothing LethAL-only is…
 
 ---
 
