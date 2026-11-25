@@ -354,3 +354,18 @@ of the run's wall, from c5's 6.8%. It is read from TIMING and the phase events, 
    - A lane sample running beside the loop whose skip becomes known only when it settles leaves its lane needing a
      sample. That need is met by a later counting sample on the lane, or the daemon baseline drops by name
      (`baseline-lane-unsampled:<k>`), in the safe direction.
+
+## Amendment 2 (2026-11-25, from build review 1, `/coord/handoff/PR-437/build-review-1.md`; no outcome bar changes)
+1. **"A lane's first answer" (change 6, C1) means every position answered by the lane's FIRST REQUEST,** a whole batch
+   included, not only its first codeunit.
+   - Inside one batch request from a fresh daemon, the second codeunit is not a warm answer.
+   - So a lane's sample is taken from its second request or later. A lane whose walked answers all came from its first
+     request needs no sample: a fresh daemon's first answer is today's index-0 standard.
+   - DBM-W is unchanged: lane 1 sends one request, so `laneSampled` = 0.
+2. **Before the first join (C2), the loop's in-place one-shots count too.** While one runs, lane 0's worker sends only
+   when `roomForRequest` admits it, and otherwise waits for that one-shot. Today an in-place one-shot blocks the only
+   requester.
+3. **R955 per position.** The loop checks `spent()` at the top of each position and stops there. That stops earlier than
+   today inside a batch, which is the safe direction.
+4. **A recorded worker throw is rethrown only after the in-flight samples are settled,** as C6 does, so an earlier drop
+   wins.
