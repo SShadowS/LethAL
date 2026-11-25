@@ -628,7 +628,7 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
- * `refusal-row-shape` since r9, R639). Every other fact of the 52 is a contract or capability fact and
+ * `refusal-row-shape` since r9, R639). Every other fact of the 53 is a contract or capability fact and
  * must read `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
