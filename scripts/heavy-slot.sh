@@ -227,6 +227,10 @@ ticket="$(printf '%012d' "$seq").$$"
 : >"$qdir/$ticket"
 exec 8>&-
 echo "heavy-slot: queued as ticket $seq ($qdir)" >&2
+# R1211 (PR-425): the queue event, in the guard's events ledger (heavy-slot-class.ts EVENTS_LEDGER, the same columns; a
+# queue event has no readings). Admission-neutral: a failed write is ignored.
+{ printf '%s\tqueue\tticket %s\t%s\t%s\t%s\t-\t-\t-\t-\t-\n' "$(date -u +%FT%T.%3NZ)" "$seq" "$cls" "$peak" "$$" \
+  >>"$dir/heavy-events.tsv"; } 2>/dev/null || true
 while :; do
   h="$(head_ticket)"
   # A refused waiter retries out of turn, except past a STARVED head (R991): that head waits for the held

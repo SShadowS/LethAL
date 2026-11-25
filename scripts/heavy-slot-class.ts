@@ -106,6 +106,45 @@ export const SMALL_JOBS_MAX = 2;
 /** R992: the ledger (in the lock folder) of admissions that passed only by the small-job allowance:
  *  time, slot, class, peak GiB, used GiB, held declared peaks GiB, max GiB, the heavy-slot.sh pid. */
 export const SMALL_ADMITS_LEDGER = "heavy-small-admits.tsv";
+/**
+ * R1211 (PR-425): one line per admission event, admission-neutral (a failed write never changes a verdict): `queue` (heavy-slot.sh
+ * takes a --wait ticket) and the guard's `admit`, `small`, `refuse`, `never`, and `count-admit` / `count-refuse` (no cgroup
+ * limit). Columns: UTC, event, who (heavy.<n> or ticket <seq>), class, declared peak GiB, the job's pid (its heavy-slot.sh),
+ * used GiB, used + peak + reserve, the held slots' counted peaks, held + peak + reserve, max GiB. A reading the event does not
+ * have is `-`. A waiter's wait is its `queue` line to its `admit` line (same pid); R992's symptom is a `refuse` whose
+ * used + peak + reserve is under max (memory had room, the declared sum said no).
+ */
+export const EVENTS_LEDGER = "heavy-events.tsv";
+/** R1211: the readings a guard event carries (bytes from the cgroup sample, GiB for peaks). */
+export function eventLine(
+  at: Date,
+  event: string,
+  who: string,
+  cls: string,
+  peakGiB: number,
+  pid: string,
+  sample: { readonly usedBytes: number; readonly maxBytes?: number } | undefined,
+  heldPeaksGiB: readonly number[] | undefined,
+  reserveGiB: number,
+): string {
+  const f = (n: number) => n.toFixed(2);
+  const used = sample === undefined ? undefined : sample.usedBytes / 2 ** 30;
+  const held = heldPeaksGiB?.reduce((s, p) => s + p, 0);
+  const max = sample?.maxBytes === undefined ? undefined : sample.maxBytes / 2 ** 30;
+  return `${[
+    at.toISOString(),
+    event,
+    who,
+    cls,
+    peakGiB,
+    pid,
+    used === undefined ? "-" : f(used),
+    used === undefined ? "-" : f(used + peakGiB + reserveGiB),
+    held === undefined ? "-" : f(held),
+    held === undefined ? "-" : f(held + peakGiB + reserveGiB),
+    max === undefined ? "-" : f(max),
+  ].join("\t")}\n`;
+}
 /** R992: the ledger (in the lock folder) of every admitted heavy job's declared and measured peak. */
 export const PEAKS_LEDGER = "heavy-peaks.tsv";
 
