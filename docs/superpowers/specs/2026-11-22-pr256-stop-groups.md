@@ -263,3 +263,47 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
   - the fork's measurement predicts 77-80% (a 20-23% cut);
   - reported with load per arm, never as a bar: the default-on ruling reads it.
 
+## Amendment 7 (2026-11-25, coord PR-452; the orchestrator's ruling after the spec-adversary, `/coord/handoff/PR-452/spec-review-a4-6.md`)
+- **Why amendments 3 and 4's "P before F" is replaced:** it was ill-defined.
+  - R1203's order was al-runner's run order inside the codeunit, not LethAL's walk. By B's walk, M4774, M4789 and M4796
+    have P AFTER F.
+  - M4775 and M4791 moved because R197's first sort key ("already killed in this procedure") put P first after the
+    preceding mutant's kill. That is history order, not the TestPage cascade.
+  - So no script could apply the old rule, and a real history-order move whose F does not name P would have been a false
+    BLOCK.
+- **The rule (replaces amendment 4's (i)-(iii), and amendment 1 change 3's ordering test):** a `killingTest` move between
+  two runs is allowed only when ALL of these hold:
+  1. **the verdict is equal** (both `killed`).
+     - It is not independent evidence: when P's failure is an al-runner defect, both arms are wrong together. Only (ii)
+       carries the weight.
+  2. **(ii), on B's killer P, defined mechanically:**
+     - P alone (`runSelectedOnly`, the entry's `test` naming P exactly), on a FRESH daemon, under the mutant, twice;
+     - P is the ONLY row each time, with status `fail` (not `notRun`), matching neither `V3_TIMEOUT_MESSAGE` nor
+       `STOP_SKIP_TEXT`, and the SAME message both times;
+     - P alone under NONE: `pass`.
+  3. **one of two forms on A's killer F, and the form is recorded per move:**
+     - **(a) cascade:** F's `[v3-codeunit-state-possible]` note names P as an earlier covering test with outcome `fail` in
+       the same v3 codeunit run;
+     - **(b) both real:** F alone under the mutant (the same mechanical check as (ii)) also fails on a fresh daemon. Both
+       are killers, and the move is only history order.
+  - Anything else is a BLOCK.
+- **The six (`/coord/handoff/PR-452/alone/RESULT.md`): all six allowed.**
+  - **(a):** M4774, M4789, M4791 and M4796. F passes alone under the mutant, and its note names P as `fail`.
+  - **(b):** M4775 and M12932. F fails alone under the mutant on its own message.
+  - **(ii)** holds for all six. These checks ran on edge-e5176a9fd with PR-190's workspace: they SUPPORT the moves measured
+    on main-bf3a3e863. B1's own session showed P's M/NONE/M rows on the moves' build too, on a warm daemon.
+- **The three additions (ruled to keep):**
+  - **The stop must actually fire.**
+    - Each B arm of the series, and each forced gate leg with a multi-test entry and a kill, must show `skipped > 0` and
+      `reruns > 0` in PR-256's counts line.
+    - `heldForRed` is reported against the mutant requests sent.
+    - A leg or arm with `skipped == 0` reads "not exercised", never "pass".
+  - **The (ii)/(b) kit is bound to each arm's own build:**
+    - its workspace (the arm's `active/`), binary and mutant ids are passed as arguments;
+    - each mutant's `mutatedText` in the arm's report is checked against the workspace manifest before sending;
+    - any mismatch stops the kit.
+  - **The fact is required:** in the series, a move of form (a) counts only when the gate record of the arm's build reads
+    `stop-groups-earlier-killer: matches`. Form (b) does not depend on the cascade.
+- **Amendment 5's flag-on gates are judged by this rule.** Prediction 4 reads "the stop forced ON (the print) AND, per leg
+  with a multi-test entry and a kill, `skipped > 0`".
+
