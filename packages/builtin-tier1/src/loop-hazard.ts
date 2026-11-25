@@ -30,6 +30,7 @@ import {
   tableObjectOfRef,
   triggerLocalNames,
 } from "@lethal/engine";
+import { findOperatorToken } from "./mutate-helpers";
 
 /**
  * WHY THIS EXISTS (R196). Four operators can turn a terminating loop into a non-terminating one by
@@ -1017,6 +1018,8 @@ export function openItemHangRefuses(
     r896InvisibleProgress(node, ctx) ||
     r896TestFieldOnlyExit(node, op) ||
     deletedCallHangs(node, ctx) ||
+    r429RestoreDeleted(node, ctx, op) ||
+    r429CursorTestHangs(node, ctx, op) ||
     assignmentCallHangs(node, ctx, op) ||
     toggledExitBlankHangs(node, ctx, op) ||
     removedBoundHangs(node, ctx, op) ||
@@ -1411,7 +1414,8 @@ function emptiedRefusedBlockHangs(node: ALSyntaxNode, ctx: SemanticContext): boo
         // emptying the block removes the assignment as `remove-assignment` would
         assignmentCallHangs(n, ctx, "lethal.remove-assignment");
     } else if (n.kind === ALNodeKind.procedure_call && isStatementSlot(n)) {
-      hangs = callIsProgress(n, ctx);
+      // PR-429 rule 2: a move held by this same block goes with it, so only an outside one counts
+      hangs = callIsProgress(n, ctx) || r429Restore(n, ctx, node);
     }
   });
   return hangs;
@@ -2572,6 +2576,160 @@ export function exitEffect(
 function deletedCallHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   return (
     node.kind === ALNodeKind.procedure_call && isStatementSlot(node) && callIsProgress(node, ctx)
+  );
+}
+
+const R429_RESTORE: ReadonlySet<string> = new Set([
+  "get",
+  "getbysystemid",
+  "find",
+  "findfirst",
+  "findlast",
+  "findset",
+  "setposition",
+  "gotorecord",
+]);
+/** What moves a record's cursor away: the restoring calls and R896 P1b's set. A field write is not. */
+const R429_MOVES: ReadonlySet<string> = new Set([
+  ...R429_RESTORE,
+  "copy",
+  "gettable",
+  "open",
+  "transferfields",
+]);
+
+/** The receiver key (`""` for the implicit record) of a call, or null. */
+function r429Recv(call: ALSyntaxNode, c: R531Call, ctx: SemanticContext): string | null {
+  return c.recv ?? (r531Implicit(call, ctx) ? "" : null);
+}
+
+/**
+ * PR-429: a `Next` call that walks a record: `Next()`, `Next(1)`, `Next(-1)`. `ends` are the literals
+ * that mean "at the end" for that form (0 always; 1 for `Next()`/`Next(1)`; -1 for `Next(-1)`).
+ */
+function r429Next(
+  call: ALSyntaxNode,
+  ctx: SemanticContext,
+): { recv: string; ends: readonly string[] } | null {
+  if (!r696IsCall(call)) return null;
+  const c = r531Call(call);
+  if (c === null || c.method !== "next" || c.uncertain || c.args.length > 1) return null;
+  const arg = c.args[0]?.text.trim();
+  const ends = arg === undefined || arg === "1" ? ["0", "1"] : arg === "-1" ? ["0", "-1"] : null;
+  const recv = r429Recv(call, c, ctx);
+  return ends === null || recv === null ? null : { recv, ends };
+}
+
+/** The records a loop walks: the receivers of the `Next` calls in its condition. */
+function r429LoopRecvs(loop: ALSyntaxNode, ctx: SemanticContext): Set<string> {
+  const out = new Set<string>();
+  for (const p of loopConditionParts(loop))
+    visitAll(p, (n) => {
+      const k = r429Next(n, ctx);
+      if (k !== null) out.add(k.recv);
+    });
+  return out;
+}
+
+/** Is `cmp` `R.Next() = 0` (either order, `=` or `<>`) with the literal that means "at the end"? */
+function r429AtEnd(cmp: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (cmp.rawKind !== "comparison_expression") return false;
+  const sign = cmp.childForFieldName("operator")?.text.trim();
+  const l = cmp.childForFieldName("left");
+  const r = cmp.childForFieldName("right");
+  if ((sign !== "=" && sign !== "<>") || l === null || r === null) return false;
+  const one = (a: ALSyntaxNode, b: ALSyntaxNode): boolean =>
+    r429Next(r572Unparen(a), ctx)?.ends.includes(b.text.trim()) === true;
+  return one(l, r) || one(r, l);
+}
+
+/**
+ * PR-429 rule 1 (R1212): `lethal.negate-conditional` on the loop's own end-of-set test, in the exit
+ * condition C of a loop over R. At the end `Next` returns 0 and does not move, so a flipped test
+ * repeats the last record for as long as the rest of C does not end the loop.
+ *  (a) the comparison itself, `R.Next() = 0`: in a `while` at any span; in a `repeat` only when nested
+ *      (the exact span of C is `loop-truncate`'s: `negate-conditional` cedes it and makes no site);
+ *  (b) a logical expression with such a comparison as a direct operand, only the direction that can
+ *      hang: `or` to `and` in a `repeat`, `and` to `or` in a `while`.
+ */
+function r429CursorTestHangs(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  op: string | undefined,
+): boolean {
+  if (op !== "lethal.negate-conditional") return false;
+  const cmp = node.rawKind === "comparison_expression";
+  if (!cmp && node.rawKind !== "logical_expression") return false;
+  const loop = loopsAround(node).find((l) =>
+    loopConditionParts(l).some(
+      (p) => node.startIndex >= p.startIndex && node.endIndex <= p.endIndex,
+    ),
+  );
+  if (loop === undefined) return false;
+  const repeat = loop.rawKind === "repeat_statement";
+  if (cmp) {
+    const c = conditionOf(loop);
+    return r429AtEnd(node, ctx) && !(repeat && c !== null && samePos(c, node));
+  }
+  // Build review NIT: the operator token, not children[1] (a comment between the operands would sit there).
+  const sign = findOperatorToken(node)?.text.toLowerCase();
+  if (sign !== (repeat ? "or" : "and")) return false;
+  return [node.childForFieldName("left"), node.childForFieldName("right")].some(
+    (o) => o !== null && r429AtEnd(r572Unparen(o), ctx),
+  );
+}
+
+/**
+ * PR-429 rule 2 (R1212): deleting `R.M(...)`, M a cursor re-positioning call, in the body of a loop
+ * over R, with an EARLIER move of R in that body (source order): `R := ...`, `R.Copy/GetTable/Open/
+ * TransferFields`, or another re-positioning call. The call restores the cursor the move took away;
+ * without it every pass starts where the move left it and `Next` never reaches the end. `within`
+ * (an emptied block) hides the moves that block holds: they go with it. Branches are not followed:
+ * a move and a call in different arms are refused although they cannot hang (lost coverage only).
+ */
+function r429Restore(call: ALSyntaxNode, ctx: SemanticContext, within?: ALSyntaxNode): boolean {
+  if (!r696IsCall(call)) return false;
+  const c = r531Call(call);
+  if (c === null || !R429_RESTORE.has(c.method)) return false;
+  const recv = r429Recv(call, c, ctx);
+  if (recv === null) return false;
+  return r896BodyLoops(call).some(({ loop, body }) => {
+    if (!r429LoopRecvs(loop, ctx).has(recv)) return false;
+    let moved = false;
+    visitAll(body, (n) => {
+      if (moved || n.endIndex > call.startIndex) return;
+      if (
+        within !== undefined &&
+        n.startIndex >= within.startIndex &&
+        n.endIndex <= within.endIndex
+      )
+        return;
+      if (n.rawKind === "assignment_statement") {
+        moved = r531Key(n.childForFieldName("left")) === recv;
+      } else if (r696IsCall(n)) {
+        const k = r531Call(n);
+        moved = k !== null && R429_MOVES.has(k.method) && r429Recv(n, k, ctx) === recv;
+      }
+    });
+    return moved;
+  });
+}
+
+/**
+ * PR-429 rule 2 at dispatch: the statement call, under the operator that REMOVES it (`void-method-call`). An operator
+ * that keeps the call (`swap-call-arguments`, Tier 2's `swap-find-direction`) is not refused (build review FIX);
+ * `empty-block` reaches rule 2 through `emptiedRefusedBlockHangs`.
+ */
+function r429RestoreDeleted(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  op: string | undefined,
+): boolean {
+  return (
+    op === "lethal.void-method-call" &&
+    node.kind === ALNodeKind.procedure_call &&
+    isStatementSlot(node) &&
+    r429Restore(node, ctx)
   );
 }
 
