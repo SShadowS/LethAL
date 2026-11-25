@@ -1,76 +1,117 @@
 # PR-442 pre-commitment: leg-C facts that no state crosses serve ENTRIES (what R1221's C1 and the echo drop need)
 
-Status: pre-commitment (coord PR-442, lethal-code, 2026-11-25), before the build. Precedent: PR-342
-(`2026-11-22-pr342-stop-groups-fact.md`), a gate-only fact family. Related: R1221, R1220, PR-441, PR-436.
+Status: pre-commitment r2 (coord PR-442, lethal-code, 2026-11-25), before the build. r2 replaces r1 after the
+spec-adversary (1 BLOCKER, 5 SERIOUS, 3 MINOR; answers in §"Answers to the review") and a second premise probe in
+LethAL's real request shapes and environment. Precedent: PR-342 (`2026-11-22-pr342-stop-groups-fact.md`), a gate-only
+fact family. Related: R1221, R1220, PR-441, PR-436, PR-402.
 
 ## Why
 - R1221's C1 (one shared NONE per killer per batch) and R1220's echo drop are each sound only if NO state crosses entries
   of one serve request.
-- LethAL's existing `batch-no-cross-*` facts measure across test codeunits in ONE plain request, on a server without
-  `AL_STRICT_SEQUENTIAL`. They do not measure across entries. R766 measured SingleInstance across entries once, on
-  alpha.5.
-- PR-441's spec-adversary asked for a standing per-build fact, covering one channel per probe, with a positive control
-  and the entry order pinned.
+- LethAL's `batch-no-cross-*` facts measure across test codeunits in ONE plain request, without `AL_STRICT_SEQUENTIAL`,
+  so they say nothing about entries.
 
-## The premise, measured on `current` before this pre-commitment
-`/coord/handoff/PR-442/probe442.ts`, invented AL. It ran on edge-e5176a9fd serve with `AL_STRICT_SEQUENTIAL=1`,
-`ALRUNNER_SEED=1` and `testIsolation: "test"`. A writer test writes every channel; a reader test reports them all.
-- **Across entries** (writer in entry e1 with resource MUT-A, reader in entry e2 with MUT-B): nothing carries. The
-  selector cache equals e2's resource; app and test-side SingleInstance 0; codeunit global 0; library codeunit in a
-  global 0; WorkDate is today; GlobalLanguage 1033; a temp table in a SingleInstance 0; a bound manual subscriber 0.
-- **Across requests** on the same daemon: nothing carries.
-- **Positive control** (writer then reader in ONE entry): every channel carries (7, 8, 9, 5, 2031-01-01, 1030, 1, 1,
-  and the entry's own resource).
-- Rows stream in entry order.
+## The premise, measured on `current` (edge-e5176a9fd) in LethAL's real shapes
+**Probe v2:** `/coord/handoff/PR-442/probe442b.ts`, invented AL, output `probe-v2-current.json`.
+- **Two apps:** a target app (the selector and the app-side state) and a tests app (a test-side SingleInstance, and the
+  test codeunit).
+- **Test order:** the codeunit runs `A_Reader1`, `B_Writer`, `C_Reader2` (declaration and name order agree).
+- **Readers always fail** with `MEASURED` and every channel's value.
+
+**What was sent:**
+- Entry e1 (resource `MUT-A`) is the whole codeunit, so its `C_Reader2` is the positive control.
+- Entry e2 (resource `MUT-B`) is the whole codeunit cut through `A_Reader1` (`excludeTests`), which is LethAL's cut.
+- **Three modes:**
+  - `T-flag`: `testIsolation: "test"` with `runSelectedOnly`;
+  - `T-plain`: `"test"` unflagged, where the cut tail still runs hidden;
+  - `C-method`: `"codeunit"` with method entries, after a whole-codeunit positive-control entry.
+- **Each mode on two daemons:** `v3MutantDaemonEnv(undefined, false)` and `(undefined, true)` (login replay off, on).
+- No coverage fields, as in mutant requests.
+
+**Result, in all six runs:**
+- **e2's `A_Reader1` is clean.** The selector cache equals `MUT-B`, the resource sent to e2. Every other channel is at
+  its default.
+- **The positive control** (`C_Reader2`, after `B_Writer` in one entry) sees these channels carry: app SingleInstance 7,
+  test-side SingleInstance 8, codeunit global 9, library codeunit in a global 5, WorkDate 2031-01-01,
+  GlobalLanguage 1030 (its booleans print in Danish), temp table in a SingleInstance 1, static-automatic SingleInstance
+  subscriber 2, manual bound subscriber 1.
+- **Not even live between tests of one entry:** rows 0, IsolatedStorage `No`, last error empty. NumberSequence carries
+  within an entry only under `"codeunit"` (`Ja`) and reads clean across entries.
+- Rows stream in entry order; each row carries its `entry`.
 
 ## The change
-- **Eight facts**, `entry-no-cross-<channel>`, one per channel:
-  - `selector-cache`: a SingleInstance codeunit shaped like LethAL's resource selector caches
-    `NavApp.GetResourceAsText` once;
-  - `singleinstance`;
-  - `codeunit-global`: the test codeunit's own global;
-  - `library-global`: a plain codeunit held in a test codeunit global;
-  - `workdate`;
-  - `globallanguage`;
-  - `subscriber`: a manual subscriber bound by `BindSubscription` and held in a SingleInstance;
-  - `temp-table`: a temp record held in a SingleInstance.
-- **Each fact's AL.** Its own invented app: ten ids per fact, 50790-50869, one app per fact, so the resource read
-  works in-app. One test codeunit holds `Writer` (sets the channel) and `Reader`. `Reader` errors `carried <value>`
-  when it sees the writer's value, and passes otherwise. For `selector-cache`, `Reader` errors when the cached value
-  differs from a fresh read of the resource.
-- **The server.** One serve daemon for all eight facts, started with `AL_STRICT_SEQUENTIAL=1`: the mutant daemons'
-  environment, as for the carry fact. `testIsolation: "test"`.
-- **Each fact sends two requests:**
-  1. **Cross-entry**, `runSelectedOnly: true`: entry `w` (`Writer`, resource `MUT-A`), then entry `r` (`Reader`,
-     resource `MUT-B`).
-  2. **Positive control:** one entry for the whole codeunit, resource `MUT-C`. `Writer` then `Reader` run in one
-     codeunit run.
-- **The judge.** `matches` when all of these hold; `diverged` otherwise; `unmeasurable` when there is no answer:
-  - request 1 has exactly two rows, `w`'s writer row (pass) streamed BEFORE `r`'s reader row (pass);
-  - request 2's reader row is a `fail` whose message starts `carried`, which proves the channel is live.
-  - A request 2 reader that passes means a dead probe, and reads `diverged` with that said in `measured`.
-- **The gate rule**, as PR-342's `stop-groups`:
-  - `diverged` never fails the gate; it prints `al-runner-v3-entry-carry: <fact> diverged` in leg C only;
-  - `unmeasurable` stays an infra-fail;
-  - the facts sit outside `V3_CAPABILITY_FACTS`, so baseline batching never reads them.
-  - A future consumer (C1, the echo drop) must read its channel's fact `matches` from the build's record
-    (`batchFacts`); anything else keeps it off. Fail closed.
-- **No DotNet cases.** Every daemon goes through `v3ChildEnv`, and the spawn guards count the new daemon.
+- **One probe layout, measured per mode and replay setting, read into one fact per channel.** The facts are
+  `entry-no-cross-<channel>`:
+  - **live channels** (their positive control must carry, or the fact reads a dead probe): `selector-cache`,
+    `singleinstance`, `test-singleinstance`, `codeunit-global`, `library-global`, `workdate`, `globallanguage`,
+    `temp-table`, `manual-subscriber`, `static-subscriber`;
+  - **rollback channels** (no liveness asked; clean across entries is required): `rows`, `isolatedstorage`,
+    `numbersequence`, `lasterror`.
+- **The AL is probe v2's, as fixed ids in the contract:**
+  - its own two invented apps (target and tests), in a free id range (the builder picks and names it);
+  - the selector shaped like `emitResourceSelector` (it caches `NavApp.GetResourceAsText`);
+  - readers that always fail with every value (`key=value` pairs the judge parses).
+- **The servers:** two serve daemons for this family, `v3MutantDaemonEnv(undefined, false)` and
+  `v3MutantDaemonEnv(undefined, true)`.
+  - The argv is the contract probe's own: environment, `--no-download`, and the fact apps' symbols.
+  - License and companies don't matter: the AL touches no licensed object and no company data beyond its own tables.
+- **The requests:** probe v2's three modes, with bodies built like `requestBase` plus `encodeGroups` (whole-codeunit
+  entries, `excludeTests` cuts). There are no coverage fields: the fact needs its own `ask`, not `batchFactsOn`'s, which
+  injects coverage.
+- **The judge, per channel.** `matches` only when ALL of these hold, in all six runs:
+  - the rows are exactly the expected ones (count, `entry` ids, names, order);
+  - e2's reader value is the channel's default; for `selector-cache`, both `selector` and `fresh` equal `MUT-B`, the
+    resource sent to e2;
+  - for a live channel, the positive control's value is NOT the default in the mode(s) where it is live.
+- **Other verdicts:**
+  - a channel whose cross-entry value is not the default reads `diverged` and prints `al-runner-v3-entry-carry: <fact>`;
+  - a live channel whose positive control reads the default reads `diverged` and prints
+    `al-runner-v3-entry-probe-dead: <fact>`;
+  - no answer reads `unmeasurable`.
+- **The gate rule** (as PR-342's `stop-groups`):
+  - `diverged` never fails the gate, and the two codes are printed in leg C only;
+  - `unmeasurable` is an infra-fail;
+  - the facts sit outside `V3_CAPABILITY_FACTS`.
+- **The plumbing sites:**
+  - the facts' list;
+  - `legCBatchFacts`'s filter in `al-runner-v3.itest.ts`, which must gain every new key or nothing is recorded;
+  - `classifyLegC`'s non-blocking branch;
+  - `V3_LEG_C_FACTS` and its pin in `r586c-pins.test.ts`;
+  - the spawn guards, which count the two new daemons.
+- **The consumers, later and not in this PR:**
+  - **C1** requires EVERY `entry-no-cross-*` key `=== "matches"` in the build's record. An absent key means off.
+  - **The echo drop** requires `entry-no-cross-selector-cache === "matches"`, plus R1220's two conditions (the hash
+    checked against LethAL's own sha, failing loudly when absent).
+  - Both cover login replay on and off, because the facts are judged over both.
+- **A named limit.** The update gate writes `batchFacts` into `.gated` only when DBM passed and batched (PR-342
+  amendment 1). A build whose DBM does not batch gets no keys, so both consumers stay off. That fails closed.
+- **No DotNet cases.**
 
 ## Predictions (any difference is a BLOCK until explained)
-- **Leg C's fact count: 38 → 46.** `V3_LEG_C_FACTS` and its pin in `r586c-pins.test.ts` move together.
-- **On `current` (edge-e5176a9fd):** all eight `entry-no-cross-*` read `matches`. No `al-runner-v3-entry-carry`
-  warning.
-- **`itest:alrunner-v3`, the full v3 gate:**
+- **Leg C's fact count: 38 → 52** (14 new facts). `V3_LEG_C_FACTS` and its pin move together. If another leg-C fact
+  lands first, an amendment restates the count.
+- **On `current`:** all 14 `entry-no-cross-*` read `matches`, and neither new warning code is printed.
+- **`itest:alrunner-v3`:**
   - no per-mutant verdict, killing test, note set, refusal set or warning set moves in any leg;
-  - leg C prints eight more fact lines;
-  - the itest receipt's `batchFacts` gains the eight keys, and no other key moves.
-- **`v3ReadingsDigest` is unchanged.** These are capability-shaped facts, outside the digest.
-- **The update gate's leg C** (`bun scripts/al-runner-v3-update.ts`, run on `current` as a re-check): the eight facts
-  `matches`. The record (`.gated` `batchFacts`) is written by the owner of the update gate after the merge, as PR-342's
-  was.
-- **The carry gate:** unchanged.
-- **The BC gates:** no figure moves. The diff touches no BC path; they run only if `selectLegs` names them.
+  - leg C prints 14 more fact lines;
+  - the receipt's `batchFacts` gains the 14 keys, and no other key moves.
+- **`v3ReadingsDigest` is unchanged.**
+- **The update gate's leg C on `current`:** the 14 facts `matches`. The record is written by the update gate's owner after
+  the merge, as for PR-342.
+- **The carry gate:** unchanged. **The BC gates:** no figure moves; they run only if `selectLegs` names them.
 
-## Not in this PR
-C1 and the echo drop themselves. Each reads its channel's fact; built later, under R1221.
+## Answers to the review
+1. **The selector judge compared two reads that can both be wrong (BLOCKER).** It now compares with the resource sent to
+   e2 (`MUT-B`) and checks each row's `entry`. Its positive control is probe v2's: in e1 the reader sees `MUT-A`, and in
+   e2 it must see `MUT-B`. A stuck resource reads `MUT-A` in e2 and is `diverged`.
+2. **Not LethAL's request shape.** Whole-codeunit entries with `excludeTests` cuts, flagged and unflagged, plus the
+   `"codeunit"` method mode; no coverage.
+3. **Environment and login replay.** Re-measured with `v3MutantDaemonEnv`, replay off and on. The facts run both.
+4. **Missing channels.** Added test-side SingleInstance (two apps), rows, IsolatedStorage, NumberSequence, a
+   static-automatic SingleInstance subscriber, and the last error.
+5. **A clean reader that read nothing.** Readers always fail with every value, the judge compares with the defaults,
+   and it needs the exact rows.
+6. **Consumer wording.** C1 needs every key; the echo drop needs `selector-cache` plus R1220's conditions.
+7. **Order.** `A_`/`B_`/`C_` prefixes; the judge pins row order and `entry`.
+8. **One code for two causes.** Now `al-runner-v3-entry-carry` and `al-runner-v3-entry-probe-dead`.
+9. **Recording and plumbing.** Named above, with the DBM limit stated.
