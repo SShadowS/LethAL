@@ -27,9 +27,11 @@ import {
 } from "./corpus-snapshot.ts";
 import {
   DEFAULT_PEAK_GIB,
+  EVENTS_LEDGER,
   MEMORY_RESERVE_GIB,
   SMALL_ADMITS_LEDGER,
   countedPeakGiB,
+  eventLine,
   markSlotSmall,
   memoryVerdict,
   readContainerMemory,
@@ -112,6 +114,41 @@ export function appendSmallAdmit(
   );
 }
 
+/**
+ * R1211 (PR-425): one `EVENTS_LEDGER` line for this verdict. Admission-neutral: a failed write is reported on stderr and
+ * never changes the verdict or the exit code (pinned by pr425-heavy-events.test.ts with an unwritable ledger).
+ */
+function logEvent(
+  dir: string,
+  event: string,
+  mine: number,
+  cls: string,
+  peak: number,
+  sample: ReturnType<typeof readContainerMemory>,
+  heldPeaks: readonly number[] | undefined,
+): void {
+  try {
+    appendFileSync(
+      join(dir, EVENTS_LEDGER),
+      eventLine(
+        new Date(),
+        event,
+        `heavy.${mine}`,
+        cls,
+        peak,
+        holderPid(dir, mine),
+        sample,
+        heldPeaks,
+        MEMORY_RESERVE_GIB,
+      ),
+    );
+  } catch (err) {
+    console.error(
+      `heavy-slot-guard: the events ledger was not written (${String(err)}); the verdict stands`,
+    );
+  }
+}
+
 if (import.meta.main) {
   const [dir, slotArg, cls, peakArg] = process.argv.slice(2);
   const mine = Number(slotArg);
@@ -128,6 +165,16 @@ if (import.meta.main) {
   const sample = readContainerMemory();
   const m = memoryVerdict(sample, heldPeaks, peak, MEMORY_RESERVE_GIB, smallHeld);
   console.error(m.message);
+  if (m.off !== true)
+    logEvent(
+      dir,
+      m.never === true ? "never" : m.refuse ? "refuse" : m.small === true ? "small" : "admit",
+      mine,
+      cls,
+      peak,
+      sample,
+      heldPeaks,
+    );
   if (m.small === true) {
     markSlotSmall(dir, mine);
     appendSmallAdmit(dir, `heavy.${mine}`, cls, peak, sample, heldPeaks, holderPid(dir, mine));
@@ -146,5 +193,6 @@ if (import.meta.main) {
     slots.map((s) => s?.cls),
   );
   console.error(v.message);
+  logEvent(dir, v.refuse ? "count-refuse" : "count-admit", mine, cls, peak, sample, undefined);
   process.exit(v.refuse ? HEAVY_GUARD_EXIT : 0);
 }

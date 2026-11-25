@@ -10,6 +10,7 @@ import {
   type V3Row,
   V3_SINGLEINSTANCE_NOTE,
   V3_STALE_BUFFER_TEXT,
+  isKeptRefusalRow,
   judgeCarryWalk,
   readCarrySkip,
 } from "../src/al-runner-v3-backend";
@@ -266,8 +267,11 @@ function shell(
     source?: Map<number, { mode: string; daemon: boolean }>;
     perTest?: boolean;
     realClose?: boolean;
+    /** PR-428: ensureDaemon calls (0-based, over the backend) before which the lane's daemon is replaced. */
+    recycleBefore?: number[];
   } = {},
 ) {
+  let ensured = 0;
   const lanesN = o.lanes ?? 1;
   const dir = process.env.TMPDIR ?? tmpdir();
   const calls: Array<{
@@ -280,17 +284,15 @@ function shell(
   const closes: Array<{ lane: number; reason: string }> = [];
   let n = 0;
   const lanes: Lane0[] = [];
-  const daemons = new Map<Lane0, { requests: number; server: { runEntries: unknown } }>();
-  for (let i = 0; i < lanesN; i++) {
-    const resource = join(dir, `pr340-res-${Math.random().toString(36).slice(2)}`);
-    const lane: Lane0 = {
-      index: i,
-      deployedDir: "/deployed",
-      resourcePath: () => resource,
-      requestBase: () => ({ command: "runTests", lane: i }),
-    };
-    lanes.push(lane);
-    daemons.set(lane, {
+  type Daemon0 = {
+    requests: number;
+    keptRefusal?: { text: string; test: string } | undefined;
+    server: { runEntries: unknown };
+  };
+  const daemons = new Map<Lane0, Daemon0>();
+  const made: Daemon0[] = []; // PR-428: every daemon ever made, in order
+  const mkDaemon = (i: number, resource: string): Daemon0 => {
+    const d: Daemon0 = {
       requests: 0,
       server: {
         runEntries: async (body: Record<string, unknown>, deadline: number) => {
@@ -302,7 +304,24 @@ function shell(
           return { tests: out, summary: {} };
         },
       },
-    });
+    };
+    made.push(d);
+    return d;
+  };
+  const resources = new Map<Lane0, string>();
+  for (let i = 0; i < lanesN; i++) {
+    const resource = join(dir, `pr340-res-${Math.random().toString(36).slice(2)}`);
+    const lane: Lane0 = {
+      index: i,
+      deployedDir: "/deployed",
+      resourcePath: () => resource,
+      requestBase: () => ({ command: "runTests", lane: i }),
+    };
+    // PR-428: the lane's current daemon for any mode (the walk arms it)
+    Object.assign(lane, { daemonFor: () => daemons.get(lane) });
+    lanes.push(lane);
+    resources.set(lane, resource);
+    daemons.set(lane, mkDaemon(i, resource));
   }
   const b = Object.create(AlRunnerV3Backend.prototype) as Record<string, unknown>;
   b.entries = true;
@@ -339,6 +358,13 @@ function shell(
   b.serveStopSeconds = () => 60;
   b.ensureDaemon = async (lane: Lane0) => {
     events.push(`ensure@lane${lane.index}`);
+    // PR-428: `recycleBefore` (0-based request numbers) replaces the lane's daemon before that request,
+    // as the recycle bound can mid-walk (the old one is closed: it stays in `made` and is never current).
+    if (o.recycleBefore?.includes(ensured++) === true) {
+      const res = resources.get(lane);
+      if (res === undefined) throw new Error("unknown lane");
+      daemons.set(lane, mkDaemon(lane.index, res));
+    }
     const d = daemons.get(lane);
     if (d === undefined) throw new Error("unknown lane");
     return d;
@@ -376,6 +402,7 @@ function shell(
     b: b as unknown as AlRunnerV3Backend,
     raw: b,
     lanes,
+    made,
     calls,
     events,
     closes,
@@ -1440,5 +1467,136 @@ describe("PR-410: the knob", () => {
     expect(base.length).toBeGreaterThan(0);
     expect(await digest("", "-b")).toBe(base);
     expect(await digest("off", "-c")).not.toBe(base);
+  });
+});
+
+// PR-428 (R1207): a walk that keeps its daemon past a kept refusal arms PR-56's drift guard.
+describe("PR-428: the carry walk arms the drift guard", () => {
+  const KEPT_TEXT =
+    "NotRun: out-of-scope: Commit inside a test under TestIsolation = Function: what the runner keeps is not pinned";
+  const UNKEPT_TEXT = "out-of-scope: WithEvents 'Foo' is not supported";
+  type Hit = { name: string; text: string; extra?: boolean };
+  /** Request `n` (0-based) holds each `Hit` as a refused row (a replaced row, or an extra one). */
+  const refusing =
+    (at: Record<number, Hit | Hit[]>) =>
+    (n: number, file: string): Rows => {
+      let out = defaultAnswers(n, file);
+      for (const hit of [at[n] ?? []].flat()) {
+        const row = { name: hit.name, status: "error", notRun: true, message: hit.text };
+        out = hit.extra === true ? [...out, row] : out.map((t) => (t.name === hit.name ? row : t));
+      }
+      return out;
+    };
+  const T1 = "Codeunit1.T1";
+  const T2 = "Codeunit2.T2";
+  const armOf = (d: { keptRefusal?: { text: string; test: string } | undefined } | undefined) =>
+    d?.keptRefusal;
+
+  // Red (a): remove the arming in closeUnkeptWalk.
+  test("a kept refusal in request 1 arms the kept daemon with its text and test", async () => {
+    const s = shell({ answers: refusing({ 0: { name: T2, text: KEPT_TEXT } }) });
+    await s.walk(s.lanes[0] as Lane0);
+    expect(armOf(s.made[0])).toEqual({ text: KEPT_TEXT, test: T2 });
+  });
+
+  test("the NONE answer (request 2) arms too", async () => {
+    const s = shell({ answers: refusing({ 1: { name: T2, text: KEPT_TEXT } }) });
+    await s.walk(s.lanes[0] as Lane0);
+    expect(armOf(s.made[0])).toEqual({ text: KEPT_TEXT, test: T2 });
+  });
+
+  test("the FIRST kept refusal in answer order wins", () =>
+    // knob off: all three requests are sent, so request 2's refusal is really in the answers
+    withSkipKnob("off", async () => {
+      const s = shell({
+        answers: refusing({
+          1: { name: T1, text: KEPT_TEXT },
+          2: { name: T2, text: KEPT_TEXT },
+        }),
+      });
+      await s.walk(s.lanes[0] as Lane0);
+      expect(s.calls).toHaveLength(3);
+      expect(armOf(s.made[0])).toEqual({ text: KEPT_TEXT, test: T1 });
+    }));
+
+  // Red (b): clear the arm when no kept refusal is found.
+  test("no kept refusal leaves an earlier arm in place and an unarmed daemon unarmed", async () => {
+    const prior = { text: "earlier", test: "Codeunit1.Earlier" };
+    const armed = shell();
+    (armed.made[0] as { keptRefusal?: unknown }).keptRefusal = prior;
+    await armed.walk(armed.lanes[0] as Lane0);
+    expect(armOf(armed.made[0])).toEqual(prior);
+    const bare = shell();
+    await bare.walk(bare.lanes[0] as Lane0);
+    expect(armOf(bare.made[0])).toBeUndefined();
+  });
+
+  // Red (e): arm in the close branch too.
+  test("a walk that closes the daemon (an unkept row) arms nothing", async () => {
+    const s = shell({
+      answers: refusing({
+        0: [
+          { name: T1, text: KEPT_TEXT },
+          { name: T2, text: UNKEPT_TEXT },
+        ],
+      }),
+    });
+    const r = await s.walk(s.lanes[0] as Lane0);
+    expect(r?.kind).toBe("failed");
+    expect(s.closes.map((c) => c.reason)).toEqual(["unkept-row"]);
+    expect(armOf(s.made[0])).toBeUndefined();
+  });
+
+  // Red (d): do not skip the echo codeunit's rows.
+  test("a kept refusal in the echo codeunit's rows does not arm", async () => {
+    const s = shell({
+      answers: refusing({ 0: { name: `Codeunit${ECHO}.Extra`, text: KEPT_TEXT, extra: true } }),
+    });
+    await s.walk(s.lanes[0] as Lane0);
+    expect(armOf(s.made[0])).toBeUndefined();
+  });
+
+  // Red (c): arm from every answer, whichever daemon served it.
+  test("recycle mid-walk: daemon A (request 1) is never armed; B is armed only from what B served", () =>
+    // knob off: all three requests are sent (a refusal row would otherwise stop the walk early)
+    withSkipKnob("off", async () => {
+      const onlyA = shell({
+        recycleBefore: [1],
+        answers: refusing({ 0: { name: T2, text: KEPT_TEXT } }),
+      });
+      await onlyA.walk(onlyA.lanes[0] as Lane0);
+      expect(onlyA.made).toHaveLength(2);
+      expect(armOf(onlyA.made[0])).toBeUndefined();
+      expect(armOf(onlyA.made[1])).toBeUndefined();
+      const both = shell({
+        recycleBefore: [1],
+        answers: refusing({
+          0: { name: T2, text: KEPT_TEXT },
+          2: { name: T1, text: KEPT_TEXT },
+        }),
+      });
+      await both.walk(both.lanes[0] as Lane0);
+      expect(armOf(both.made[0])).toBeUndefined();
+      expect(armOf(both.made[1])).toEqual({ text: KEPT_TEXT, test: T1 });
+    }));
+
+  test("a skipped walk (PR-410) sends nothing and arms nothing", async () => {
+    await withSkipKnob(undefined, async () => {
+      const s = shell({ baseline: doomedBaseline() });
+      await s.walk(s.lanes[0] as Lane0);
+      expect(s.calls).toHaveLength(0);
+      expect(armOf(s.made[0])).toBeUndefined();
+    });
+  });
+
+  test("isKeptRefusalRow: a kept refusal is; a plain fail, a pass, an unkept refusal and a non-refusal error are not", () => {
+    const r = (o: Rows[number]) => rowsOf([{ name: T1, ...o }])[0] as V3Row;
+    expect(isKeptRefusalRow(r({ status: "error", notRun: true, message: KEPT_TEXT }))).toBe(true);
+    expect(isKeptRefusalRow(r({ status: "fail", message: KEPT_TEXT }))).toBe(false);
+    expect(isKeptRefusalRow(r({ status: "pass" }))).toBe(false);
+    expect(isKeptRefusalRow(r({ status: "error", notRun: true, message: UNKEPT_TEXT }))).toBe(
+      false,
+    );
+    expect(isKeptRefusalRow(r({ status: "error", message: KEPT_TEXT }))).toBe(false);
   });
 });

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**68 of 1174 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 1175 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -410,6 +410,7 @@ that ordering is the priority.
 - **R1203** · Stop groups (alRunnerV3.stopGroups) moved 5 DO killingTests to an EARLIER covering test (codeunit 68861), not PR-256 amendment 1's kind: PR-359's V BLOCK, so the flag stays off · [R1203.md](docs/roadmap/R1203.md) · open
 - **R1206** · The carry walk's B1 check sees a flagged pass only if the serve daemon writes `flagged`: walk rows never get R949's `flaggedUnknown`, so on a build whose serve rows omit the flag, a flagged pass reads as sound inside the walk · [R1206.md](docs/roadmap/R1206.md) · open
 - **R1207** · A carry walk that keeps a serve daemon past a kept refusal never arms PR-56's drift guard (keptRefusal), so the next request on that daemon is not checked · [R1207.md](docs/roadmap/R1207.md) · open
+- **R1212** · LethAL's static hang refusal misses two loop-hang shapes met on a real project: a negated Next() test that ends a repeat-until loop, and the removal of a Get that puts the loop's record cursor back in place · [R1212.md](docs/roadmap/R1212.md) · open
 
 ## Product gaps a real project hits
 
@@ -1217,7 +1218,7 @@ that ordering is the priority.
 - **R1205** · After PR-354's and PR-365's keep rows, c4's remaining refusal restarts are 56 (2,244 s of warm-up): the top three families (report PDF output, Evaluate into a Boolean under GlobalLanguage, Report.RunRequestPage parameters) are 34 of them (1,376 s, 2.4% of lane time), none measured by PR-54's keep census · [R1205.md](docs/roadmap/R1205.md) · done (c3ea942c9, PR-411): four exact keep rows…
 - **R1208** · The al-runner update gate pushes its gated-builds row straight to master with [skip ci] and runs no unit test, though unit tests read that file: edge-e5176a9fd's row (f8185a042, the first reading `stop-groups: matches`) turned master red silently · [R1208.md](docs/roadmap/R1208.md) · done (1a374dbe0)
 - **R1209** · On current edge-e5176a9fd the t12 refusal of Text '1=18' into an Integer field has the new setrange-other-type-convert wording, which no keep row matches: PR-408 kept only '=18', so a DO run that meets '1=18' restarts the daemon · [R1209.md](docs/roadmap/R1209.md) · done (daaa8b3e5)
-- **R1211** · heavy-slot records only admissions: a job's wait in the queue, and why it was refused, are not logged, so R992's symptom (a job waiting while memory has room) cannot be measured · [R1211.md](docs/roadmap/R1211.md) · open
+- **R1211** · heavy-slot records only admissions: a job's wait in the queue, and why it was refused, are not logged, so R992's symptom (a job waiting while memory has room) cannot be measured · [R1211.md](docs/roadmap/R1211.md) · done (1c8d943e6, PR-425): heavy-events.tsv in the lock folder logs queue, admit, small, refuse, never and the…
 - **R1210** · Culture-dependent BC answers from bc1-bc4 are Linux BC (ICU) data, which Windows BC (NLS) need not share: #8861, #8862 and #8871 were Linux-only. Such answers are recorded as 'measured on Linux BC' and filed upstream only when Windows BC agrees · [R1210.md](docs/roadmap/R1210.md) · open
 
 ---
