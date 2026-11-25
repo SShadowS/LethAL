@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 1187 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**71 of 1187 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1216,7 +1216,7 @@ that ordering is the priority.
 - **R1199** · An R192 baseline snapshot written before PR-387 lacks bodyNeverRan on the hub's body-never-ran rows, so reused on --resume those rows miss notRunAtBaseline and the caveat can under-count · [R1199.md](docs/roadmap/R1199.md) · open
 - **R1200** · A run with any finite --time-budget turns PR-241's unit packing off (by design, R912), but the notice still prints `pack-entries 64`: PR-391's A/B passed a budget as a 'safety cap', ran every arm unpacked, and read the result as packing not engaging · [R1200.md](docs/roadmap/R1200.md) · open
 - **R1201** · al-runner-v3 scores its #8721 stale-buffer raise as a kill; PR-396 holds that row as a runner-test-error under a mutant until a gated current carries the upstream fix · [R1201.md](docs/roadmap/R1201.md) · open
-- **R1202** · selectLegs has no rule for .claude/hooks/ paths, so a hook-only change falls back to every gate leg (default-deny), although no gate runs a Claude Code hook · [R1202.md](docs/roadmap/R1202.md) · open
+- **R1202** · selectLegs has no rule for .claude/hooks/ paths, so a hook-only change falls back to every gate leg (default-deny), although no gate runs a Claude Code hook · [R1202.md](docs/roadmap/R1202.md) · done (cb17845b6, PR-449)
 - **R1204** · On full DO the PR-340 carry walk cannot succeed and is predictably dead: c4's 129 walks all failed at request 1 on a pass al-runner flags (already flagged at baseline in 129 of 129), made 0 kills, and cost about 18,600 s (about 33% of lane time) in walks plus 115 daemon restarts · [R1204.md](docs/roadmap/R1204.md) · done (541f5bc96) — PR-410: a walk whose first codeunit's first baseline row is a flagged daemon pass is…
 - **R1205** · After PR-354's and PR-365's keep rows, c4's remaining refusal restarts are 56 (2,244 s of warm-up): the top three families (report PDF output, Evaluate into a Boolean under GlobalLanguage, Report.RunRequestPage parameters) are 34 of them (1,376 s, 2.4% of lane time), none measured by PR-54's keep census · [R1205.md](docs/roadmap/R1205.md) · done (c3ea942c9, PR-411): four exact keep rows…
 - **R1208** · The al-runner update gate pushes its gated-builds row straight to master with [skip ci] and runs no unit test, though unit tests read that file: edge-e5176a9fd's row (f8185a042, the first reading `stop-groups: matches`) turned master red silently · [R1208.md](docs/roadmap/R1208.md) · done (1a374dbe0)
