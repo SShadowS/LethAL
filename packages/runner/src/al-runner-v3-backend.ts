@@ -6394,7 +6394,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** A WORKER's throw halt: checked at unit start only (A5). */
     let workerHalt = false;
     type Outcome =
-      | { readonly got: BaselineAnswer | undefined; readonly lane: number }
+      | {
+          readonly got: BaselineAnswer | undefined;
+          readonly lane: number;
+          /** S3: the lane's request it came from (0 = its first; a batch is one request). */
+          readonly req: number;
+        }
       | { readonly threw: unknown };
     /** Per position: the KEPT answer (never the raw one, r2-A1) and its lane, or a worker's throw. */
     const outcomes = new Map<number, Outcome>();
@@ -6422,12 +6427,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const inflight: Flight[] = []; // oldest first
     let running = 0;
     let mostOneShots = 0;
-    const oneShot = <T>(run: () => Promise<T>): Promise<T> => {
+    /** The loop's IN-PLACE one-shot now running (too-slow, `check`, a backward replacement), for S1's admission. */
+    let inPlace: Promise<void> | undefined;
+    const oneShot = <T>(run: () => Promise<T>, place = false): Promise<T> => {
       running += 1;
       mostOneShots = Math.max(mostOneShots, running);
-      return run().finally(() => {
+      const p = run().finally(() => {
         running -= 1;
       });
+      if (place) {
+        const settled = p.then(
+          () => undefined,
+          () => undefined,
+        );
+        inPlace = settled;
+        void settled.then(() => {
+          if (inPlace === settled) inPlace = undefined;
+        });
+      }
+      return p;
     };
 
     // ---- lanes joining (change 3) ----
@@ -6540,11 +6558,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           if (!roomForRequest(s.size)) await s.promise;
           if (loopHalt || this.stopHandle?.spent() === true) return "stop";
         }
+        // S1 (build review 1): the loop's in-place one-shot is charged too: send beside it only with room.
+        const place = inPlace;
+        if (place !== undefined) {
+          await this.memoryChain;
+          const size = sampleSize();
+          if (size === undefined || !roomForRequest(size)) await place;
+          if (loopHalt || this.stopHandle?.spent() === true) return "stop";
+        }
       }
       if (!(await this.memoryGate(true))) return "stop"; // R948
       let got: BaselineAnswer | undefined;
       let batch: Map<number, BaselineAnswer> | undefined;
       let batchFailed = false;
+      // M1 (build review 1): the lane is busy from here, so an over-bound close never hits the daemon this
+      // request starts or uses (plain/batchRequest set it only once the daemon is in hand).
+      const prevFlight = l.inFlight;
+      l.inFlight = "baseline";
       try {
         await this.checkBound(lane0); // R652, lane 0's tree (change 1)
         // C7: the loop may have decided while this worker waited at the gate or the bound check.
@@ -6574,15 +6604,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (!(err instanceof AlRunnerServerRequestError)) throw err;
         got = undefined; // the daemon was closed; this codeunit runs one-shot
       } finally {
+        l.inFlight = prevFlight;
         this.memoryRelease();
       }
       if (this.stopHandle?.signalled() === true) return "stop"; // R955: that request, a batch included, is dropped
       if (batchFailed) return { batchFailed: true };
       return batch !== undefined ? { batch } : { got };
     };
-    const keep = (l: Lane, pos: number, got: BaselineAnswer | undefined) => {
+    const keep = (l: Lane, pos: number, got: BaselineAnswer | undefined, req: number) => {
       if (l === lane0 && got !== undefined) lane0Answered = true;
-      store(pos, { got: got === undefined ? undefined : this.keptAnswer(got), lane: l.index });
+      store(pos, {
+        got: got === undefined ? undefined : this.keptAnswer(got),
+        lane: l.index,
+        req,
+      });
     };
     const workers: Promise<void>[] = [];
     let liveWorkers = 0;
@@ -6592,7 +6627,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (joined.has(l.index)) continue;
         const v = admitLane();
         if (!v.ok) {
-          notAdmitted.set(l.index, v.why); // asked again at the next boundary
+          // M3: every lane not admitted is named, with the rule and figures (asked again at the next boundary)
+          for (const o of others) if (!joined.has(o.index)) notAdmitted.set(o.index, v.why);
           return;
         }
         notAdmitted.delete(l.index);
@@ -6604,6 +6640,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const worker = async (l: Lane): Promise<void> => {
       let pos = -1;
       let first = true;
+      let reqNo = 0; // S3: this lane's requests answered so far
       try {
         for (;;) {
           if (loopHalt || workerHalt) return; // B9: at unit start
@@ -6620,17 +6657,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           if (asBatch) {
             const r = await request(l, unitIds[0] ?? Number.NaN, unitIds);
             if (r === "stop") return;
+            const req = reqNo;
+            reqNo += 1;
             if (r.batchFailed === true)
               alone = true; // the batch is gone: each codeunit alone, in order
             else
-              for (const [j, p] of u.entries()) keep(l, p, r.batch?.get(unitIds[j] ?? Number.NaN));
+              for (const [j, p] of u.entries())
+                keep(l, p, r.batch?.get(unitIds[j] ?? Number.NaN), req);
           }
           if (alone) {
             for (const [j, p] of u.entries()) {
               pos = p;
               const r = await request(l, unitIds[j] ?? Number.NaN);
               if (r === "stop") return;
-              keep(l, p, r.got);
+              keep(l, p, r.got, reqNo);
+              reqNo += 1;
             }
           }
           tryJoin(); // a unit boundary
@@ -6659,14 +6700,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
     // ---- the loop's one-shot helpers (today's, generalised to two in flight) ----
     const laneOf = new Map<number, number>(); // walked id -> the lane that answered it
-    const laneFirst = new Map<number, number>(); // lane -> its first walked answered id
-    const laneAnswers = new Map<number, number>(); // lane -> walked answered positions
-    const laneClean = new Set<number>(); // lanes with a clean compare past their first answer
+    const reqOf = new Map<number, number>(); // walked id -> the lane's request it came from
+    // S3 (build review 1, amendment 2): a lane's "first answer" is every position of its first answered REQUEST
+    // (a batch is one request): all of them came from a cold daemon.
+    const laneFirstReq = new Map<number, number>(); // lane -> the request of its first walked answer
+    const laneWarm = new Set<number>(); // lanes with a walked answer past their first request
+    const laneClean = new Set<number>(); // lanes with a clean compare past their first request
     const laneWaiting = new Map<number, number>(); // lane -> counting samples not yet applied
-    /** A sample counts for its lane only past the lane's first answered codeunit (C1). */
+    /** A sample counts for its lane only past the lane's first answered request (C1, S3). */
     const counting = (id: number): number | undefined => {
       const k = laneOf.get(id);
-      return k !== undefined && laneFirst.get(k) !== id ? k : undefined;
+      return k !== undefined && reqOf.get(id) !== laneFirstReq.get(k) ? k : undefined;
     };
     const countStart = (id: number) => {
       const k = counting(id);
@@ -6746,8 +6790,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.baselineStats.samplesSequential += 1;
       let r: CrossCheckResult;
       try {
-        r = await oneShot(() =>
-          this.crossCheckSample(lane0, stopSeconds, coverage, sampleArgs(id, daemon), laneSample),
+        r = await oneShot(
+          () =>
+            this.crossCheckSample(lane0, stopSeconds, coverage, sampleArgs(id, daemon), laneSample),
+          true,
         );
       } catch (err) {
         if ((await settleAll()) === "dropped") return "dropped";
@@ -6801,6 +6847,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (skipped !== undefined) this.baselineStats.replacements[skipped] = `Codeunit${id}`;
       pending.delete(id);
     };
+    /**
+     * M2 (build review 1): a recorded worker throw is rethrown only after the in-flight samples are applied, oldest
+     * first, as C6 does for an in-place throw: an earlier sample's drop wins (the fill drops and returns).
+     */
+    const rethrowAfterSettle = async (e: unknown): Promise<"dropped"> => {
+      loopHalt = true;
+      if ((await settleAll()) === "dropped") return "dropped";
+      throw e;
+    };
     /** The outcome at `pos`, or `"gap"` when every worker has ended without one. */
     const outcomeAt = async (pos: number): Promise<Outcome | "gap"> => {
       for (;;) {
@@ -6822,12 +6877,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     try {
       for (const [pos, id] of ids.entries()) {
         curPos = pos;
+        // S2 (build review 1, R955): a spent budget stops the walk, so a position stored ahead starts no one-shot.
+        if (this.stopHandle?.spent() === true) {
+          stopped = true;
+          loopHalt = true;
+          break;
+        }
         const o = await outcomeAt(pos);
         if (o === "gap") {
           // Change 4: a position whose outcome will never come.
           if (this.memoryStopped && this.stopHandle === undefined && memErr !== undefined) {
-            loopHalt = true;
-            throw memErr; // C4
+            if ((await rethrowAfterSettle(memErr)) === "dropped") return; // C4
           }
           if (
             this.stopHandle?.spent() === true ||
@@ -6842,12 +6902,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             .filter(([p, x]) => p >= pos && "threw" in x)
             .sort((a, b) => a[0] - b[0])[0]?.[1];
           loopHalt = true;
-          if (later !== undefined && "threw" in later) throw later.threw;
+          if (later !== undefined && "threw" in later) {
+            if ((await rethrowAfterSettle(later.threw)) === "dropped") return;
+          }
           throw new AlRunnerV3BaselineFillGapError(pos, id);
         }
         if ("threw" in o) {
-          loopHalt = true;
-          throw o.threw; // r2-A6: in position order, so an earlier drop or stop has already won
+          // r2-A6: in position order, so an earlier drop or stop has already won; M2: so has an in-flight sample's
+          if ((await rethrowAfterSettle(o.threw)) === "dropped") return;
+          throw o.threw; // not reached: rethrowAfterSettle throws unless the fill dropped
         }
         let got = o.got;
         if (got !== undefined && !this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? [])) {
@@ -6877,10 +6940,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (got !== undefined) {
           const k = o.lane;
           laneOf.set(id, k);
-          laneAnswers.set(k, (laneAnswers.get(k) ?? 0) + 1);
-          if (!laneFirst.has(k)) laneFirst.set(k, id);
-          else if (!laneClean.has(k) && (laneWaiting.get(k) ?? 0) === 0 && !plan.has(id))
-            laneSample = true;
+          reqOf.set(id, o.req);
+          if (!laneFirstReq.has(k)) laneFirstReq.set(k, o.req);
+          if (laneFirstReq.get(k) !== o.req) {
+            laneWarm.add(k);
+            if (!laneClean.has(k) && (laneWaiting.get(k) ?? 0) === 0 && !plan.has(id))
+              laneSample = true;
+          }
         }
         const planSample = plan.has(id);
         const isSample = planSample || laneSample;
@@ -7003,8 +7069,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             loopHalt = true;
             break;
           }
-          const shot = await oneShot(() =>
-            this.oneShotBaselineAnswer(lane0, id, stopSeconds, coverage, "too-slow"),
+          const shot = await oneShot(
+            () => this.oneShotBaselineAnswer(lane0, id, stopSeconds, coverage, "too-slow"),
+            true,
           );
           if ("noAnswer" in shot) continue;
           if (this.stopHandle?.signalled() === true) {
@@ -7028,11 +7095,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // memory-bound error recorded past the position where the loop read that stop is not swallowed.
       if (stopped && this.memoryStopped && this.stopHandle === undefined && memErr !== undefined)
         throw memErr;
-      // Change 6: every lane with a walked position past its first needs one clean compare, on a stop too.
-      for (const [k, n] of [...laneAnswers.entries()].sort((a, b) => a[0] - b[0])) {
-        if (n >= 2 && !laneClean.has(k)) {
+      // Change 6 (S3): every lane with a walked answer past its first request needs one clean compare, on a stop too.
+      for (const k of [...laneWarm].sort((a, b) => a - b)) {
+        if (!laneClean.has(k)) {
           drop(
-            `baseline-lane-unsampled:${k}: lane ${k}'s daemon answered ${n} codeunits of the walked fill and none past its first was compared clean with a fresh process`,
+            `baseline-lane-unsampled:${k}: lane ${k}'s daemon answered codeunits of the walked fill past its first request and none of them was compared clean with a fresh process`,
             [`baseline-lane-unsampled:${k}`],
           );
           return;

@@ -476,7 +476,14 @@ async function session(
     report: r,
     reportDir: REPORT_DIR,
     check: () => {
-      if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested()) {
+      // PR-437 (M4): DBM-W runs two workers whatever LETHAL_ITEST_V3_WORKERS says; its pinned set already holds
+      // lanes-started, so it is checked as pinned, never through this branch.
+      if (
+        V3_WORKERS > 1 &&
+        cfg.workers !== undefined &&
+        leg !== DBM_W_SESSION &&
+        !observeRequested()
+      ) {
         assertGateWarnings(
           "al-runner-v3",
           leg,
@@ -912,6 +919,8 @@ async function legDBI(scratch: string, version: string): Promise<void> {
  * objects 77200 and 77201 used), or alc rejects the instrumented app and every mutant reads `error`.
  */
 const DBM_IDS = { selectorId: 77249, controlId: 77248, tableId: 77247 } as const;
+/** PR-437: leg DBM's laned session (DBM-W): its scratch name, and so its GATE_WARNINGS key. */
+const DBM_W_SESSION = "dbm-w-daemon";
 
 /**
  * PR-114a: leg DBM, the daemon baseline over a fixture with SEVERAL test codeunits that 114b will batch
@@ -1196,13 +1205,15 @@ async function legDBMRun(scratch: string): Promise<void> {
       JSON.stringify(dwRest) === JSON.stringify(dmRest),
       `DBM-W: daemonBaselineReport differs from DBM's (timing counters aside): DBM ${JSON.stringify(dmRest)}, DBM-W ${JSON.stringify(dwRest)}`,
     );
-    // baselineSampleIds(4) = {1, 3}: lane 1's sample is the planned last one, so no lane sample runs.
+    // baselineSampleIds(4) = {1, 3}; each lane answers one request (amendment 2: all of it is its first), so no
+    // lane needs a sample and no lane sample runs.
     must(dd.laneSampled === 0, `DBM-W: ${dd.laneSampled} lane sample(s), pre-committed 0`);
     const lanes = dw.b.baselineLanesReport();
     console.log(`  DBM-W: lanes ${JSON.stringify(lanes)}`);
+    // M4: exactly two daemons, one unit each (lane 0 [0, 1], lane 1 [2, 3]).
     must(
-      lanes !== undefined && Object.keys(lanes.unitsByLane).length === 2,
-      `DBM-W: the receipt shows ${lanes === undefined ? "no laned fill" : `${Object.keys(lanes.unitsByLane).length} daemon(s)`}, pre-committed 2`,
+      JSON.stringify(lanes?.unitsByLane) === JSON.stringify({ 0: 1, 1: 1 }),
+      `DBM-W: the receipt's units by lane are ${JSON.stringify(lanes?.unitsByLane)}, pre-committed {"0":1,"1":1}`,
     );
   }
   // Recorded by the receipt only when batching ran and every check above held.

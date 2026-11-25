@@ -713,6 +713,27 @@ describe("PR-437 change 3: lanes joining", () => {
     expect(no.lanes()?.unitsByLane).toEqual({ 0: 6 });
   });
 
+  // Red (M3): the receipt names only the first refused lane.
+  test("every lane not admitted is named, with its rule", async () => {
+    const r = await rig({
+      n: 6,
+      lanes: 3,
+      used: () => 20 * GIB,
+      realAdmission: true,
+      seams: {
+        anonReader: () => 2 * GIB,
+        memoryEstimateBytes: GIB,
+        lethalRss: () => 4 * GIB,
+        classFilePath: () => "/fake/class",
+        readTextFile: () => "other 1 25",
+      },
+    });
+    await r.fill();
+    expect(r.lanes()?.unitsByLane).toEqual({ 0: 6 });
+    expect(Object.keys(r.lanes()?.notAdmitted ?? {})).toEqual(["1", "2"]);
+    for (const why of Object.values(r.lanes()?.notAdmitted ?? {})) expect(why).toContain("cgroup");
+  });
+
   // Red: a 0 anon reading taken as a reading (R0 = est), so lane 1 joins for free.
   test("a 0 reading never admits", async () => {
     const r = await real({ used: GIB, declared: "64", anon: 0 });
@@ -772,6 +793,25 @@ describe("PR-437 change 3: the over-bound close", () => {
   });
 });
 
+describe("PR-437 M1: a lane is busy from the start of its request", () => {
+  // Red: inFlight set only inside plain/batchRequest, so a lane whose daemon is starting reads as idle and the
+  // over-bound close may shut that fresh daemon.
+  test("the lane reads as in flight while its baseline daemon starts", async () => {
+    const r = await rig({ n: 4, seams: { holdBaselineLaneZero: true } });
+    const seen: { lane: number; inFlight: string | undefined }[] = [];
+    const real = r.priv.baselineDaemonFor.bind(r.b);
+    r.priv.baselineDaemonFor = (l, m, s) => {
+      const lane = l as { index: number; inFlight: string | undefined };
+      seen.push({ lane: lane.index, inFlight: lane.inFlight });
+      return real(l, m, s);
+    };
+    await r.fill();
+    expect(new Set(seen.map((x) => x.lane))).toEqual(new Set([0, 1]));
+    for (const x of seen) expect(x.inFlight).toBe("baseline");
+    expect(r.priv.laneList.every((l) => l.inFlight === undefined)).toBe(true); // restored after each request
+  });
+});
+
 describe("PR-437 change 5: one-shots", () => {
   // Red: the "no free slot" branch skips settling the oldest, so a third one-shot starts beside two.
   test("never more than two one-shots in flight, in-place kinds included; an in-place one-shot first settles the oldest", async () => {
@@ -807,18 +847,36 @@ describe("PR-437 change 5: one-shots", () => {
   // Red: before any join, samples take the two slots (no `admit` read), so one overlaps at 23 GiB used.
   test("with no lane joined, at most one sample runs beside, admitted by the memory read", async () => {
     const run = async (used: number) => {
+      const box: { ev?: Events } = {};
       const r = await rig({
         n: 6,
         used: () => used,
         realAdmission: true,
-        seams: { anonReader: () => 0 }, // unmeasured: no join
-        // 79302's answer waits until the first sample's one-shot started, so the request for 79303 starts after it;
-        // that one-shot runs until the request for 79303 has arrived (a request beside it)
+        seams: {
+          anonReader: () => 0, // unmeasured: no join
+          sampleRss: () => {
+            box.ev?.push("rss");
+            return GIB;
+          },
+        },
+        // 79302's answer waits until the first sample's one-shot started, so the request for 79303 starts after it
         serve: {
           holdUntil: (q, ev) => (q.cus.includes(79302) ? ev.when("start:79301") : undefined),
         },
-        hooks: { hold: (cu, ev) => (cu === 79301 ? ev.when("req:79303") : undefined) },
+        // that one-shot runs until the request for 79303 has arrived (beside it), or, in place with no room, until
+        // the worker's S1 check has read the room (the request then waits for it)
+        hooks: {
+          hold: (cu, ev) =>
+            cu === 79301
+              ? ev.until(
+                  () =>
+                    ev.list.includes("req:79303") ||
+                    ev.list.slice(ev.list.indexOf("start:79301")).includes("rss"),
+                )
+              : undefined,
+        },
       });
+      box.ev = r.ev;
       await r.fill();
       expect(r.lanes()?.unitsByLane).toEqual({ 0: 6 });
       expect(r.lanes()?.mostOneShots).toBeLessThanOrEqual(1);
@@ -826,6 +884,55 @@ describe("PR-437 change 5: one-shots", () => {
     };
     expect((await run(GIB)).samplesOverlapped).toBeGreaterThanOrEqual(1);
     expect((await run(23 * GIB)).samplesOverlapped).toBe(0); // 23 + 3 (size) + 3 (estimate) over the 28 GiB bound
+  });
+
+  // Red (S1): the loop's in-place one-shot not registered, so lane 0 sends 79304 beside the too-slow run of 79302
+  // with no room.
+  test("with no lane joined, a request goes beside an in-place one-shot only with room", async () => {
+    const run = async (used: number, releaseOnRoomCheck: boolean) => {
+      const box: { ev?: Events } = {};
+      const r = await rig({
+        n: 6,
+        used: () => used,
+        realAdmission: true,
+        seams: {
+          anonReader: () => 0, // unmeasured: no join
+          sampleRss: () => {
+            box.ev?.push("rss"); // read by admit (79301) and by S1's check
+            return GIB;
+          },
+        },
+        serve: {
+          rows: (cu) => (cu === 79302 ? { status: "fail", message: SLOW } : pass(cu)),
+          // 79303's answer waits until 79302's too-slow one-shot started, so 79304's request comes during it
+          holdUntil: (q, ev) => (q.cus.includes(79303) ? ev.when("start:79302") : undefined),
+        },
+        // the too-slow one-shot runs until 79304's request arrived, or (no room) until S1 read the room after it started
+        hooks: {
+          hold: (cu, ev) =>
+            cu === 79302
+              ? ev.until(
+                  () =>
+                    ev.list.includes("req:79304") ||
+                    (releaseOnRoomCheck &&
+                      ev.list.slice(ev.list.indexOf("start:79302")).includes("rss")),
+                )
+              : undefined,
+        },
+      });
+      box.ev = r.ev;
+      await r.fill();
+      expect(r.lanes()?.unitsByLane).toEqual({ 0: 6 });
+      return { start: r.idx("start:79302"), end: r.idx("end:79302"), req: r.idx("req:79304") };
+    };
+    // 23 + 3 held + 3 over the 28 GiB bound: 79304 waits for the one-shot's end
+    const no = await run(23 * GIB, true);
+    expect(no.start).toBeGreaterThan(-1);
+    expect(no.req).toBeGreaterThan(no.end);
+    // room: 79304 goes out while the one-shot runs
+    const yes = await run(GIB, false);
+    expect(yes.req).toBeGreaterThan(yes.start);
+    expect(yes.req).toBeLessThan(yes.end);
   });
 
   // Red: LETHAL_V3_SEQUENTIAL_SAMPLES / concurrentSamples:false ignored by the laned loop.
@@ -857,22 +964,33 @@ describe("PR-437 change 5: one-shots", () => {
 });
 
 describe("PR-437 change 2 and 4: the halt, the walk, the throws", () => {
-  // Red: the loop's halt not checked by the workers (unit start and before each request).
-  test("after the loop drops, no worker takes a new unit or sends another request", async () => {
+  // Red: the loop's halt not checked before EACH request (C7): lane 1 sends 79303 alone after the drop, mid-unit.
+  test("after the loop drops, no worker takes a new unit or sends another request, mid-unit included", async () => {
     let atDrop = -1;
     const box: { r?: Rig } = {};
+    const DROP = "notify:al-runner-v3-baseline-daemon-dropped";
     const r = await rig({
-      n: 8,
-      seams: { concurrentSamples: false, holdBaselineLaneZero: true },
-      // every answer after 79300 and 79301 waits for the drop, so each worker has one request in flight at it
+      n: 6,
+      seams: {
+        concurrentSamples: false,
+        holdBaselineLaneZero: true,
+        baselineBatching: true,
+        baselineBatchSize: 2,
+      },
+      // Lane 0: batch [79300, 79301], then batch [79304, 79305]; lane 1: batch [79302, 79303], which fails, so its
+      // unit goes on alone: 79302, then 79303. 79302-alone and [79304, 79305] are answered only after the drop.
       serve: {
+        eof: (q) => q.batch && q.cus.includes(79302),
         holdUntil: (q, ev) =>
-          q.cus.some((c) => c >= 79302)
-            ? ev.when("notify:al-runner-v3-baseline-daemon-dropped")
+          (!q.batch && q.cus.includes(79302)) || q.cus.includes(79304) ? ev.when(DROP) : undefined,
+      },
+      // the dropping sample's one-shot (79301, in place) waits until 79302-alone and [79304, 79305] have been sent
+      hooks: {
+        hold: (cu, ev) =>
+          cu === 79301
+            ? ev.until(() => ev.list.includes("req:79302") && ev.list.includes("req:79304+79305"))
             : undefined,
       },
-      // the dropping sample's one-shot waits until lane 1's request for 79303 has arrived
-      hooks: { hold: (cu, ev) => (cu === 79301 ? ev.when("req:79303") : undefined) },
       oneShotRows: (cu) => (cu === 79301 ? { status: "fail", message: "differs" } : pass(cu)),
       notify: (c) => {
         if (c === "al-runner-v3-baseline-daemon-dropped")
@@ -882,8 +1000,9 @@ describe("PR-437 change 2 and 4: the halt, the walk, the throws", () => {
     box.r = r;
     await r.fill();
     expect(r.rep().dropped).toContain("codeunit 79301");
-    expect(atDrop).toBeGreaterThan(0);
-    expect(atDrop).toBe(4); // 79300, 79301 answered; 79302 and 79303 held in flight
+    expect(r.log).toContain("req:79302"); // the unit's first alone request was in flight at the drop
+    expect(r.log).not.toContain("req:79303"); // its second never went out
+    expect(atDrop).toBe(4); // [79300, 79301], [79302, 79303] (failed), 79302, [79304, 79305]
     expect(r.serve.requests.length).toBe(atDrop);
   });
 
@@ -911,6 +1030,31 @@ describe("PR-437 change 2 and 4: the halt, the walk, the throws", () => {
     await r.fill();
     expect(r.serve.requests.length).toBeGreaterThanOrEqual(4);
     expect([...r.priv.daemonBaseline.keys()]).toEqual([79300]);
+  });
+
+  // Red (S2): the loop not reading spent() per position, so stored positions go on starting one-shots.
+  test("a spent budget stops the walk: positions stored ahead start no further one-shot", async () => {
+    let spent = false;
+    const r = await rig({
+      n: 8,
+      seams: { concurrentSamples: false, holdBaselineLaneZero: true },
+      stopHandle: { spent: () => spent, signalled: () => false, stopForMemory: () => {} },
+      // the first sample's one-shot (in place) runs until every position is stored, then the budget is spent
+      hooks: {
+        hold: (cu, ev) =>
+          cu === 79301
+            ? ev
+                .whenCount((e) => e.startsWith("ans:"), 8)
+                .then(() => {
+                  spent = true;
+                })
+            : undefined,
+      },
+    });
+    await r.fill();
+    expect(r.serve.answered).toHaveLength(8);
+    expect(shotCus(r)).toEqual([79301]); // no lane sample, no planned 79307
+    expect([...r.priv.daemonBaseline.keys()].sort()).toEqual([79300, 79301]);
   });
 
   /**
@@ -999,10 +1143,36 @@ describe("PR-437 change 2 and 4: the halt, the walk, the throws", () => {
       n: 8,
       seams: { concurrentSamples: false, holdBaselineLaneZero: true },
       oneShotRows: (cu) => (cu === 79301 ? { status: "fail", message: "differs" } : pass(cu)),
+      // the earlier sample (79301, in place) finishes only after the later throw (79303) is recorded
+      hooks: { hold: (cu, ev) => (cu === 79301 ? ev.when("threw:79303") : undefined) },
     });
     const realReq = r.priv.baselineRequest.bind(r.b);
     r.priv.baselineRequest = async (...a) => {
-      if ((a[2] as number) === 79303) throw new AlRunnerV3UnprovenBatchError("later");
+      if ((a[2] as number) === 79303) {
+        r.ev.push("threw:79303");
+        throw new AlRunnerV3UnprovenBatchError("later");
+      }
+      return realReq(...a);
+    };
+    await r.fill();
+    expect(r.idx("threw:79303")).toBeLessThan(r.idx("end:79301")); // the throw came first in time
+    expect(r.rep().dropped).toContain("codeunit 79301");
+  });
+
+  // Red: M2 dropped (a recorded worker throw rethrown before the older in-flight sample's drop is applied).
+  test("an earlier dropping sample beside the loop beats a later worker throw", async () => {
+    const r = await rig({
+      n: 8,
+      seams: { holdBaselineLaneZero: true }, // samples beside: 79301 is in flight when the loop reaches 79303
+      oneShotRows: (cu) => (cu === 79301 ? { status: "fail", message: "differs" } : pass(cu)),
+      hooks: { hold: (cu, ev) => (cu === 79301 ? ev.when("threw:79303") : undefined) },
+    });
+    const realReq = r.priv.baselineRequest.bind(r.b);
+    r.priv.baselineRequest = async (...a) => {
+      if ((a[2] as number) === 79303) {
+        r.ev.push("threw:79303");
+        throw new AlRunnerV3UnprovenBatchError("later");
+      }
       return realReq(...a);
     };
     await r.fill();
@@ -1026,21 +1196,23 @@ describe("PR-437 change 2 and 4: the halt, the walk, the throws", () => {
     });
     try {
       const r = await rig({
-        n: 5,
+        n: 7,
         seams: { holdBaselineLaneZero: true },
         serve: {
-          // lane 0's 79302 waits until lane 1's 79304 has ended
-          holdUntil: (q, ev) => (q.cus.includes(79302) ? ev.when("eof:79304") : undefined),
-          // 79302 and 79304 give no usable answer: consecutive in completion order, not in ids order
-          eof: (q) => q.cus.includes(79302) || q.cus.includes(79304),
+          // 79304's (usable) answer waits until 79306's has come: its lane is blocked, so the OTHER lane answers
+          // 79305 and 79306 first
+          holdUntil: (q, ev) => (q.cus.includes(79304) ? ev.when("ans:79306") : undefined),
+          // 79303 and 79305 give no usable answer: consecutive in completion order, not in ids order
+          eof: (q) => q.cus.includes(79303) || q.cus.includes(79305),
         },
       });
       await r.fill();
-      // the lanes answered out of order: 79304 arrived (and ended) before 79302's answer
-      expect(r.serve.log.indexOf("eof:79304")).toBeGreaterThan(-1);
-      expect(r.serve.log.indexOf("eof:79304")).toBeLessThan(r.serve.log.indexOf("eof:79302"));
-      expect(observed).toEqual(r.ids.filter((id) => id !== 79302 && id !== 79304));
-      expect(r.rep().dropped ?? "").not.toContain("two serve requests in a row");
+      // the lanes answered out of order: 79306 and the unusable 79305 before the usable 79304
+      expect(r.idx("ans:79306")).toBeGreaterThan(-1);
+      expect(r.idx("ans:79306")).toBeLessThan(r.idx("ans:79304"));
+      expect(r.idx("eof:79305")).toBeLessThan(r.idx("ans:79304"));
+      expect(observed).toEqual(r.ids.filter((id) => id !== 79303 && id !== 79305));
+      expect(r.rep().dropped).toBeUndefined();
     } finally {
       spy.mockRestore();
     }
@@ -1096,10 +1268,16 @@ describe("PR-437 change 6: per-lane samples", () => {
     expect(r.rep().dropped).toBeUndefined();
   });
 
-  /** Units of two: lane 0 takes [79300, 79301], lane 1 [79302, 79303] (the hold seam); 79303 is lane 1's sample. */
+  /**
+   * Units of two. Lane 0: [79300, 79301], then [79304, 79305], whose answer waits for the request of
+   * [79306, 79307]; lane 1: [79302, 79303] (its first request), then [79306, 79307] (its second).
+   */
   const pairs = (o: Opts = {}) =>
     rig({
       n: 8,
+      serve: {
+        holdUntil: (q, ev) => (q.cus.includes(79304) ? ev.when("req:79306+79307") : undefined),
+      },
       ...o,
       seams: {
         baselineBatching: true,
@@ -1109,36 +1287,77 @@ describe("PR-437 change 6: per-lane samples", () => {
       },
     });
 
+  // Red (S3): a lane's first REQUEST counted as warm, so 79303 (in lane 1's first batch) is sampled for it.
+  test("every codeunit of a lane's first request counts as its first answer: the sample is in its second request", async () => {
+    const r = await pairs();
+    await r.fill();
+    expect(r.answeredBy().get(1)).toEqual([79302, 79303, 79306, 79307]);
+    expect(shotCus(r)).not.toContain(79303); // inside lane 1's first (cold) request
+    expect(shotCus(r)).not.toContain(79305); // inside lane 0's second request, after its lane sample 79304
+    expect(new Set(shotCus(r))).toEqual(new Set([79301, 79304, 79306, 79307]));
+    expect(r.rep().laneSampled).toBe(2); // 79304 (lane 0) and 79306 (lane 1)
+    expect(r.rep().dropped).toBeUndefined();
+  });
+
+  // Red (S3): a batched first unit's second codeunit (the planned 79301) counted, so lane 0 is never sampled warm;
+  // or a sample in the lane's second request not counted, so the fill drops the lane as unsampled.
+  test("with no lane joined, a batched first unit's planned sample does not count; one in the second request does", async () => {
+    const noJoin = { realAdmission: true as const, seams: { anonReader: () => 0 } };
+    const four = await rig({
+      n: 4,
+      ...noJoin,
+      seams: { anonReader: () => 0, baselineBatching: true, baselineBatchSize: 2 },
+    });
+    await four.fill(); // [79300, 79301] then [79302, 79303]
+    expect(four.lanes()?.unitsByLane).toEqual({ 0: 2 });
+    expect(new Set(shotCus(four))).toEqual(new Set([79301, 79302, 79303])); // 79302: lane 0's warm sample
+    expect(four.rep().laneSampled).toBe(1);
+    expect(four.rep().dropped).toBeUndefined();
+    const three = await rig({
+      n: 3,
+      ...noJoin,
+      seams: { anonReader: () => 0, baselineBatching: true, baselineBatchSize: 2 },
+    });
+    await three.fill(); // [79300, 79301] then 79302 alone: the planned last sample, in the second request
+    expect(three.lanes()?.unitsByLane).toEqual({ 0: 2 });
+    expect(new Set(shotCus(three))).toEqual(new Set([79301, 79302]));
+    expect(three.rep().laneSampled).toBe(0);
+    expect(three.rep().dropped).toBeUndefined();
+  });
+
   // Red: a lane sample that keeps the daemon's answer on a too-slow codeunit (B1).
   test("a too-slow lane sample serves the one-shot's answer and durations", async () => {
-    const slow: Rows = (cu) => (cu === 79303 ? { status: "fail", message: SLOW } : pass(cu));
-    const r = await pairs({ serve: { rows: slow } });
+    const slow: Rows = (cu) => (cu === 79306 ? { status: "fail", message: SLOW } : pass(cu));
+    const r = await pairs({
+      serve: {
+        rows: slow,
+        holdUntil: (q, ev) => (q.cus.includes(79304) ? ev.when("req:79306+79307") : undefined),
+      },
+    });
     await r.fill();
-    expect(r.answeredBy().get(1)?.slice(0, 2)).toEqual([79302, 79303]);
-    expect(shotCus(r)).toContain(79303);
-    expect(r.priv.daemonBaseline.get(79303)?.fromDaemon).toBeUndefined();
-    expect(r.rep().skippedTooSlow).not.toContain("Codeunit79303");
+    expect(r.answeredBy().get(1)).toEqual([79302, 79303, 79306, 79307]);
+    expect(shotCus(r)).toContain(79306);
+    expect(r.priv.daemonBaseline.get(79306)?.fromDaemon).toBeUndefined();
+    expect(r.rep().skippedTooSlow).not.toContain("Codeunit79306");
     expect(r.rep().laneSampled).toBeGreaterThanOrEqual(1);
   });
 
   // Red: a skipped lane sample calls replace, writes sampledSkipped, or leaves the lane counted as sampled.
   test("a skipped lane sample calls no replace and is replaced by that lane's next answer; the identity holds", async () => {
+    // Ten codeunits (planned: 79301 and 79309), so 79307, lane 1's next answer after 79306, is not planned.
     const r = await pairs({
+      n: 10,
       // in place, so the skip is known before lane 1's next answer is walked
       seams: { concurrentSamples: false },
-      hooks: { stub: { 79303: timedOut } },
-      // lane 0's [79304, 79305] waits for the request of [79306, 79307], so lane 1 takes that unit
-      serve: {
-        holdUntil: (q, ev) => (q.cus.includes(79304) ? ev.when("req:79306+79307") : undefined),
-      },
+      hooks: { stub: { 79306: timedOut } },
     });
     await r.baseline();
     const d = r.rep();
     expect(d.dropped).toBeUndefined();
-    expect(d.laneSampledSkipped).toEqual(["Codeunit79303 (timed-out)"]);
+    expect(d.laneSampledSkipped).toEqual(["Codeunit79306 (timed-out)"]);
     expect(d.sampledSkipped).toEqual([]);
     expect(d.replacements).toEqual({});
-    expect(shotCus(r)).toContain(79306); // lane 1's next answer
+    expect(shotCus(r)).toContain(79307); // lane 1's next answer
     expect(d.laneSampled).toBeGreaterThanOrEqual(1);
     // judgeDaemonBaseline's second identity holds with the lane terms, and fails without them.
     const planned = baselineSampleIds(r.ids).length;
@@ -1155,18 +1374,29 @@ describe("PR-437 change 6: per-lane samples", () => {
 
   // Red: the lane-unsampled rule dropped, or skipped on a stop.
   test("an unsampled lane drops by name, on a stop too", async () => {
-    const plain = await pairs({
-      n: 6,
-      // the hold seam gives lane 0 [79304, 79305] at once: lane 1 has no later answer
-      hooks: { stub: { 79303: timedOut } },
-    });
+    // Single units. Lane 0: 79300, 79302 (its answer waits for 79303's request), 79304, 79305; lane 1: 79301, 79303
+    // (its second request: a lane sample; its answer waits for 79305's request, so lane 1 has no later answer).
+    const lanesOf = {
+      seams: { holdBaselineLaneZero: true as const },
+      serve: {
+        holdUntil: (q: Req, ev: Events) =>
+          q.cus.includes(79302)
+            ? ev.when("req:79303")
+            : q.cus.includes(79303)
+              ? ev.when("req:79305")
+              : undefined,
+      },
+    };
+    const plain = await rig({ n: 6, ...lanesOf, hooks: { stub: { 79303: timedOut } } });
     await plain.fill();
+    expect(plain.answeredBy().get(1)).toEqual([79301, 79303]);
     expect(plain.rep().dropped).toContain("baseline-lane-unsampled:1");
     expect(plain.rep().droppedDetail).toEqual(["baseline-lane-unsampled:1"]);
     expect(plain.rep().laneSampledSkipped).toEqual(["Codeunit79303 (timed-out)"]);
     let spent = false;
-    const stopped = await pairs({
+    const stopped = await rig({
       n: 6,
+      ...lanesOf,
       hooks: {
         stub: { 79303: timedOut },
         hold: (cu) => {
