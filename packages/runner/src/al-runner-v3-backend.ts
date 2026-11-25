@@ -348,6 +348,17 @@ interface CarryWalkTrace {
   r2: boolean;
 }
 
+/** PR-56: a row `V3_SERVE_SAFE_REFUSALS` keeps (a `notRun` error whose text a keep entry matches). Shared by `firstKeptRefusal` and the carry walk (PR-428). */
+export function isKeptRefusalRow(r: V3Row): boolean {
+  const m = r.message;
+  return (
+    r.notRun &&
+    r.status === "error" &&
+    m !== undefined &&
+    Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m))
+  );
+}
+
 /** PR-410: the baseline tests a walk answer must hold exactly, as `codeunit.method` keys. */
 function carryWantKeys(expected: ReadonlyMap<number, ReadonlySet<string>>): Set<string> {
   const wantKeys = new Set<string>();
@@ -2433,6 +2444,7 @@ interface Daemon {
   /**
    * PR-56: the first kept refusal (a `V3_SERVE_SAFE_REFUSALS` row) of the LAST `requestOne` answer on this
    * daemon. The next request is checked for drift (`keptRefusalDrift`); each request replaces it.
+   * PR-428: a carry walk that keeps the daemon past a kept refusal sets it too (it never clears it).
    */
   keptRefusal?: { readonly text: string; readonly test: string } | undefined;
   /** R948: set on the baseline's own daemon: the stop (seconds) it was started with. Absent: a mutant-phase daemon. */
@@ -8170,6 +8182,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
     const tests = kept.reduce((n, cu) => n + (this.testsPerCodeunit.get(cu) ?? 1), 1);
     const answers: V3Row[][] = [];
+    const servedBy: Daemon[] = []; // PR-428: the daemon behind each answer (ensureDaemon can replace it mid-walk)
     for (const m of [mutantId, SELECTOR_RESOURCE_NONE, mutantId]) {
       if (this.stopHandle?.signalled() === true) return failed("a stop signal ended the walk");
       const daemon = await this.ensureDaemon(lane, mode, kept);
@@ -8220,6 +8233,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         rows.push(r);
       }
       answers.push(rows);
+      servedBy.push(daemon);
       if (answers.length === 2 && trace.pending) {
         // PR-410 premise: the predicted test's row under NONE is a pass al-runner flagged.
         trace.r2 = true;
@@ -8240,13 +8254,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           stopSeconds: s,
         });
         if ("reason" in one) {
-          await this.closeUnkeptWalk(lane, answers);
+          await this.closeUnkeptWalk(lane, answers, servedBy, mode, echoId);
           return failed(one.reason);
         }
       }
     }
     const out = judgeCarryWalk({ mutantId, echoId, expected, answers, stopSeconds: s });
-    await this.closeUnkeptWalk(lane, answers);
+    await this.closeUnkeptWalk(lane, answers, servedBy, mode, echoId);
     return out;
   }
 
@@ -8254,8 +8268,27 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * A row the daemon cannot keep (R612) leaves it dirty: replace it, as every other send does. PR-410: the
    * first such row's family, text and test ride on the close EVENT only (never the close counts).
    */
-  private async closeUnkeptWalk(lane: Lane, answers: readonly (readonly V3Row[])[]): Promise<void> {
-    if (answers.every((rows) => serveDaemonReusable(serveLines(rows), "v3"))) return;
+  private async closeUnkeptWalk(
+    lane: Lane,
+    answers: readonly (readonly V3Row[])[],
+    servedBy: readonly Daemon[],
+    mode: RequestMode,
+    echoId: number,
+  ): Promise<void> {
+    if (answers.every((rows) => serveDaemonReusable(serveLines(rows), "v3"))) {
+      // PR-428 (R1207): the daemon is kept; arm PR-56's drift guard from what IT served (never clear an arm).
+      const d = lane.daemonFor(mode);
+      if (d === undefined) return;
+      for (let i = 0; i < answers.length; i++) {
+        if (servedBy[i] !== d) continue;
+        const hit = (answers[i] ?? []).find((r) => r.codeunit !== echoId && isKeptRefusalRow(r));
+        if (hit !== undefined) {
+          d.keptRefusal = { text: hit.message ?? "", test: hit.name };
+          return;
+        }
+      }
+      return;
+    }
     let why: ReturnType<typeof unkeptRowReason>;
     for (const rows of answers) {
       why = unkeptRowReason(serveLines(rows));
@@ -10251,14 +10284,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const e of sent) {
       if (e.echo) continue;
       for (const r of rows.get(e.id) ?? []) {
-        const m = r.message;
-        if (
-          r.notRun &&
-          r.status === "error" &&
-          m !== undefined &&
-          Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m))
-        )
-          return { text: m, test: r.name };
+        if (isKeptRefusalRow(r)) return { text: r.message ?? "", test: r.name };
       }
     }
     return undefined;
