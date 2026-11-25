@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**68 of 1177 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 1178 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -408,10 +408,11 @@ that ordering is the priority.
 - **R1186** · 30 serve keep entries hold alternations, and PR-361 proves only ONE real al-runner line per entry: an unmatched branch is R1153's failure shape (a keep that never meets real output), unguarded · [R1186.md](docs/roadmap/R1186.md) · done (1f111b808) — PR-362: pr362-keep-branch-lines.test.ts splits every keep entry's non-capturing groups…
 - **R1197** · refusedCutTail's tail route reads a mutant `survived` when the test that would kill it is the one refused at baseline: v3 never runs it and has no coverage for it, so on DO 68874 9 of the 47 recovered survivors are killed on BC (false survivors); with the flag off the PR-250 cut scored them `error` · [R1197.md](docs/roadmap/R1197.md) · done (9420617d2, coord PR-381): the ruling (q-20261123T112833-7e045797 and its scope answers) is built as a…
 - **R1203** · Stop groups (alRunnerV3.stopGroups) moved 5 DO killingTests to an EARLIER covering test (codeunit 68861), not PR-256 amendment 1's kind: PR-359's V BLOCK, so the flag stays off · [R1203.md](docs/roadmap/R1203.md) · open
-- **R1206** · The carry walk's B1 check sees a flagged pass only if the serve daemon writes `flagged`: walk rows never get R949's `flaggedUnknown`, so on a build whose serve rows omit the flag, a flagged pass reads as sound inside the walk · [R1206.md](docs/roadmap/R1206.md) · open
+- **R1206** · The carry walk's B1 check sees a flagged pass only if the serve daemon writes `flagged`: walk rows never get R949's `flaggedUnknown`, so on a build whose serve rows omit the flag, a flagged pass reads as sound inside the walk · [R1206.md](docs/roadmap/R1206.md) · closed 2026-11-25 — by ruling (PR-432): both builds in use write `flagged` on serve rows, measured; the…
 - **R1207** · A carry walk that keeps a serve daemon past a kept refusal never arms PR-56's drift guard (keptRefusal), so the next request on that daemon is not checked · [R1207.md](docs/roadmap/R1207.md) · done (e01bfe638, PR-428)
 - **R1212** · LethAL's static hang refusal misses two loop-hang shapes met on a real project: a negated Next() test that ends a repeat-until loop, and the removal of a Get that puts the loop's record cursor back in place · [R1212.md](docs/roadmap/R1212.md) · done (ef772d98a, PR-429; gaps in R1213)
 - **R1213** · PR-429's loop-cursor hang refusals leave three known gaps: an end test grouped below an outer or/and, a paren-less `R.Next = 0`, and the removal of a filter call before a loop that inserts into its own table (PR-427's M2284) · [R1213.md](docs/roadmap/R1213.md) · open — gaps (1) and (2) closed 2026-11-25 by ruling (PR-430: 0 sites on DO and 0 in the fixtures, by parse)…
+- **R1215** · R949 marks every serve-daemon row `flaggedUnknown`, but both builds in use write `flagged` on serve rows: an unflagged daemon pass may be refused as unknown although the build reported it sound · [R1215.md](docs/roadmap/R1215.md) · open
 
 ## Product gaps a real project hits
 
