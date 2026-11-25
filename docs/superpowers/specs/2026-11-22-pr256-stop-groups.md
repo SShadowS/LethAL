@@ -208,3 +208,58 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
 - **Still to be pre-committed, each in its own section before it runs:** the leg-C (or session) fact with lethal-bugs, and
   the DO speed series.
 
+## Amendment 6 (2026-11-25, coord PR-452): the leg-C fact for amendment 4's kind, and the DO speed series, pre-committed
+### The fact `stop-groups-earlier-killer` (agreed with lethal-bugs: gate-only, no BC claim; lethal-preproc builds it)
+- **Why this fact.** Amendment 4's kind rests on three al-runner behaviours. R1203 measured them on DO; this fact pins them
+  on invented AL, so a build that changes any one of them is seen:
+  - (a) A codeunit-GLOBAL `TestPage` that an earlier test leaves open (it fails before `Close()`) makes a later test of
+    the same codeunit, in the same plain request, fail with "The TestPage is already open." That cascade is why the flag-off
+    killer is F, and why F carries `[v3-codeunit-state-possible]`.
+  - (b) In a stop-grouped request, the earlier test's failure skips the later test with PR-256's pinned stop text
+    (`STOP_SKIP_TEXT`) naming the earlier test.
+  - (c) The later test, run ALONE in its own request (the alone re-run), passes.
+- **The probe.** Invented AL in its own id block, beside PR-342's (ids 5079x):
+  - a table, a Card page on it, and a test codeunit whose `TestPage` is a codeunit GLOBAL;
+  - test A opens the page and raises an `Error` before `Close()`;
+  - test B opens the page, asserts a field, and closes it.
+  - One fresh daemon, `testIsolation` test, three requests:
+    1. plain, the whole codeunit;
+    2. one stop group holding the codeunit;
+    3. B alone (`runSelectedOnly`).
+- **The judge:** `matches` only when (a), (b) and (c) all hold; `diverged` when any differs, or the build refuses the
+  request; `unmeasurable` when there is no answer.
+- **The gate rule:** GATE-ONLY, like PR-342's fact. A `diverged` never fails the gate; it prints
+  `al-runner-v3-stop-groups-earlier-killer-moved`. `unmeasurable` is an infra-fail, as for every fact.
+  - **It is NOT a precondition of `alRunnerV3.stopGroups` now.** The flag keeps reading `stop-groups` alone. Whether the
+    default-on ruling requires this fact is that ruling's call.
+- **The notes check stays in unit tests**, because it is LethAL's, not al-runner's: a unit test pins that a flag-off F
+  after an earlier failed covering test P carries `[v3-codeunit-state-possible]` naming P (bugs' condition 1). Leg C
+  judges raw al-runner output only.
+- **Predictions:**
+  - on `current` (edge-e5176a9fd) the fact reads `matches`;
+  - leg C's fact count moves 52 -> 53 (24 -> 25 capability-kind), pinned with `V3_LEG_C_FACTS` in the P10 test;
+  - every other fact and leg figure is unchanged;
+  - red tests both ways: each of (a), (b) and (c) altered in a fake answer reads `diverged`; all three hold reads `matches`.
+
+### The DO speed series (measure; the default is a separate ruling)
+- **Four scoped DO runs on master, interleaved A, B, A, B:**
+  - c5's settings (`isolation: test`) on `current`;
+  - `--only` three files:
+    - `src/Features/Email/Sending/CDOEMailHandler.Codeunit.al` (busy);
+    - `src/Features/ESeal/CDOeSealServiceSetup.Page.al` (R1203's five);
+    - `src/Features/HandledState/CDOUnhandledServicePagesMgt.Codeunit.al` (M12932);
+  - `--workers 5`, CPUs 0-11, heavy-slot `--peak 22`;
+  - PR-437's arm driver (LethAL's own pid; the watchdog TERMs only it);
+  - a fresh store per arm;
+  - A: the config as c5's; B: the same with `alRunnerV3.stopGroups: true`.
+- **Judged per mutant on the full site key (any difference not named here is a BLOCK on the flag):**
+  - verdicts are equal across all four arms;
+  - a `killingTest` may differ between A and B only by amendment 1's kind or amendment 4's kind. Each such move is listed,
+    and a P-before-F move must satisfy (i)-(iii), with (ii) run by `/coord/handoff/PR-452/alone/alone.ts`;
+  - A1 must equal A2, and B1 must equal B2, per mutant (verdict and killingTest): run-to-run stability;
+  - the receipts show the stop ON in B (PR-256's counts line) and OFF in A.
+- **Speed:**
+  - the mutants phase of each B, against the mean of the A arms beside it;
+  - the fork's measurement predicts 77-80% (a 20-23% cut);
+  - reported with load per arm, never as a bar: the default-on ruling reads it.
+
