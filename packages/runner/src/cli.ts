@@ -3577,7 +3577,13 @@ export function v3RecheckOf(a: {
         );
       }
       // PR-434: on every exit, a failed or stopped nested run's partial TIMING included.
-      const rendered = timingError === undefined ? timing.render() : undefined;
+      // Guarded as the main run's render is: a render error never replaces the nested result or its error.
+      let rendered: string | undefined;
+      try {
+        rendered = timingError === undefined ? timing.render() : undefined;
+      } catch (err) {
+        timingError ??= err;
+      }
       if (rendered !== undefined) console.warn(`recheck (nested session) ${rendered}`);
       else if (timingError !== undefined)
         console.warn(

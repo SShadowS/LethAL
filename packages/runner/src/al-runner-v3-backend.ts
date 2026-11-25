@@ -6424,11 +6424,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       for (const [k, v] of answers) this.daemonBaseline.set(k, v);
     } finally {
-      await this.closeLane(lane, "baseline-end");
+      // Printed before the close, so a close that throws does not lose it; the wall leaves the close out.
       const s = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
       console.warn(
         `[lethal] al-runner-v3 per-test baseline fill (PR-434): wall ${s(monoNow() - fillStarted)}; daemon requests ${spent.requests} (${s(spent.requestMs)}); cross-check one-shots ${spent.samples} (${s(spent.sampleMs)}, in place); one daemon, in sequence.`,
       );
+      await this.closeLane(lane, "baseline-end");
     }
   }
 
