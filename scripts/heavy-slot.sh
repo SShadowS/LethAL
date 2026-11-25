@@ -3,7 +3,7 @@
 #
 #   scripts/heavy-slot.sh [--wait] [--peak serve|baseline|gate|build|<GiB>] <baseapp|other> <cmd...>
 #
-# R952 (R953) `--peak`: the job's expected memory peak (serve 8, baseline 12, gate 2, build 3 GiB, or
+# R952 (R953) `--peak`: the job's expected memory peak (serve 8, baseline 12, gate 3, build 3 GiB, or
 # a number); none = the class default (other 8, baseapp 12). PR-179, from R992's measurement of 2,060
 # jobs: a build uses 2.2-3.0 GiB; a DO single `lethal run` on v3 declares at least 8 GiB, and a Base
 # Application Fixed Asset run at least 10 GiB (both went above lower declarations). It goes into the class file
@@ -60,7 +60,7 @@ if [ "${1:-}" = "--peak" ]; then
   case "${2:-}" in
   serve) peak=8 ;;
   baseline) peak=12 ;;
-  gate) peak=2 ;;
+  gate) peak=3 ;; # PR-426 (R992 revisit, PR-424): v3 gates measured up to 3.06 GiB; was 2
   build) peak=3 ;;
   *)
     # a zero peak passes here and is refused by the guard (exit 2, the command never runs)

@@ -84,10 +84,11 @@ export function writeSlotClass(
  * daemon at 5,988 MiB plus LethAL and the rest; its baseline 7.8 GB) -> 8; a BaseApp-class v3 run
  * 3.8-5.3 GB, a BaseApp instrumentation job about 10.6 GB -> 12 (R-942's DO baseline reached 30.8 GB
  * and was OOM-killed: such a job declares its own, larger peak and runs under a watchdog); the v3 gate
- * about 2.0 GB -> 2; a module pool build 0.37-0.55 GB -> 1, PR-179: 2.2-3.0 GiB measured -> 3. A job that declares nothing gets its
+ * about 2.0 GB -> 2, PR-426 (R992's revisit, PR-424: 21 of 124 gate jobs measured above 2, up to 3.06 GiB) -> 3; a
+ * module pool build 0.37-0.55 GB -> 1, PR-179: 2.2-3.0 GiB measured -> 3. A job that declares nothing gets its
  * class's default: `other` 8 (a capped serve run), `baseapp` 12.
  */
-export const PEAK_GIB = { serve: 8, baseline: 12, gate: 2, build: 3 } as const;
+export const PEAK_GIB = { serve: 8, baseline: 12, gate: 3, build: 3 } as const;
 // PR-179 (R992 measurement, 2,060 jobs): a build measured 2.2-3.0 GiB, so it declares 3 (over the
 // small-job allowance's 2 GiB, so it uses the normal checks). A DO single `lethal run` on v3 declares at
 // least 8 GiB and a Base Application Fixed Asset run at least 10 GiB: both went above lower declarations.
