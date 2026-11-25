@@ -23,8 +23,15 @@ The legs:
   keyed by the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the `.gated`
   commit. This gate never does: it sets `LETHAL_V3_FRESH_PROBE=1` for every session it starts, and leg C calls
   `runV3ContractProbe` directly, so the figures below are always measured fresh. The update gate runs this gate.
-- C: the contract probe, 36 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of four kinds: 9 defect, 18 contract,
-  1 warn and 8 capability (r9, below; capability since PR-114a). The 8 capability facts
+- C: the contract probe, 52 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`): 9 defect, 18 contract,
+  1 warn and 8 capability (r9, below; capability since PR-114a), plus the carry fact `batch-sequential-carry`
+  (PR-340), `stop-groups` (PR-342) and, since PR-442, the 14 `entry-no-cross-*` facts. The 14 entry facts
+  (`V3_ENTRY_FACTS`, spec `docs/superpowers/specs/2026-11-25-pr442-entry-no-cross-facts.md`) measure that no state
+  crosses the ENTRIES of one serve request, on two mutant-shaped daemons (login replay off and on) over invented ids
+  50450-50469. They are gate-only like `stop-groups`: a `diverged` never fails the gate, and leg C prints
+  `al-runner-v3-entry-carry: <fact>` (a state crossed) or `al-runner-v3-entry-probe-dead: <fact>` (the probe did not
+  measure: wrong rows, or a positive control that reads the default); `unmeasurable` is an `infra-fail`. The readings
+  ride in the build's record (`batchFacts`). The 8 capability facts
   (`V3_CAPABILITY_FACTS`, spec `docs/superpowers/specs/2026-11-17-pr114a-batching-capability-facts.md`) are what
   baseline batching (PR-114b) will rest on, each one made of 1, 2 or 3 serve requests of LethAL's batch body over its own
   invented app (ids 50700-50779): `batch-no-cross-singleinstance`, `-library-global`, `-row` and `-subscriber` (no state

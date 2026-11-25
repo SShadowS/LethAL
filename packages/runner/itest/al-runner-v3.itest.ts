@@ -69,6 +69,7 @@ import {
   type V3KeepApp,
   V3_CAPABILITY_FACTS,
   V3_CARRY_FACT,
+  V3_ENTRY_FACTS,
   runV3ContractProbe,
   v3DefectWarnings,
 } from "../src/al-runner-v3-contract";
@@ -671,7 +672,9 @@ async function legC(scratch: string): Promise<readonly string[]> {
         (f) =>
           (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact) ||
           f.fact === V3_CARRY_FACT ||
-          f.fact === STOP_GROUPS_FACT,
+          f.fact === STOP_GROUPS_FACT ||
+          // PR-442: and the 14 entry-no-cross facts, which C1 and the echo drop read from the record.
+          (V3_ENTRY_FACTS as readonly string[]).includes(f.fact),
       )
       .map((f) => [f.fact, f.verdict]),
   );

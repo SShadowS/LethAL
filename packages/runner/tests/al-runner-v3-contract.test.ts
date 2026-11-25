@@ -34,6 +34,7 @@ import {
   type V3ProbeEnv,
   V3_CAPABILITY_FACTS,
   V3_CARRY_FACT,
+  V3_ENTRY_FACTS,
   V3_KEEP_APP_FAMILIES,
   V3_KEEP_CASES,
   burnerArgv,
@@ -678,6 +679,42 @@ function stopGroupsAnswer(req: Record<string, unknown>): CapAnswer {
   return { tests, summary: {} };
 }
 
+/** PR-442: is this serve request the entry facts'? (its apps live under `entry-no-cross`) */
+const isEntryRequest = (q: Record<string, unknown>): boolean =>
+  Array.isArray(q.sourcePaths) && String(q.sourcePaths[0]).includes("entry-no-cross");
+
+/** PR-442: what `current` answers an entry request (probe v2's rows): a clean reader per entry, a carrying control after the writer. */
+function entryAnswer(req: Record<string, unknown>): CapAnswer {
+  const tests: Record<string, unknown>[] = [];
+  for (const e of (req.entries ?? []) as {
+    id: string;
+    test: string;
+    resources: Record<string, string>;
+    excludeTests?: string[];
+  }[]) {
+    const all = ["A_Reader1", "B_Writer", "C_Reader2"];
+    const methods = e.test.endsWith(".")
+      ? all.filter((m) => !(e.excludeTests ?? []).includes(`Codeunit50460.${m}`))
+      : [e.test.split(".")[1] ?? ""];
+    const res = e.resources["active-mutant.txt"] ?? "";
+    let w = false;
+    for (const m of methods) {
+      const name = `Codeunit50460.${m}`;
+      if (m === "B_Writer") {
+        w = true;
+        tests.push({ name, entry: e.id, status: "pass" });
+      } else
+        tests.push({
+          name,
+          entry: e.id,
+          status: "fail",
+          message: `MEASURED lasterr=[] selector=${res} fresh=${res} appSI=${w ? 7 : 0} testSI=${w ? 8 : 0} global=${w ? 9 : 0} lib=${w ? 5 : 0} workdate=${w ? "2031-01-01" : "2026-11-25"} language=${w ? 1030 : 1033} temp=${w ? 1 : 0} static=${w ? 2 : 0} manual=${w ? 1 : 0} rows=0 iso=No seq=No`,
+        });
+    }
+  }
+  return { tests, summary: {} };
+}
+
 /** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
 function fakeServe(
   rows: Record<string, { status: string; notRun?: boolean; message?: string }> = SERVE_ROWS,
@@ -714,12 +751,17 @@ function fakeServe(
           : undefined;
         if (
           req.command === "runTests" &&
-          (capFact?.startsWith("batch-") === true || capFact === "stop-groups")
+          (capFact?.startsWith("batch-") === true ||
+            capFact === "stop-groups" ||
+            isEntryRequest(req))
         ) {
-          // PR-114a: a capability fact's request (its own scratch folder is named for it). PR-342: and stop-groups'.
-          const def =
-            capFact === "stop-groups" ? stopGroupsAnswer(req) : capabilityAnswer(capFact, req);
-          const ans = o.cap?.(capFact, req, def) ?? def;
+          // PR-114a: a capability fact's request (its own scratch folder is named for it). PR-342: and stop-groups'. PR-442: and the entry facts'.
+          const def = isEntryRequest(req)
+            ? entryAnswer(req)
+            : capFact === "stop-groups"
+              ? stopGroupsAnswer(req)
+              : capabilityAnswer(capFact ?? "", req);
+          const ans = o.cap?.(capFact ?? "", req, def) ?? def;
           const send = (a: CapAnswer): void => {
             if ("hang" in a) late = a.hang;
             else if ("error" in a) emit(JSON.stringify({ error: a.error }));
@@ -805,7 +847,8 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
     }
     // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon; PR-340: and the carry fact's own; PR-342: and stop-groups'.
     // PR-363: and one fresh daemon per family app, after serve-keep-reasons' own (now 4 + V3_KEEP_APP_FAMILIES)
-    expect(serveCwds).toHaveLength(4 + V3_KEEP_APP_FAMILIES);
+    // PR-442: and the entry facts' two (login replay off, on)
+    expect(serveCwds).toHaveLength(6 + V3_KEEP_APP_FAMILIES);
     for (const c of serveCwds) {
       expect(c).toBeDefined();
       expect(c).not.toBe(process.cwd());
@@ -908,12 +951,29 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     // PR-114a: a second daemon, with the same argv, measures the capability facts; PR-340: a third, the carry fact's own; PR-342: a fourth, stop-groups'.
     const serveArgv = [resolve("/fake/alrunner"), "serve", "--test-timeout", "3"];
     // PR-363: and one more per family app (V3_KEEP_APP_FAMILIES), right after the first
-    expect(s.argvs).toEqual(Array.from({ length: 4 + V3_KEEP_APP_FAMILIES }, () => serveArgv));
+    // PR-442: and the entry facts' two daemons, last, with probe442b's argv (packages folder, BC version, no download)
+    const entryArgv = [
+      resolve("/fake/alrunner"),
+      "serve",
+      "--package-cache",
+      "/fake/deps",
+      "--test-timeout",
+      "3",
+      "--bc-version",
+      BC,
+      "--no-download",
+    ];
+    expect(s.argvs).toEqual([
+      ...Array.from({ length: 4 + V3_KEEP_APP_FAMILIES }, () => serveArgv),
+      entryArgv,
+      entryArgv,
+    ]);
     const run = s.requests.filter(
       (q) =>
         q.command === "runTests" &&
         !isCapabilityRequest(q) &&
         !isStopGroupsRequest(q) &&
+        !isEntryRequest(q) &&
         !String((q.sourcePaths as string[])[0]).startsWith(`${FAKE_KEEP_DIR}/`),
     );
     expect(run.length).toBe(1);
@@ -1366,6 +1426,8 @@ describe("§8 the contract probe", () => {
         "batch-lane-strict-reruns",
         // PR-342
         "stop-groups",
+        // PR-442
+        ...V3_ENTRY_FACTS,
       ].sort(),
     );
   });
@@ -1402,6 +1464,7 @@ describe("PR-114a: the eight capability facts", () => {
       ...V3_CAPABILITY_FACTS,
       V3_CARRY_FACT,
       STOP_GROUPS_FACT,
+      ...V3_ENTRY_FACTS,
     ]);
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
@@ -1559,9 +1622,9 @@ describe("PR-114a: the eight capability facts", () => {
       return { ...h, write: (l: string) => h.write(l.replaceAll("/", "\\\\")) };
     };
     const r = await probe({}, win);
-    for (const n of [...V3_CAPABILITY_FACTS, V3_CARRY_FACT, STOP_GROUPS_FACT])
+    for (const n of [...V3_CAPABILITY_FACTS, V3_CARRY_FACT, STOP_GROUPS_FACT, ...V3_ENTRY_FACTS])
       expect(r.facts.find((x) => x.fact === n)?.verdict, n).toBe("matches");
-    expect(r.facts.length).toBe(38);
+    expect(r.facts.length).toBe(52);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -1577,7 +1640,7 @@ describe("PR-114a: the eight capability facts", () => {
     // the next fact, and every other, reads as if nothing had happened: a fresh daemon after the timeout
     for (const n of V3_CAPABILITY_FACTS.filter((x) => x !== "batch-no-cross-singleinstance"))
       expect(f(n)?.verdict, n).toBe("matches");
-    expect(serve.argvs.length).toBe(5 + V3_KEEP_APP_FAMILIES); // serve-keep-reasons, then PR-363's family daemons, the capability daemon, its replacement, the carry fact's daemon, stop-groups'
+    expect(serve.argvs.length).toBe(7 + V3_KEEP_APP_FAMILIES); // serve-keep-reasons, then PR-363's family daemons, the capability daemon, its replacement, the carry fact's daemon, stop-groups', the two entry daemons (PR-442)
   });
 
   test("batch-onrun-excluded-no-carry: diverged when the excluded OnRun writer's row reaches the batch", async () => {
@@ -1734,7 +1797,7 @@ describe("PR-114a: the eight capability facts", () => {
         seen.set(name, readFileSync(join(dir, "src", "Batch.Codeunit.al"), "utf8"));
       return def;
     });
-    expect(r.facts.length).toBe(38);
+    expect(r.facts.length).toBe(52);
     expect([...seen.keys()].sort()).toEqual([...V3_CAPABILITY_FACTS, V3_CARRY_FACT].sort());
     // PR-342: stop-groups' own AL, ids 50781-50785 (its own scratch folder, so the carry fact's 50780s do not meet it).
     const stopIds = [...(stopAl ?? "").matchAll(/^codeunit (\d+) /gm)].map((m) => Number(m[1]));
@@ -2307,7 +2370,7 @@ describe("§8 the contract probe, continued", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(38);
+    expect(r.facts.length).toBe(52);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -2618,7 +2681,7 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10 (R590, r13; PR-114a; PR-340; PR-342): 38 facts, 9 defect, 18 contract, 1 warn, 10 capability-kind (8 + the carry fact + stop-groups); the old counts 37, 36 and 28 are gate-fail", async () => {
+  test("P10 (R590, r13; PR-114a; PR-340; PR-342; PR-442): 52 facts, 9 defect, 18 contract, 1 warn, 24 capability-kind (8 + the carry fact + stop-groups + 14 entry facts); the old counts 38, 37, 36 and 28 are gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
     expect([
@@ -2627,8 +2690,9 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
       kinds("contract"),
       kinds("warn"),
       kinds("capability"),
-    ]).toEqual([38, 9, 18, 1, 10]);
-    expect(V3_LEG_C_FACTS).toBe(38);
+    ]).toEqual([52, 9, 18, 1, 24]);
+    expect(V3_LEG_C_FACTS).toBe(52);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 38).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 37).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 36).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 28).outcome).toBe("gate-fail");
@@ -3209,6 +3273,64 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
     return { spawn, envs, serve };
   };
 
+  // PR-442: the entry facts' six requests are pinned whole: probe442b's three bodies, on the replay-off daemon, then again on the replay-on one.
+  test("PR-442: the entry facts send exactly six requests (T-flag, T-plain, C-method, twice), no coverage, replay off then on", async () => {
+    const serve = fakeServe();
+    const seen: { replay: string | undefined; body: Record<string, unknown> }[] = [];
+    const spawn: ServerSpawnFn = (argv, opts) => {
+      const h = serve.spawn(argv, opts);
+      const replay = mergeChildEnv(opts?.env ?? {}).ALRUNNER_LOGIN_REPLAY;
+      return {
+        ...h,
+        write: (l: string) => {
+          const q = JSON.parse(l) as Record<string, unknown>;
+          if (isEntryRequest(q)) seen.push({ replay, body: q });
+          h.write(l);
+        },
+      };
+    };
+    await probe({}, spawn);
+    const R = "active-mutant.txt";
+    const CU = "Codeunit50460";
+    const cut = [`${CU}.B_Writer`, `${CU}.C_Reader2`];
+    const tEntries = [
+      { id: "e1", resources: { [R]: "MUT-A" }, test: `${CU}.` },
+      { id: "e2", resources: { [R]: "MUT-B" }, test: `${CU}.`, excludeTests: cut },
+    ];
+    const roots = (b: Record<string, unknown>) => ({
+      ...b,
+      sourcePaths: (b.sourcePaths as string[]).map((p) => folderName(p)),
+    });
+    const flag = {
+      command: "runTests",
+      sourcePaths: ["app", "tests"],
+      testIsolation: "test",
+      runSelectedOnly: true,
+      entries: tEntries,
+    };
+    const plain = {
+      command: "runTests",
+      sourcePaths: ["app", "tests"],
+      testIsolation: "test",
+      entries: tEntries,
+    };
+    const method = {
+      command: "runTests",
+      sourcePaths: ["app", "tests"],
+      testIsolation: "codeunit",
+      runSelectedOnly: true,
+      entries: [
+        { id: "e0", resources: { [R]: "MUT-Z" }, test: `${CU}.` },
+        { id: "e1", resources: { [R]: "MUT-A" }, test: `${CU}.B_Writer` },
+        { id: "e2", resources: { [R]: "MUT-B" }, test: `${CU}.A_Reader1` },
+      ],
+    };
+    expect(seen.map((x) => roots(x.body))).toEqual([flag, plain, method, flag, plain, method]);
+    for (const x of seen)
+      expect(Object.keys(x.body).filter((k) => k.startsWith("coverage"))).toEqual([]);
+    expect(seen.map((x) => x.replay)).toEqual(["0", "0", "0", "1", "1", "1"]);
+  });
+
   // Test 8, leg C half. Red (a): drop `serverEnv` from the carry spec in BATCH_FACTS, so its server
   // does not get the variable. Red (b): put AL_STRICT_SEQUENTIAL into `v3ChildEnv`, so every server does.
   test("only the carry fact's OWN server gets AL_STRICT_SEQUENTIAL=1; serve-keep-reasons' and the eight facts' servers do not", async () => {
@@ -3224,7 +3346,12 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
         expect(r.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict).toBe("matches");
         // serve-keep-reasons, the eight facts', the carry fact's, then (PR-342) stop-groups'.
         // PR-363: serve-keep-reasons' own and its V3_KEEP_APP_FAMILIES family daemons come first, all without the variable.
-        expect(envs).toHaveLength(3 + 1 + V3_KEEP_APP_FAMILIES);
+        // PR-442: then the two entry daemons (mutant-daemon env: AL_STRICT_SEQUENTIAL=1; login replay off, then on).
+        expect(envs).toHaveLength(5 + 1 + V3_KEEP_APP_FAMILIES);
+        expect(envs.slice(-2).map((e) => mergeChildEnv(e ?? {}).ALRUNNER_LOGIN_REPLAY)).toEqual([
+          "0",
+          "1",
+        ]);
         expect(
           envs.map((e) => mergeChildEnv(e ?? {}).AL_STRICT_SEQUENTIAL),
           `ambient ${ambient}`,
@@ -3233,6 +3360,8 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
           undefined,
           "1",
           undefined,
+          "1",
+          "1",
         ]);
       }
     } finally {
@@ -3607,7 +3736,11 @@ describe("PR-363: serve-keep-reasons' per-family apps, each on its own fresh dae
       // never the old request alone: serve-keep-reasons ran no request at all
       expect(
         s.requests.some(
-          (q) => q.command === "runTests" && !isCapabilityRequest(q) && !isStopGroupsRequest(q),
+          (q) =>
+            q.command === "runTests" &&
+            !isCapabilityRequest(q) &&
+            !isStopGroupsRequest(q) &&
+            !isEntryRequest(q),
         ),
       ).toBe(false);
     }
