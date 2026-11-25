@@ -983,6 +983,28 @@ describe("v3RecheckOf (cli wiring)", () => {
     ).not.toHaveProperty("stopGroups");
   });
 
+  // PR-434. Red: drop the nested fold's print in v3RecheckOf's finally.
+  test("PR-434: the nested session prints its own TIMING, under its own heading", async () => {
+    const warned: string[] = [];
+    const was = console.warn;
+    console.warn = (...a: unknown[]) => {
+      warned.push(a.map(String).join(" "));
+    };
+    try {
+      await wire(section).recheck?.runner({
+        targets: [target("M1")],
+        tests: ["T Codeunit.T1"],
+        budgetSeconds: 60,
+      });
+    } finally {
+      console.warn = was;
+    }
+    const block = warned.find((w) => w.startsWith("recheck (nested session) TIMING"));
+    expect(block).toBeDefined();
+    expect(block).toContain("generate 0.0 s");
+    expect(block).toContain("teardown 0.0 s");
+  });
+
   // PR-402 review F1. Red: drop the `loginReplay: false` override in v3RecheckOf.
   test("PR-402: the nested recheck never carries the login replay; a config without the key is unchanged", async () => {
     const req = { targets: [target("M1")], tests: ["T Codeunit.T1"], budgetSeconds: 60 };

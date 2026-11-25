@@ -3501,6 +3501,9 @@ export function v3RecheckOf(a: {
     else req.signal?.addEventListener("abort", closeOnSignal, { once: true });
     const store = a.newStore();
     const events: RunEvent[] = [];
+    // PR-434: the nested session's own TIMING, folded live as the main run's is (its events never reach the main fold).
+    const timing = createTimingFold({ now: () => performance.now() });
+    let timingError: unknown;
     try {
       const report = await a.runSession({
         ...base,
@@ -3524,7 +3527,16 @@ export function v3RecheckOf(a: {
         // PR-303: nor does it prune: the recheck must run every covering test.
         reachPrune: false,
         instrumentedDir: join(a.scratchRoot, "recheck-instrumented"),
-        emit: [(e) => events.push(e)],
+        emit: [
+          (e) => {
+            events.push(e);
+            try {
+              timing.add(e);
+            } catch (err) {
+              timingError ??= err;
+            }
+          },
+        ],
         lines,
         exactSites,
         keepOnlyTests: req.tests,
@@ -3564,6 +3576,13 @@ export function v3RecheckOf(a: {
           `[lethal] recheck cleanup failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+      // PR-434: on every exit, a failed or stopped nested run's partial TIMING included.
+      const rendered = timingError === undefined ? timing.render() : undefined;
+      if (rendered !== undefined) console.warn(`recheck (nested session) ${rendered}`);
+      else if (timingError !== undefined)
+        console.warn(
+          `[lethal] recheck TIMING not printed: ${timingError instanceof Error ? timingError.message : String(timingError)}`,
+        );
     }
   };
   return { budgetSeconds: section.recheckBudgetSeconds, runner };
