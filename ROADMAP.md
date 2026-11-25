@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**71 of 1183 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**72 of 1184 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1228,6 +1228,7 @@ that ordering is the priority.
 - **R1218** · On full DO, LethAL's own per-request time is about 4.8% of the mutants phase's lane-seconds (request wall outside al-runner 2.7%, lane time in no request 2.1%), not yet decomposed · [R1218.md](docs/roadmap/R1218.md) · closed 2026-11-25 — measured (PR-440): of the 4.8%, 2.6% is al-runner timeout waits in 22 untimed requests…
 - **R1219** · On full DO, about 43% of the mutants phase's lane-seconds is a fixed al-runner cost per serve entry (~260-270 ms outside every test row), not yet attributable: needs a timing split inside `tests` from al-runner · [R1219.md](docs/roadmap/R1219.md) · open — waits on an al-runner timing split (asked via the orchestrator, PR-436's alrunner-ask.md)
 - **R1220** · On full DO, LethAL sends about 124k-157k serve entries where one per (mutant, covering codeunit) is about 106k: each extra entry pays al-runner's fixed per-entry cost and its rows, about 9-27% of the mutants phase · [R1220.md](docs/roadmap/R1220.md) · open — broken down (PR-438): echo entries ~10%, kill pairs ~8-11%, other re-sends ~3%; nothing LethAL-only is…
+- **R1221** · The kill-pair confirms (~8-11% of DO's mutants phase) could share one unmutated confirm per killing test per batch (~3.8%) and drop their echoes (~3.7%, ~6.5% together), but only behind a standing leg-C fact that no state crosses serve entries: reviewed, not built · [R1221.md](docs/roadmap/R1221.md) · open — designed and reviewed (PR-441); not built: waits on a leg-C cross-entry fact
 
 ---
 
