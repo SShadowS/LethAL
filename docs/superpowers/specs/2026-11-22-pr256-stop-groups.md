@@ -143,3 +143,123 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
       the full instrumented DO build at the run's head. It runs as part of the next stop-groups A/B on a fresh head
       (the orchestrator, 2026-11-24).
 
+## Amendment 4 (2026-11-25, coord PR-452, lethal-preproc): the orchestrator's ruling on R1203, which supersedes amendment 3's rule
+- **The ruling (orchestrator, 2026-11-25), verbatim in substance:** an earlier-killer move (B's killer P BEFORE A's killer F
+  in R197's order) is acceptable ONLY if all three hold:
+  - **(i)** A's killer F carries the codeunit-state note `[v3-codeunit-state-possible]`.
+  - **(ii)** B's earlier killer P, run ALONE on a FRESH daemon:
+    - under the mutant, fails on its OWN assertion, twice;
+    - with no mutant (NONE), passes.
+  - **(iii)** The verdict is equal (both `killed`).
+  - Anything else with P before F stays a BLOCK.
+- **What (ii) means in practice:**
+  - "Its own assertion": the failure message is the one P's own body raises. It is NOT a cascade text ("The TestPage is
+    already open."), NOT a refusal (`NotRun: out-of-scope: ...`), and NOT a timeout.
+  - "Twice": two separate requests, each on a fresh daemon, both fail with that kind of message.
+  - "Alone": the request selects only P (the entry's `test` names P's method exactly; `runSelectedOnly`).
+- **How it supersedes amendment 3:**
+  - (ii) is stricter than amendment 3's item 2 (a fresh daemon per run, and P's own assertion).
+  - Amendment 3's item 1 (the note names P as an earlier FAILED covering test) is kept as part of (i).
+  - Amendment 3's item 4 (each move listed by mutant and site key) is kept.
+- **The six checked (orchestrator: "all 5 moves plus M12932"):**
+  - **M4774, M4775, M4789, M4791, M4796:** `CDOeSealServiceSetup.Page.al`; codeunit 68861 "CDO eSeal Setup UI Tests".
+    Their P is EnableService_FieldsNotEditable or OpenPage_NewRecord_DefaultValuesSet, as R1203's table pairs them.
+  - **M12932:** `CDOUnhandledServicePagesMgt.Codeunit.al`:40; codeunit 68910; P = GetLogInfo_WhenMovedLogExists_ExcludesIt.
+    It is P AFTER F (amendment 1's kind). The orchestrator asks that its (ii) check be run too: amendment 3 left it pending.
+- **Where (ii) runs:**
+  - PR-411's kept-vs-fresh kit in fresh mode (a daemon per request), on `current` (edge-e5176a9fd, sha 9b0e90bd...).
+  - The instrumented DO workspace is PR-190's (`/coord/handoff/PR-190/full/active`), the one c5 and PR-431 used.
+  - PR-359's mutant codes map onto its manifest by the full site key (file, line, operator, start, end). A code that does
+    not map is reported as unmeasured, never guessed.
+  - Per mutant: [P under M], [P under NONE], [P under M]. Each is its own fresh daemon, `testIsolation` test (c5's mode).
+- **Pre-committed prediction (from R1203's reading):** all six satisfy (i), (ii) and (iii).
+  - (i) and (iii) are already read from PR-359's A1/B1 stores (`/coord/handoff/R1203/rows.txt`).
+  - Any one that fails any of the three is a BLOCK on the flag, and is filed in R1203.
+- **What follows only if all six hold** (each pre-committed in its own section before it runs):
+  - the flag-on gates (PR-371's method on `current`);
+  - the leg-C fact (with lethal-bugs);
+  - a DO speed series with interleaved arms.
+  - Turning the default on is a separate ruling.
+
+## Amendment 5 (2026-11-25, coord PR-452): the six checked, and the flag-on gates on `current`, pre-committed
+- **Amendment 4's checks: all six hold** (`/coord/handoff/PR-452/alone/RESULT.md`).
+  - On edge-e5176a9fd, with PR-190's workspace, each P alone on a fresh daemon failed twice under its mutant, with the same
+    message both times, and passed under NONE. None of the failures is a cascade, a refusal or a timeout.
+  - The five TestPage moves have F's note naming P as an earlier FAILED covering test.
+  - All six verdicts are equal (killed).
+  - So R1203's BLOCK is lifted for these six.
+- **The flag-on gates.** PR-371's method, repeated on `current` (edge-e5176a9fd; its `.gated` records
+  `stop-groups: matches`), from ONE master commit:
+  - **two runs of `itest:alrunner-v3`** (V3_TABLES, the CDO leg), each with `LETHAL_ITEST_V3_REPORT_DIR`, in sequence on
+    CPUs 12-21:
+    1. control: master as it is;
+    2. forced: PR-371's uncommitted scratch edit, re-applied by the Edit tool. The stop is forced on where supported (flag
+       not explicitly false, fact present, Sleep rule retired), the stop counts print with it, and the report is kept
+       before the warning check (R1196).
+  - **Judged per mutant** on the full site key, forced against control, leg by leg (PR-371's `compare.py`). The gate's own
+    pass or fail is recorded, but is not the judge.
+- **Predictions (a difference is a BLOCK on the flag):**
+  1. Verdicts are equal in every leg.
+  2. A `killingTest` moves only of amendment 1's kind (P after F, re-run alone) or amendment 4's kind (P before F, all three
+     conditions). Each move is listed, and an amendment-4 kind is checked by (i)-(iii) before it counts. PR-371 saw 0 moves
+     on main-bf3a3e863, so 0 is the expectation here too.
+  3. No new refusal, error class, cut or close from the stop.
+  4. The stop is forced ON in every session (the print). The stop counts are reported per leg.
+- **Still to be pre-committed, each in its own section before it runs:** the leg-C (or session) fact with lethal-bugs, and
+  the DO speed series.
+
+## Amendment 6 (2026-11-25, coord PR-452): the leg-C fact for amendment 4's kind, and the DO speed series, pre-committed
+### The fact `stop-groups-earlier-killer` (agreed with lethal-bugs: gate-only, no BC claim; lethal-preproc builds it)
+- **Why this fact.** Amendment 4's kind rests on three al-runner behaviours. R1203 measured them on DO; this fact pins them
+  on invented AL, so a build that changes any one of them is seen:
+  - (a) A codeunit-GLOBAL `TestPage` that an earlier test leaves open (it fails before `Close()`) makes a later test of
+    the same codeunit, in the same plain request, fail with "The TestPage is already open." That cascade is why the flag-off
+    killer is F, and why F carries `[v3-codeunit-state-possible]`.
+  - (b) In a stop-grouped request, the earlier test's failure skips the later test with PR-256's pinned stop text
+    (`STOP_SKIP_TEXT`) naming the earlier test.
+  - (c) The later test, run ALONE in its own request (the alone re-run), passes.
+- **The probe.** Invented AL in its own id block, beside PR-342's (ids 5079x):
+  - a table, a Card page on it, and a test codeunit whose `TestPage` is a codeunit GLOBAL;
+  - test A opens the page and raises an `Error` before `Close()`;
+  - test B opens the page, asserts a field, and closes it.
+  - One fresh daemon, `testIsolation` test, three requests:
+    1. plain, the whole codeunit;
+    2. one stop group holding the codeunit;
+    3. B alone (`runSelectedOnly`).
+- **The judge:** `matches` only when (a), (b) and (c) all hold; `diverged` when any differs, or the build refuses the
+  request; `unmeasurable` when there is no answer.
+- **The gate rule:** GATE-ONLY, like PR-342's fact. A `diverged` never fails the gate; it prints
+  `al-runner-v3-stop-groups-earlier-killer-moved`. `unmeasurable` is an infra-fail, as for every fact.
+  - **It is NOT a precondition of `alRunnerV3.stopGroups` now.** The flag keeps reading `stop-groups` alone. Whether the
+    default-on ruling requires this fact is that ruling's call.
+- **The notes check stays in unit tests**, because it is LethAL's, not al-runner's: a unit test pins that a flag-off F
+  after an earlier failed covering test P carries `[v3-codeunit-state-possible]` naming P (bugs' condition 1). Leg C
+  judges raw al-runner output only.
+- **Predictions:**
+  - on `current` (edge-e5176a9fd) the fact reads `matches`;
+  - leg C's fact count moves 52 -> 53 (24 -> 25 capability-kind), pinned with `V3_LEG_C_FACTS` in the P10 test;
+  - every other fact and leg figure is unchanged;
+  - red tests both ways: each of (a), (b) and (c) altered in a fake answer reads `diverged`; all three hold reads `matches`.
+
+### The DO speed series (measure; the default is a separate ruling)
+- **Four scoped DO runs on master, interleaved A, B, A, B:**
+  - c5's settings (`isolation: test`) on `current`;
+  - `--only` three files:
+    - `src/Features/Email/Sending/CDOEMailHandler.Codeunit.al` (busy);
+    - `src/Features/ESeal/CDOeSealServiceSetup.Page.al` (R1203's five);
+    - `src/Features/HandledState/CDOUnhandledServicePagesMgt.Codeunit.al` (M12932);
+  - `--workers 5`, CPUs 0-11, heavy-slot `--peak 22`;
+  - PR-437's arm driver (LethAL's own pid; the watchdog TERMs only it);
+  - a fresh store per arm;
+  - A: the config as c5's; B: the same with `alRunnerV3.stopGroups: true`.
+- **Judged per mutant on the full site key (any difference not named here is a BLOCK on the flag):**
+  - verdicts are equal across all four arms;
+  - a `killingTest` may differ between A and B only by amendment 1's kind or amendment 4's kind. Each such move is listed,
+    and a P-before-F move must satisfy (i)-(iii), with (ii) run by `/coord/handoff/PR-452/alone/alone.ts`;
+  - A1 must equal A2, and B1 must equal B2, per mutant (verdict and killingTest): run-to-run stability;
+  - the receipts show the stop ON in B (PR-256's counts line) and OFF in A.
+- **Speed:**
+  - the mutants phase of each B, against the mean of the A arms beside it;
+  - the fork's measurement predicts 77-80% (a 20-23% cut);
+  - reported with load per arm, never as a bar: the default-on ruling reads it.
+

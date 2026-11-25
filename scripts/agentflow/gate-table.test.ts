@@ -355,6 +355,21 @@ describe("default-deny", () => {
   test("an empty change set throws rather than answering 'no legs'", () => {
     expect(() => selectLegs([])).toThrow(GateSelectionError);
   });
+
+  // R1202 (PR-449). Red: delete the `.claude/hooks/` row: the hook path is unmatched and selects the full set.
+  test("a .claude/hooks/ path selects no legs and is matched (not unmatched)", () => {
+    const p = ".claude/hooks/shell-write-advisory.ts";
+    expect(selectLegs([p])).toEqual({ legs: [], park: [], unmatched: [] });
+  });
+
+  // R1202's twin. Red: widen the row to `.claude/` (or add settings.json to it): settings.json stops selecting the full set.
+  test(".claude/settings.json, and any other path outside every rule, still selects the full set", () => {
+    for (const p of [".claude/settings.json", ".claude/skills/x/SKILL.md", ".claude/hooksx/a.ts"]) {
+      const s = selectLegs([p]);
+      expect([p, s.legs]).toEqual([p, FULL_SET.filter((l) => LEG_ORDER.includes(l))]);
+      expect([p, s.unmatched]).toEqual([p, [p]]);
+    }
+  });
 });
 
 describe("rows union, they never override", () => {
