@@ -23,12 +23,17 @@ import {
   BURN_HUGE,
   BURN_RELATIVE_FACTOR,
   BURN_TRIES,
+  EARLIER_KILLER_A,
+  EARLIER_KILLER_B,
   MESSAGE_PREFIX_REASON,
   SERVE_CASES,
   SERVE_TESTS_AL,
+  STOP_EARLIER_KILLER_FACT,
+  STOP_EARLIER_KILLER_REQUESTS,
   STOP_GROUPS_FACT,
   STOP_GROUPS_REQUESTS,
   type StopAnswer,
+  TESTPAGE_OPEN_TEXT,
   type V3ContractResult,
   type V3KeepApp,
   type V3ProbeEnv,
@@ -39,6 +44,7 @@ import {
   V3_KEEP_CASES,
   burnerArgv,
   classifySleep,
+  judgeStopEarlierKiller,
   judgeStopGroups,
   leastBusyCore,
   parseAllowedCores,
@@ -679,6 +685,31 @@ function stopGroupsAnswer(req: Record<string, unknown>): CapAnswer {
   return { tests, summary: {} };
 }
 
+/** PR-452: is this serve request the stop-groups-earlier-killer fact's? */
+const isEarlierKillerRequest = (q: Record<string, unknown>): boolean =>
+  Array.isArray(q.sourcePaths) && folderName(String(q.sourcePaths[0])) === STOP_EARLIER_KILLER_FACT;
+
+/**
+ * PR-452: what `current` (edge-e5176a9fd) answered the three requests in the smoke: plain, A fails on its own
+ * Error and B on the open TestPage; stop-grouped, B is skipped naming A; B alone passes.
+ */
+function earlierKillerAnswer(req: Record<string, unknown>): CapAnswer {
+  const e = ((req.entries ?? []) as { id: string; test: string; stopGroup?: string }[])[0];
+  const A = {
+    name: EARLIER_KILLER_A,
+    entry: e?.id,
+    status: "fail",
+    message: "A fails before Close",
+  };
+  if (e?.test === EARLIER_KILLER_B)
+    return { tests: [{ name: EARLIER_KILLER_B, entry: e.id, status: "pass" }], summary: {} };
+  const B =
+    req.stopAfterFirstFailure === true && e?.stopGroup !== undefined
+      ? { status: "error", notRun: true, message: skipText(EARLIER_KILLER_A, e.stopGroup) }
+      : { status: "fail", message: TESTPAGE_OPEN_TEXT };
+  return { tests: [A, { name: EARLIER_KILLER_B, entry: e?.id, ...B }], summary: {} };
+}
+
 /** PR-442: is this serve request the entry facts'? (its apps live under `entry-no-cross`) */
 const isEntryRequest = (q: Record<string, unknown>): boolean =>
   Array.isArray(q.sourcePaths) && String(q.sourcePaths[0]).includes("entry-no-cross");
@@ -753,14 +784,17 @@ function fakeServe(
           req.command === "runTests" &&
           (capFact?.startsWith("batch-") === true ||
             capFact === "stop-groups" ||
+            capFact === STOP_EARLIER_KILLER_FACT ||
             isEntryRequest(req))
         ) {
-          // PR-114a: a capability fact's request (its own scratch folder is named for it). PR-342: and stop-groups'. PR-442: and the entry facts'.
+          // PR-114a: a capability fact's request (its own scratch folder is named for it). PR-342: and stop-groups'. PR-442: and the entry facts'. PR-452: and stop-groups-earlier-killer's.
           const def = isEntryRequest(req)
             ? entryAnswer(req)
             : capFact === "stop-groups"
               ? stopGroupsAnswer(req)
-              : capabilityAnswer(capFact ?? "", req);
+              : capFact === STOP_EARLIER_KILLER_FACT
+                ? earlierKillerAnswer(req)
+                : capabilityAnswer(capFact ?? "", req);
           const ans = o.cap?.(capFact ?? "", req, def) ?? def;
           const send = (a: CapAnswer): void => {
             if ("hang" in a) late = a.hang;
@@ -847,8 +881,8 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
     }
     // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon; PR-340: and the carry fact's own; PR-342: and stop-groups'.
     // PR-363: and one fresh daemon per family app, after serve-keep-reasons' own (now 4 + V3_KEEP_APP_FAMILIES)
-    // PR-442: and the entry facts' two (login replay off, on)
-    expect(serveCwds).toHaveLength(6 + V3_KEEP_APP_FAMILIES);
+    // PR-442: and the entry facts' two (login replay off, on); PR-452: and stop-groups-earlier-killer's
+    expect(serveCwds).toHaveLength(7 + V3_KEEP_APP_FAMILIES);
     for (const c of serveCwds) {
       expect(c).toBeDefined();
       expect(c).not.toBe(process.cwd());
@@ -964,7 +998,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       "--no-download",
     ];
     expect(s.argvs).toEqual([
-      ...Array.from({ length: 4 + V3_KEEP_APP_FAMILIES }, () => serveArgv),
+      ...Array.from({ length: 5 + V3_KEEP_APP_FAMILIES }, () => serveArgv), // PR-452: + stop-groups-earlier-killer's
       entryArgv,
       entryArgv,
     ]);
@@ -973,6 +1007,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
         q.command === "runTests" &&
         !isCapabilityRequest(q) &&
         !isStopGroupsRequest(q) &&
+        !isEarlierKillerRequest(q) &&
         !isEntryRequest(q) &&
         !String((q.sourcePaths as string[])[0]).startsWith(`${FAKE_KEEP_DIR}/`),
     );
@@ -1426,6 +1461,8 @@ describe("§8 the contract probe", () => {
         "batch-lane-strict-reruns",
         // PR-342
         "stop-groups",
+        // PR-452
+        "stop-groups-earlier-killer",
         // PR-442
         ...V3_ENTRY_FACTS,
       ].sort(),
@@ -1464,6 +1501,7 @@ describe("PR-114a: the eight capability facts", () => {
       ...V3_CAPABILITY_FACTS,
       V3_CARRY_FACT,
       STOP_GROUPS_FACT,
+      STOP_EARLIER_KILLER_FACT,
       ...V3_ENTRY_FACTS,
     ]);
     expect(v3ContractRefusals(r)).toEqual([]);
@@ -1622,9 +1660,15 @@ describe("PR-114a: the eight capability facts", () => {
       return { ...h, write: (l: string) => h.write(l.replaceAll("/", "\\\\")) };
     };
     const r = await probe({}, win);
-    for (const n of [...V3_CAPABILITY_FACTS, V3_CARRY_FACT, STOP_GROUPS_FACT, ...V3_ENTRY_FACTS])
+    for (const n of [
+      ...V3_CAPABILITY_FACTS,
+      V3_CARRY_FACT,
+      STOP_GROUPS_FACT,
+      STOP_EARLIER_KILLER_FACT,
+      ...V3_ENTRY_FACTS,
+    ])
       expect(r.facts.find((x) => x.fact === n)?.verdict, n).toBe("matches");
-    expect(r.facts.length).toBe(52);
+    expect(r.facts.length).toBe(53);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -1640,7 +1684,7 @@ describe("PR-114a: the eight capability facts", () => {
     // the next fact, and every other, reads as if nothing had happened: a fresh daemon after the timeout
     for (const n of V3_CAPABILITY_FACTS.filter((x) => x !== "batch-no-cross-singleinstance"))
       expect(f(n)?.verdict, n).toBe("matches");
-    expect(serve.argvs.length).toBe(7 + V3_KEEP_APP_FAMILIES); // serve-keep-reasons, then PR-363's family daemons, the capability daemon, its replacement, the carry fact's daemon, stop-groups', the two entry daemons (PR-442)
+    expect(serve.argvs.length).toBe(8 + V3_KEEP_APP_FAMILIES); // serve-keep-reasons, then PR-363's family daemons, the capability daemon, its replacement, the carry fact's daemon, stop-groups', stop-groups-earlier-killer's (PR-452), the two entry daemons (PR-442)
   });
 
   test("batch-onrun-excluded-no-carry: diverged when the excluded OnRun writer's row reaches the batch", async () => {
@@ -1789,20 +1833,30 @@ describe("PR-114a: the eight capability facts", () => {
   test("the invented AL: ids in 50700-50789, ten per fact, none in the main probe's 50600-50699, and no DotNet", async () => {
     const seen = new Map<string, string>();
     let stopAl: string | undefined;
+    let ekAl: string | undefined;
     const { r } = await readOf((name, q, def) => {
       const dir = (q.sourcePaths as string[])[0] ?? "";
       if (name === "stop-groups" && stopAl === undefined)
         stopAl = readFileSync(join(dir, "src", "Stop.Codeunit.al"), "utf8");
-      else if (!seen.has(name))
+      else if (name === STOP_EARLIER_KILLER_FACT && ekAl === undefined)
+        ekAl = readFileSync(join(dir, "src", "Stop.Codeunit.al"), "utf8");
+      else if (name !== STOP_EARLIER_KILLER_FACT && name !== "stop-groups" && !seen.has(name))
         seen.set(name, readFileSync(join(dir, "src", "Batch.Codeunit.al"), "utf8"));
       return def;
     });
-    expect(r.facts.length).toBe(52);
+    expect(r.facts.length).toBe(53);
     expect([...seen.keys()].sort()).toEqual([...V3_CAPABILITY_FACTS, V3_CARRY_FACT].sort());
     // PR-342: stop-groups' own AL, ids 50781-50785 (its own scratch folder, so the carry fact's 50780s do not meet it).
     const stopIds = [...(stopAl ?? "").matchAll(/^codeunit (\d+) /gm)].map((m) => Number(m[1]));
     expect(stopIds).toEqual([50781, 50782, 50783, 50784, 50785]);
     expect(stopAl).not.toMatch(/DotNet/);
+    // PR-452: stop-groups-earlier-killer's own block, 50790-50792 (table, page, codeunit), outside 50700-50789.
+    const ekIds = [...(ekAl ?? "").matchAll(/^(?:table|page|codeunit) (\d+) /gm)].map((m) =>
+      Number(m[1]),
+    );
+    expect(ekIds).toEqual([50790, 50791, 50792]);
+    expect(ekAl).toMatch(/^ {4}var\n {8}Card: TestPage "Earlier Killer Card";/m);
+    expect(ekAl).not.toMatch(/DotNet/);
     for (const [name, al] of seen) {
       const ids = [...al.matchAll(/^(?:table|codeunit) (\d+) /gm)].map((m) => Number(m[1]));
       expect(ids.length, name).toBeGreaterThan(2);
@@ -2370,7 +2424,7 @@ describe("§8 the contract probe, continued", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(52);
+    expect(r.facts.length).toBe(53);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -2681,7 +2735,8 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10 (R590, r13; PR-114a; PR-340; PR-342; PR-442): 52 facts, 9 defect, 18 contract, 1 warn, 24 capability-kind (8 + the carry fact + stop-groups + 14 entry facts); the old counts 38, 37, 36 and 28 are gate-fail", async () => {
+  // Red (PR-452): drop the `stopEarlierKillerFact` push in runV3ContractProbe, or set V3_LEG_C_FACTS back to 52.
+  test("P10 (R590, r13; PR-114a; PR-340; PR-342; PR-442; PR-452): 53 facts, 9 defect, 18 contract, 1 warn, 25 capability-kind (8 + the carry fact + stop-groups + stop-groups-earlier-killer + 14 entry facts); the old counts 52, 38, 37, 36 and 28 are gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
     expect([
@@ -2690,8 +2745,9 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
       kinds("contract"),
       kinds("warn"),
       kinds("capability"),
-    ]).toEqual([52, 9, 18, 1, 24]);
-    expect(V3_LEG_C_FACTS).toBe(52);
+    ]).toEqual([53, 9, 18, 1, 25]);
+    expect(V3_LEG_C_FACTS).toBe(53);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 52).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 38).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 37).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 36).outcome).toBe("gate-fail");
@@ -3346,8 +3402,9 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
         expect(r.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict).toBe("matches");
         // serve-keep-reasons, the eight facts', the carry fact's, then (PR-342) stop-groups'.
         // PR-363: serve-keep-reasons' own and its V3_KEEP_APP_FAMILIES family daemons come first, all without the variable.
+        // PR-452: then stop-groups-earlier-killer's (stop-groups' env, no variable).
         // PR-442: then the two entry daemons (mutant-daemon env: AL_STRICT_SEQUENTIAL=1; login replay off, then on).
-        expect(envs).toHaveLength(5 + 1 + V3_KEEP_APP_FAMILIES);
+        expect(envs).toHaveLength(6 + 1 + V3_KEEP_APP_FAMILIES);
         expect(envs.slice(-2).map((e) => mergeChildEnv(e ?? {}).ALRUNNER_LOGIN_REPLAY)).toEqual([
           "0",
           "1",
@@ -3359,6 +3416,7 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
           ...Array.from({ length: 1 + V3_KEEP_APP_FAMILIES }, () => undefined),
           undefined,
           "1",
+          undefined,
           undefined,
           "1",
           "1",
@@ -3658,6 +3716,190 @@ describe("PR-342: the stop-groups capability fact (PR-256's alRunnerV3.stopGroup
   });
 });
 
+describe("PR-452: the stop-groups-earlier-killer fact (PR-256 amendments 6-7; gate-only)", () => {
+  /** The three answers as `current` gave them in the smoke, from the fake daemon's model. */
+  const asBuilt = (): { plain: StopAnswer; stop: StopAnswer; alone: StopAnswer } => {
+    const of = (q: Record<string, unknown>): StopAnswer => ({
+      rows: (earlierKillerAnswer(q) as { tests: Record<string, unknown>[] }).tests.map((t) => ({
+        name: String(t.name),
+        status: String(t.status),
+        notRun: t.notRun === true,
+        message: typeof t.message === "string" ? t.message : undefined,
+      })),
+    });
+    return {
+      plain: of(STOP_EARLIER_KILLER_REQUESTS.plain),
+      stop: of(STOP_EARLIER_KILLER_REQUESTS.stop),
+      alone: of(STOP_EARLIER_KILLER_REQUESTS.alone),
+    };
+  };
+  const set = (
+    a: StopAnswer,
+    name: string,
+    r: { status: string; notRun?: boolean; message?: string },
+  ): StopAnswer => ({
+    rows: ("rows" in a ? a.rows : []).map((x) =>
+      x.name === name
+        ? { name, status: r.status, notRun: r.notRun === true, message: r.message }
+        : x,
+    ),
+  });
+
+  // Red: return "diverged" unconditionally, or compare B's plain message to another text.
+  test("all three as measured on current: matches, the rows recorded", () => {
+    const j = judgeStopEarlierKiller(asBuilt());
+    expect(j.verdict).toBe("matches");
+    expect(j.measured).toContain(`${EARLIER_KILLER_B}=fail(${TESTPAGE_OPEN_TEXT})`);
+    expect(j.measured).toContain(`alone: ${EARLIER_KILLER_B}=pass`);
+  });
+
+  // Red: drop the `message === TESTPAGE_OPEN_TEXT` check (or B's plain-fail check) in (a).
+  test("(a) altered alone: B passes in the plain request, or fails with another text, or A passes: diverged", () => {
+    const a = asBuilt();
+    for (const plain of [
+      set(a.plain, EARLIER_KILLER_B, { status: "pass" }),
+      set(a.plain, EARLIER_KILLER_B, { status: "fail", message: "B: Code is " }),
+      set(a.plain, EARLIER_KILLER_B, {
+        status: "error",
+        notRun: true,
+        message: TESTPAGE_OPEN_TEXT,
+      }),
+      set(a.plain, EARLIER_KILLER_A, { status: "pass" }),
+    ])
+      expect(judgeStopEarlierKiller({ ...a, plain }).verdict).toBe("diverged");
+  });
+
+  // Red: drop the `skipNaming(..., EARLIER_KILLER_A)` check in (b).
+  test("(b) altered alone: B runs (the cascade) in the stop request, or the skip names another test: diverged", () => {
+    const a = asBuilt();
+    for (const stop of [
+      set(a.stop, EARLIER_KILLER_B, { status: "fail", message: TESTPAGE_OPEN_TEXT }),
+      set(a.stop, EARLIER_KILLER_B, {
+        status: "error",
+        notRun: true,
+        message: skipText("Codeunit50792.Other", "g"),
+      }),
+      set(a.stop, EARLIER_KILLER_A, { status: "pass" }),
+    ])
+      expect(judgeStopEarlierKiller({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  // Red: drop the alone checks (row count, B pass) in (c).
+  test("(c) altered alone: B fails alone, or the alone request runs A too: diverged", () => {
+    const a = asBuilt();
+    const twoRows: StopAnswer = {
+      rows: [
+        { name: EARLIER_KILLER_A, status: "fail", notRun: false, message: "A fails before Close" },
+        ...("rows" in a.alone ? a.alone.rows : []),
+      ],
+    };
+    for (const alone of [
+      set(a.alone, EARLIER_KILLER_B, { status: "fail", message: TESTPAGE_OPEN_TEXT }),
+      set(a.alone, EARLIER_KILLER_B, { status: "error", notRun: true, message: "NotRun: x" }),
+      twoRows,
+    ])
+      expect(judgeStopEarlierKiller({ ...a, alone }).verdict).toBe("diverged");
+  });
+
+  // Red: read a refusal as "unmeasurable" (or as rows) in the judge.
+  test("a request the build refuses is diverged; no answer to any request is unmeasurable", () => {
+    const a = asBuilt();
+    const refused: StopAnswer = { refused: "unknown field `stopGroup` in an entry of `entries`" };
+    for (const k of ["plain", "stop", "alone"] as const) {
+      expect(judgeStopEarlierKiller({ ...a, [k]: refused }).verdict, k).toBe("diverged");
+      expect(judgeStopEarlierKiller({ ...a, [k]: { failed: "deadline" } }).verdict, k).toBe(
+        "unmeasurable",
+      );
+    }
+  });
+
+  // Red: send the three requests on separate daemons, or change a request's shape or order.
+  test("the probe sends the three requests to ONE daemon, in order, with the pinned shapes, and reads matches", async () => {
+    const serve = fakeServe();
+    const daemonOf: number[] = [];
+    const spawn: ServerSpawnFn = (argv, opts) => {
+      const h = serve.spawn(argv, opts);
+      const n = serve.argvs.length;
+      return {
+        ...h,
+        write: (l: string) => {
+          if (isEarlierKillerRequest(JSON.parse(l) as Record<string, unknown>)) daemonOf.push(n);
+          h.write(l);
+        },
+      };
+    };
+    const r = await probe({}, spawn);
+    expect(r.facts.find((x) => x.fact === STOP_EARLIER_KILLER_FACT)).toMatchObject({
+      kind: "capability",
+      verdict: "matches",
+    });
+    const sent = serve.requests.filter(isEarlierKillerRequest);
+    expect(sent.map(({ sourcePaths: _, ...q }) => q)).toEqual([
+      { command: "runTests", testIsolation: "test", ...STOP_EARLIER_KILLER_REQUESTS.plain },
+      { command: "runTests", testIsolation: "test", ...STOP_EARLIER_KILLER_REQUESTS.stop },
+      { command: "runTests", testIsolation: "test", ...STOP_EARLIER_KILLER_REQUESTS.alone },
+    ]);
+    expect(daemonOf.length).toBe(3);
+    expect(new Set(daemonOf).size).toBe(1);
+    expect(STOP_EARLIER_KILLER_REQUESTS.alone.entries[0].test).toBe(EARLIER_KILLER_B);
+  });
+
+  // Red: drop the STOP_EARLIER_KILLER_FACT branch in classifyLegC (its diverged becomes gate-fail).
+  test("leg C: diverged is a warning line only (pass); unmeasurable is infra-fail; matches adds no line", async () => {
+    const serve = fakeServe(SERVE_ROWS, {
+      cap: (fact, q, def) =>
+        fact === STOP_EARLIER_KILLER_FACT && q.runSelectedOnly === true
+          ? {
+              tests: [{ name: EARLIER_KILLER_B, status: "fail", message: TESTPAGE_OPEN_TEXT }],
+              summary: {},
+            }
+          : def,
+    });
+    const r = await probe({}, serve.spawn);
+    expect(r.facts.find((x) => x.fact === STOP_EARLIER_KILLER_FACT)?.verdict).toBe("diverged");
+    const c = classifyLegC(
+      r.facts,
+      V3_DEFECT_FACTS,
+      V3_LEG_C_FACTS,
+      V3_WARN_FACTS,
+      undefined,
+      V3_CAPABILITY_FACTS,
+    );
+    expect(c.outcome).toBe("pass");
+    expect(
+      c.lines.filter((l) =>
+        l.startsWith(
+          "al-runner-v3-stop-groups-earlier-killer-moved: stop-groups-earlier-killer: diverged",
+        ),
+      ).length,
+    ).toBe(1);
+    const one = (verdict: string) => [{ fact: STOP_EARLIER_KILLER_FACT, verdict, measured: "m" }];
+    expect(classifyLegC(one("matches"), [], 1)).toEqual({ outcome: "pass", lines: [] });
+    expect(classifyLegC(one("unmeasurable"), [], 1).outcome).toBe("infra-fail");
+    expect(classifyLegC(one("diverged"), [], 1).outcome).toBe("pass");
+  });
+
+  // Red: push stopEarlierKillerFact outside the `gateOnlyTrusted === undefined` guard.
+  test("a session (gate-only) never measures stop-groups-earlier-killer", async () => {
+    const s = fakeServe();
+    const r = await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: fakeV3(),
+      serveSpawn: s.spawn,
+      gateOnlyTrusted: "the gated build's leg C at 5eb544ef",
+    });
+    expect(r.facts.some((x) => x.fact === STOP_EARLIER_KILLER_FACT)).toBe(false);
+    expect(s.requests.some(isEarlierKillerRequest)).toBe(false);
+  });
+});
+
 describe("PR-363: serve-keep-reasons' per-family apps, each on its own fresh daemon, judged on its own rows", () => {
   const keepFact = (r: V3ContractResult) => r.facts.find((x) => x.fact === "serve-keep-reasons");
   const OTHER = { name: "Codeunit51002.Other", status: "error", notRun: true } as const;
@@ -3740,6 +3982,7 @@ describe("PR-363: serve-keep-reasons' per-family apps, each on its own fresh dae
             q.command === "runTests" &&
             !isCapabilityRequest(q) &&
             !isStopGroupsRequest(q) &&
+            !isEarlierKillerRequest(q) &&
             !isEntryRequest(q),
         ),
       ).toBe(false);

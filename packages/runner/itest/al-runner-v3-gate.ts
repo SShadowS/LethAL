@@ -15,7 +15,12 @@
 import { writeFile } from "node:fs/promises";
 import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
 import type { AlRunnerV3Config, V3EntriesStats } from "../src/al-runner-v3-backend";
-import { ENTRY_CARRY_PREFIX, STOP_GROUPS_FACT, V3_ENTRY_FACTS } from "../src/al-runner-v3-contract";
+import {
+  ENTRY_CARRY_PREFIX,
+  STOP_EARLIER_KILLER_FACT,
+  STOP_GROUPS_FACT,
+  V3_ENTRY_FACTS,
+} from "../src/al-runner-v3-contract";
 import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
 import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
@@ -649,8 +654,10 @@ export const V3_DEFECT_FACTS = [
  * `diverged` only keeps PR-256's flag off). So: 9 defect, 18 contract, 1 warn, 8 capability, the carry
  * fact and stop-groups. PR-442: 52, the 14 `entry-no-cross-*` facts (`V3_ENTRY_FACTS`, outside
  * `V3_CAPABILITY_FACTS`; a `diverged` only prints `al-runner-v3-entry-carry` or `al-runner-v3-entry-probe-dead`).
+ * PR-452: 53, the fact `stop-groups-earlier-killer` (`STOP_EARLIER_KILLER_FACT`, gate-only; a `diverged` only prints
+ * `al-runner-v3-stop-groups-earlier-killer-moved`).
  */
-export const V3_LEG_C_FACTS = 52;
+export const V3_LEG_C_FACTS = 53;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {
@@ -763,6 +770,9 @@ export function classifyLegC(
       // PR-342: a build without #8564 (or with a stop PR-256 cannot read) keeps `alRunnerV3.stopGroups` refused,
       // through its record; the flag is off by default, so it costs the build nothing.
       lines.push(`al-runner-v3-stop-groups-off: ${f.fact}: diverged${m}`);
+    } else if (f.fact === STOP_EARLIER_KILLER_FACT && f.verdict === "diverged") {
+      // PR-452 (PR-256 amendments 6-7): gate-only; a series move of form (a) then cannot count on this build.
+      lines.push(`al-runner-v3-stop-groups-earlier-killer-moved: ${f.fact}: diverged${m}`);
     } else if ((V3_ENTRY_FACTS as readonly string[]).includes(f.fact) && f.verdict === "diverged") {
       // PR-442: never fails the gate; the consumers (C1, the echo drop) read the record and stay off.
       const code = (f.measured ?? "").startsWith(ENTRY_CARRY_PREFIX)

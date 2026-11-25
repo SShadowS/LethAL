@@ -2517,20 +2517,24 @@ const stopRowText = (a: StopAnswer): string =>
  * is `unmeasurable`. Cases 2 and 3 never change the verdict (PR-256 treats such a skip as no kill and re-runs the ref
  * alone); whether the later test carried the skip text is RECORDED in `measured`.
  */
+/** The one row named `name` in an answer; undefined when there is none, or more than one. */
+const only = (x: StopAnswer, name: string): StopRow | undefined => {
+  const rs = "rows" in x ? x.rows.filter((r) => r.name === name) : [];
+  return rs.length === 1 ? rs[0] : undefined;
+};
+
+/** Is `r` a row the stop skipped (error, notRun, PR-256's pinned text) naming `test` as the earlier failure? */
+const skipNaming = (r: StopRow | undefined, test: string): boolean => {
+  const m =
+    r?.notRun === true && r.status === "error" ? STOP_SKIP_TEXT.exec(r.message ?? "") : null;
+  return m !== null && `Codeunit${m[1]}.${m[2]}` === test;
+};
+
 export function judgeStopGroups(a: {
   readonly stop: StopAnswer;
   readonly follow: StopAnswer;
   readonly guard: StopAnswer;
 }): { readonly verdict: V3ContractVerdict; readonly measured: string } {
-  const only = (x: StopAnswer, name: string): StopRow | undefined => {
-    const rs = "rows" in x ? x.rows.filter((r) => r.name === name) : [];
-    return rs.length === 1 ? rs[0] : undefined;
-  };
-  const skipNaming = (r: StopRow | undefined, test: string): boolean => {
-    const m =
-      r?.notRun === true && r.status === "error" ? STOP_SKIP_TEXT.exec(r.message ?? "") : null;
-    return m !== null && `Codeunit${m[1]}.${m[2]}` === test;
-  };
   const ran = (r: StopRow | undefined): string =>
     r === undefined ? "no row" : STOP_SKIP_TEXT.test(r.message ?? "") ? "SKIPPED" : "ran";
   const timeoutRow = only(a.guard, "Codeunit50784.Spins");
@@ -2549,11 +2553,23 @@ export function judgeStopGroups(a: {
   return { verdict: ok ? "matches" : "diverged", measured };
 }
 
-/** PR-342: the `stop-groups` fact on its own daemon and scratch folder (leg C only). */
-async function stopGroupsFact(env: V3ProbeEnv, root: string): Promise<V3Fact> {
-  const expected =
-    "group a: Codeunit50781.First a plain fail, then 50781.Second and 50782.Other skipped with the pinned text naming it; group b's 50783.Passes passes; a follow-up request on the same daemon answers; after a timeout or a refusal row the later test is recorded (PR-256, #8564)";
-  const dir = join(root, STOP_GROUPS_FACT);
+/**
+ * PR-342 (PR-452: shared with `stop-groups-earlier-killer`): one fresh daemon over the fact's own scratch folder
+ * `root/<fact>`, `testIsolation` test on every request; `run` sends its requests through `ask` and judges them. An
+ * error before or around `run` (scratch IO, the daemon never ready) reads `unmeasurable`.
+ */
+async function stopDaemonFact(
+  env: V3ProbeEnv,
+  root: string,
+  name: string,
+  expected: string,
+  app: { readonly id: string; readonly name: string; readonly idFrom: number },
+  al: string,
+  run: (
+    ask: (body: Record<string, unknown>) => Promise<StopAnswer>,
+  ) => Promise<{ readonly verdict: V3ContractVerdict; readonly measured: string }>,
+): Promise<V3Fact> {
+  const dir = join(root, name);
   const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
   const spawn: ServerSpawnFn = (argv) =>
     (env.serveSpawn ?? defaultServerSpawn)(argv, { cwd: root, env: v3ChildEnv(cache) });
@@ -2562,14 +2578,9 @@ async function stopGroupsFact(env: V3ProbeEnv, root: string): Promise<V3Fact> {
     await mkdir(join(dir, "src"), { recursive: true });
     await writeFile(
       join(dir, "app.json"),
-      baseAppJson({
-        id: "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d0780",
-        name: "LethAL PR342 stop-groups",
-        idFrom: 50780,
-        idTo: 50789,
-      }),
+      baseAppJson({ id: app.id, name: app.name, idFrom: app.idFrom, idTo: app.idFrom + 9 }),
     );
-    await writeFile(join(dir, "src", "Stop.Codeunit.al"), STOP_GROUPS_AL);
+    await writeFile(join(dir, "src", "Stop.Codeunit.al"), al);
     const s = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
     server = s;
     await s.start(
@@ -2598,17 +2609,163 @@ async function stopGroupsFact(env: V3ProbeEnv, root: string): Promise<V3Fact> {
         return { failed: String(err) };
       }
     };
-    const stop = await ask(STOP_GROUPS_REQUESTS.stop);
-    const follow = "failed" in stop ? stop : await ask(STOP_GROUPS_REQUESTS.follow);
-    const guard = "failed" in follow ? follow : await ask(STOP_GROUPS_REQUESTS.guard);
-    const j = judgeStopGroups({ stop, follow, guard });
-    return fact(STOP_GROUPS_FACT, "capability", j.verdict, expected, j.measured);
+    const j = await run(ask);
+    return fact(name, "capability", j.verdict, expected, j.measured);
   } catch (err) {
-    return fact(STOP_GROUPS_FACT, "capability", "unmeasurable", expected, String(err));
+    return fact(name, "capability", "unmeasurable", expected, String(err));
   } finally {
     await server?.close();
   }
 }
+
+/** PR-342: the `stop-groups` fact on its own daemon and scratch folder (leg C only). */
+const stopGroupsFact = (env: V3ProbeEnv, root: string): Promise<V3Fact> =>
+  stopDaemonFact(
+    env,
+    root,
+    STOP_GROUPS_FACT,
+    "group a: Codeunit50781.First a plain fail, then 50781.Second and 50782.Other skipped with the pinned text naming it; group b's 50783.Passes passes; a follow-up request on the same daemon answers; after a timeout or a refusal row the later test is recorded (PR-256, #8564)",
+    { id: "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d0780", name: "LethAL PR342 stop-groups", idFrom: 50780 },
+    STOP_GROUPS_AL,
+    async (ask) => {
+      const stop = await ask(STOP_GROUPS_REQUESTS.stop);
+      const follow = "failed" in stop ? stop : await ask(STOP_GROUPS_REQUESTS.follow);
+      const guard = "failed" in follow ? follow : await ask(STOP_GROUPS_REQUESTS.guard);
+      return judgeStopGroups({ stop, follow, guard });
+    },
+  );
+
+/**
+ * PR-452 (PR-256 amendments 6 and 7): the leg-C fact behind amendment 7's form (a), a `killingTest` move from the
+ * TestPage cascade. GATE-ONLY like `stop-groups`, and NOT a precondition of `alRunnerV3.stopGroups` (the flag reads
+ * `stop-groups` alone); a `diverged` prints `al-runner-v3-stop-groups-earlier-killer-moved` and never fails the gate.
+ */
+export const STOP_EARLIER_KILLER_FACT = "stop-groups-earlier-killer";
+
+/** PR-452: the cascade text a later test of the same codeunit fails with while a global TestPage is still open (measured on `current`). */
+export const TESTPAGE_OPEN_TEXT = "The TestPage is already open.";
+
+/** PR-452: the probe's invented AL, ids 50790-50799. The `TestPage` is a codeunit GLOBAL; test order is declaration order. */
+const STOP_EARLIER_KILLER_AL = `table 50790 "Earlier Killer Rec"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+    keys
+    {
+        key(PK; Code) { Clustered = true; }
+    }
+}
+
+page 50791 "Earlier Killer Card"
+{
+    PageType = Card;
+    SourceTable = "Earlier Killer Rec";
+
+    layout
+    {
+        area(Content)
+        {
+            field(Code; Rec.Code) { }
+        }
+    }
+}
+
+codeunit 50792 "Earlier Killer Tests"
+{
+    Subtype = Test;
+
+    var
+        Card: TestPage "Earlier Killer Card";
+
+    [Test]
+    procedure LeavesPageOpen()
+    begin
+        Card.OpenNew();
+        Error('A fails before Close');
+    end;
+
+    [Test]
+    procedure ReadsField()
+    begin
+        Card.OpenNew();
+        Card.Code.SetValue('B');
+        if Card.Code.Value() <> 'B' then
+            Error('B: Code is %1', Card.Code.Value());
+        Card.Close();
+    end;
+}
+`;
+
+/** PR-452: test A and test B, by their row names. */
+export const EARLIER_KILLER_A = "Codeunit50792.LeavesPageOpen";
+export const EARLIER_KILLER_B = "Codeunit50792.ReadsField";
+
+/** PR-452: the three requests, in the order they go to ONE daemon (amendment 7: kept on one daemon). */
+export const STOP_EARLIER_KILLER_REQUESTS = {
+  /** (a) plain, the whole codeunit. */
+  plain: { entries: [{ id: "p", test: "Codeunit50792." }] },
+  /** (b) one stop group holding the codeunit (PR-342's request shape). */
+  stop: {
+    stopAfterFirstFailure: true,
+    entries: [{ id: "s", test: "Codeunit50792.", stopGroup: "g" }],
+  },
+  /** (c) B alone: `runSelectedOnly`, the entry's `test` naming B exactly. */
+  alone: { runSelectedOnly: true, entries: [{ id: "b", test: EARLIER_KILLER_B }] },
+} as const;
+
+/**
+ * PR-452: the `stop-groups-earlier-killer` verdict. `matches` only when ALL hold:
+ * (a) plain: A a plain fail, and B a plain fail with exactly `TESTPAGE_OPEN_TEXT`;
+ * (b) stop: A a plain fail, and B skipped (error, notRun) with `STOP_SKIP_TEXT` naming A;
+ * (c) alone: B is the only row, and it passes.
+ * A request the build refuses is `diverged`; no answer to any is `unmeasurable`.
+ */
+export function judgeStopEarlierKiller(a: {
+  readonly plain: StopAnswer;
+  readonly stop: StopAnswer;
+  readonly alone: StopAnswer;
+}): { readonly verdict: V3ContractVerdict; readonly measured: string } {
+  const measured = `plain: ${stopRowText(a.plain)}; stop: ${stopRowText(a.stop)}; alone: ${stopRowText(a.alone)}`;
+  if ("failed" in a.plain || "failed" in a.stop || "failed" in a.alone)
+    return { verdict: "unmeasurable", measured };
+  const plainFail = (x: StopAnswer, name: string): StopRow | undefined => {
+    const r = only(x, name);
+    return r?.status === "fail" && !r.notRun ? r : undefined;
+  };
+  const ok =
+    plainFail(a.plain, EARLIER_KILLER_A) !== undefined &&
+    plainFail(a.plain, EARLIER_KILLER_B)?.message === TESTPAGE_OPEN_TEXT &&
+    plainFail(a.stop, EARLIER_KILLER_A) !== undefined &&
+    skipNaming(only(a.stop, EARLIER_KILLER_B), EARLIER_KILLER_A) &&
+    "rows" in a.alone &&
+    a.alone.rows.length === 1 &&
+    only(a.alone, EARLIER_KILLER_B)?.status === "pass" &&
+    only(a.alone, EARLIER_KILLER_B)?.notRun === false;
+  return { verdict: ok ? "matches" : "diverged", measured };
+}
+
+/** PR-452: the `stop-groups-earlier-killer` fact: ONE fresh daemon, three requests (leg C only). */
+export const stopEarlierKillerFact = (env: V3ProbeEnv, root: string): Promise<V3Fact> =>
+  stopDaemonFact(
+    env,
+    root,
+    STOP_EARLIER_KILLER_FACT,
+    `a codeunit-global TestPage left open by ${EARLIER_KILLER_A} (fails before Close): plain, ${EARLIER_KILLER_B} fails "${TESTPAGE_OPEN_TEXT}"; stop-grouped, it is skipped with the pinned text naming ${EARLIER_KILLER_A}; alone, it passes (PR-256 amendments 6-7)`,
+    {
+      id: "7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d0790",
+      name: "LethAL PR452 earlier-killer",
+      idFrom: 50790,
+    },
+    STOP_EARLIER_KILLER_AL,
+    async (ask) => {
+      const plain = await ask(STOP_EARLIER_KILLER_REQUESTS.plain);
+      const stop = "failed" in plain ? plain : await ask(STOP_EARLIER_KILLER_REQUESTS.stop);
+      const alone = "failed" in stop ? stop : await ask(STOP_EARLIER_KILLER_REQUESTS.alone);
+      return judgeStopEarlierKiller({ plain, stop, alone });
+    },
+  );
 
 /**
  * PR-442: the leg-C facts that no state crosses the ENTRIES of one serve request (what R1221's C1 and R1220's echo drop
@@ -3876,6 +4033,8 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     facts.push(...(await batchCapabilityFacts(env, root)));
     // PR-342: stop-groups, GATE-ONLY (PR-256 reads the gate's reading from the build's record, never a session's).
     if (env.gateOnlyTrusted === undefined) facts.push(await stopGroupsFact(env, root));
+    // PR-452: stop-groups-earlier-killer, GATE-ONLY like stop-groups (PR-256 amendments 6-7).
+    if (env.gateOnlyTrusted === undefined) facts.push(await stopEarlierKillerFact(env, root));
     // PR-442: the 14 entry-no-cross facts (two daemons), GATE-ONLY like stop-groups.
     if (env.gateOnlyTrusted === undefined) facts.push(...(await entryFacts(env, root)));
     // duplicate-key-insert-raises (#5603), r9 §6 (branch F): bc1 FAILS the test at its end.

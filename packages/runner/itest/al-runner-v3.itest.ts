@@ -65,6 +65,7 @@ import {
 import { MEMORY_HEADROOM_GB_DEFAULT, baselineSampleIds } from "../src/al-runner-v3-baseline-check";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import {
+  STOP_EARLIER_KILLER_FACT,
   STOP_GROUPS_FACT,
   type V3KeepApp,
   V3_CAPABILITY_FACTS,
@@ -673,6 +674,8 @@ async function legC(scratch: string): Promise<readonly string[]> {
           (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact) ||
           f.fact === V3_CARRY_FACT ||
           f.fact === STOP_GROUPS_FACT ||
+          // PR-452: and stop-groups-earlier-killer, which amendment 7's series reads from the record (form (a)).
+          f.fact === STOP_EARLIER_KILLER_FACT ||
           // PR-442: and the 14 entry-no-cross facts, which C1 and the echo drop read from the record.
           (V3_ENTRY_FACTS as readonly string[]).includes(f.fact),
       )

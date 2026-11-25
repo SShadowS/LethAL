@@ -23,9 +23,15 @@ The legs:
   keyed by the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the `.gated`
   commit. This gate never does: it sets `LETHAL_V3_FRESH_PROBE=1` for every session it starts, and leg C calls
   `runV3ContractProbe` directly, so the figures below are always measured fresh. The update gate runs this gate.
-- C: the contract probe, 52 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`): 9 defect, 18 contract,
+- C: the contract probe, 53 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`): 9 defect, 18 contract,
   1 warn and 8 capability (r9, below; capability since PR-114a), plus the carry fact `batch-sequential-carry`
-  (PR-340), `stop-groups` (PR-342) and, since PR-442, the 14 `entry-no-cross-*` facts. The 14 entry facts
+  (PR-340), `stop-groups` (PR-342), since PR-442 the 14 `entry-no-cross-*` facts and, since PR-452,
+  `stop-groups-earlier-killer` (PR-256 amendments 6-7, invented ids 50790-50792): one fresh daemon, `testIsolation`
+  test, three requests over a codeunit whose GLOBAL `TestPage` its first test leaves open. It reads `matches` only when
+  the second test fails "The TestPage is already open." in the plain request, is skipped with the stop text naming the
+  first in a stop-grouped one, and passes alone. Gate-only and not a precondition of `alRunnerV3.stopGroups`: a
+  `diverged` never fails the gate and prints `al-runner-v3-stop-groups-earlier-killer-moved`; `unmeasurable` is an
+  `infra-fail`; the reading rides in `batchFacts`. The 14 entry facts
   (`V3_ENTRY_FACTS`, spec `docs/superpowers/specs/2026-11-25-pr442-entry-no-cross-facts.md`) measure that no state
   crosses the ENTRIES of one serve request, on two mutant-shaped daemons (login replay off and on) over invented ids
   50450-50469. They are gate-only like `stop-groups`: a `diverged` never fails the gate, and leg C prints
