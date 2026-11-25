@@ -127,3 +127,15 @@ On c5, refusal restarts stay at 56, against PR-411's predicted fall of at least 
 - VERIFY.
 - The v3 gate (leg C and PR-363's map).
 - CI.
+
+## Amendment 1 (2026-11-25, after the DO checks and the build review; no prediction or count changes)
+- **The t10/t12 leg C cases do NOT move to the new names.**
+  - Their entries (`code-gl-to-biginteger`, `conversion-text-to-integer`) still exist for builds with the old wording, and need
+    a case. Entry names in KEEP_SELECTIONS must also be unique, and the four new names are judged by `edge-refusals`' cases.
+  - So the t10/t12 cases keep their old entries. On `current` they read MOVED under the new rows, a warning, as since PR-408.
+  - The pinned counts are as pre-committed: +1 family app, +4 cases, and PR-363's map loses the three removed names.
+- **A MOVED on an `edge-refusals` case would look the same to the gate** (build review LOW 1), since both are a warn. So the
+  v3 gate's `serve-keep-reasons` measured text is read by hand: no `edge-refusals ... MOVED` may appear, or the row does not
+  land.
+- **The Text cells reach the Integer field through the key** (`KeyIndex(1).FieldIndex(2)`). Measured on edge: a plain
+  `Field(n)` only fails with an Evaluate error, which is not the row's text.
