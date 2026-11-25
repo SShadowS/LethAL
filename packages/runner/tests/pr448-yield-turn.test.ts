@@ -3,6 +3,7 @@
 // (measured up to 895 ms in a test rig, /coord/handoff/PR-448/measure.md). The stalls are modelled here by starving one
 // primitive (a stub that never calls back), so each test is deterministic: a starved primitive is not waited for.
 import { afterEach, describe, expect, test } from "bun:test";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { yieldTurn } from "../src/al-runner-v3-backend";
 
 const realImmediate = globalThis.setImmediate;
@@ -37,7 +38,7 @@ describe("PR-448 (R1224): the yield R590 takes before reading stderr", () => {
     // test times out (red), with no wall-clock assertion
     await p;
     expect(true).toBe(true);
-  }, 2000);
+  }, ownTimeout(2000));
 
   // Red: make yieldTurn wait on the 0 ms timer alone: it never settles.
   test("a starved timer does not stall it either: setImmediate ends the turn", async () => {
