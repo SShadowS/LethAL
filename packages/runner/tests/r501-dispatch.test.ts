@@ -407,8 +407,12 @@ describe("R501: a bounded item's ONLY bound is refused, through both certificate
 describe("R501: refusals land in R447's row and obey --operator and --lines", () => {
   test("a full run names every refusing file", async () => {
     const set = await generateMutationSet(dir, { emit: () => {} });
-    expect(set.hangRefused.map((r) => r.file).sort()).toEqual([BOUND, EXT_BASE, EXT, OPEN].sort());
-    expect(refused(set, TWIN)).toBe(0);
+    // PR-429 rule 1: Twin's `while Buf.Next() <> 0` is a Next end test, so its negate-conditional
+    // flip is refused (one site). Twin stays free of every R501 refusal.
+    expect(set.hangRefused.map((r) => r.file).sort()).toEqual(
+      [BOUND, EXT_BASE, EXT, OPEN, TWIN].sort(),
+    );
+    expect(refused(set, TWIN)).toBe(1);
     expect(refused(set, BOUND_TWIN)).toBe(0);
   });
 
