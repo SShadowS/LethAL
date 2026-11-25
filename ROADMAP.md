@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**67 of 1174 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 1175 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -410,6 +410,7 @@ that ordering is the priority.
 - **R1203** · Stop groups (alRunnerV3.stopGroups) moved 5 DO killingTests to an EARLIER covering test (codeunit 68861), not PR-256 amendment 1's kind: PR-359's V BLOCK, so the flag stays off · [R1203.md](docs/roadmap/R1203.md) · open
 - **R1206** · The carry walk's B1 check sees a flagged pass only if the serve daemon writes `flagged`: walk rows never get R949's `flaggedUnknown`, so on a build whose serve rows omit the flag, a flagged pass reads as sound inside the walk · [R1206.md](docs/roadmap/R1206.md) · open
 - **R1207** · A carry walk that keeps a serve daemon past a kept refusal never arms PR-56's drift guard (keptRefusal), so the next request on that daemon is not checked · [R1207.md](docs/roadmap/R1207.md) · open
+- **R1212** · LethAL's static hang refusal misses two loop-hang shapes met on a real project: a negated `Next() = 0` in an `until` condition, and the removal of a call that re-positions the loop's record cursor (`RecRef.Get(<saved RecordId>)`) · [R1212.md](docs/roadmap/R1212.md) · open
 
 ## Product gaps a real project hits
 
