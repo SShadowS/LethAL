@@ -1176,6 +1176,24 @@ export const MEMORY_WATCH_OVER_TICKS = 3;
 export const MEMORY_CALL_ESTIMATE_BYTES = 3 * 2 ** 30;
 
 /**
+ * R1224: one event-loop turn, so I/O that has already arrived (the stderr pump's) is read first: `setImmediate`, or a 0 ms
+ * timer if that comes first. Alone, `setImmediate` on a loop with no I/O due waited for some unrelated timer in Bun
+ * 1.4.4 (measured up to 895 ms in a test rig, the CPU idle); on a real serve run it fires at ~0 ms (PR-448 m1: 315
+ * yields, max 8 ms), so it wins there and nothing changes. The timer bounds the quiet case at ~1 ms.
+ */
+export function yieldTurn(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearImmediate(imm);
+      clearTimeout(tm);
+      resolve();
+    };
+    const imm = setImmediate(done);
+    const tm = setTimeout(done, 0);
+  });
+}
+
+/**
  * R948: the container stayed over the memory bound and nothing could stop the session through the
  * budget (no stop handle: a backend used outside `runSession`). Inside a session the report says it.
  */
@@ -11563,7 +11581,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * only by the next request.
    */
   private async refuseDaemonDependencySkip(lane: Lane, daemon: Daemon): Promise<void> {
-    await new Promise<void>((r) => setImmediate(r));
+    await yieldTurn(); // R1224
     this.watchTestDataOff(daemon.server.stderrSoFar()); // R885
     const lines = v3DependencySkipLines(daemon.server.stderrSoFar());
     if (lines.length === 0) return;

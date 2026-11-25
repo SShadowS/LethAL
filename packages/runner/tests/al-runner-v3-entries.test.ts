@@ -461,6 +461,8 @@ interface ServeScript {
   coverage?: CoverageFn;
   /** R590: a line the daemon writes to stderr as the request arrives. */
   stderr?: (req: Req, n: number) => string | undefined;
+  /** PR-448 (R1224): a line the daemon writes to stderr after its answer, arriving one event-loop turn later. */
+  stderrLate?: (req: Req, n: number) => string | undefined;
   /** R987: real milliseconds a request waits, after `stderr`, before it answers. */
   delayMs?: (req: Req, n: number) => number;
   /** PR-88: daemons whose server has no pid any more (as after a cut answer, R895). The test adds to it. */
@@ -643,6 +645,9 @@ function fakeServe(script: ServeScript = {}) {
           const over = script.answer?.(req, n, lines);
           for (const l of over?.lines ?? lines) out.push(JSON.stringify(l));
           if (over?.eof === true) out.end();
+          // PR-448 (R1224): a stderr line that arrives AFTER the answer, one event-loop turn later, as a pipe delivers it
+          const late = script.stderrLate?.(req, n);
+          if (late !== undefined) setImmediate(() => err.push(late));
         })();
       },
     };
@@ -1503,6 +1508,20 @@ describe("R590: the daemon's stderr is read after every request", () => {
     // The daemon is warm (M0002 prefetched), so M0001's run is a live request, not the warm-up.
     const r = await readyRig({
       serve: { rows: killsM1, stderr: () => (skip ? SKIP : undefined) },
+      mutants: ["M0002"],
+    });
+    skip = true;
+    await r.b.activate("M0001");
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toBeInstanceOf(AlRunnerV3DependencySkippedError);
+    expect(r.b.entriesStats().liveRequests).toBe(1);
+  });
+
+  // PR-448 (R1224). Red: replace `yieldTurn()` in refuseDaemonDependencySkip by `await Promise.resolve()` (no event-loop
+  // turn): the line lands after the check, and the request is scored.
+  test("R1224: a skip line that arrives one turn after the answer still stops the session on that request", async () => {
+    let skip = false;
+    const r = await readyRig({
+      serve: { rows: killsM1, stderrLate: () => (skip ? SKIP : undefined) },
       mutants: ["M0002"],
     });
     skip = true;
