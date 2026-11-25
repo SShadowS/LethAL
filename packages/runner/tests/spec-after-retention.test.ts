@@ -1,5 +1,6 @@
 import { heapStats } from "bun:jsc";
 import { beforeAll, describe, expect, test } from "bun:test";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { generateMutationSet } from "../src/orchestrator";
 
 /**
@@ -22,7 +23,7 @@ import { generateMutationSet } from "../src/orchestrator";
 const FILES = 20;
 const WARM_UP_TIMEOUT_MS = 60_000;
 /** The measured generation and its two full GCs: setup, not the claim, so a load spike cannot time it out (PR-445). */
-const MEASURE_TIMEOUT_MS = 30_000;
+const MEASURE_TIMEOUT_MS = ownTimeout(30_000);
 const unit = (k: number) => `codeunit ${50000 + k} "U${k}"
 {
     procedure P${k}(A: Integer; B: Integer; C: Code[20]): Integer
