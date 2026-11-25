@@ -29,16 +29,20 @@ async function settlesWithin(p: Promise<void>, n: number): Promise<boolean> {
 
 describe("PR-448 (R1224): the yield R590 takes before reading stderr", () => {
   // Red: make yieldTurn wait on setImmediate alone (today's `new Promise((r) => setImmediate(r))`): it never settles.
-  test("a starved setImmediate does not stall it: the 0 ms timer ends the turn", async () => {
-    globalThis.setImmediate = (() => 0) as unknown as typeof setImmediate;
-    globalThis.clearImmediate = (() => {}) as typeof clearImmediate;
-    const p = yieldTurn();
-    globalThis.setImmediate = realImmediate;
-    // the 0 ms timer comes due on its own: awaited directly, so a yield that waits on setImmediate never settles and the
-    // test times out (red), with no wall-clock assertion
-    await p;
-    expect(true).toBe(true);
-  }, ownTimeout(2000));
+  test(
+    "a starved setImmediate does not stall it: the 0 ms timer ends the turn",
+    async () => {
+      globalThis.setImmediate = (() => 0) as unknown as typeof setImmediate;
+      globalThis.clearImmediate = (() => {}) as typeof clearImmediate;
+      const p = yieldTurn();
+      globalThis.setImmediate = realImmediate;
+      // the 0 ms timer comes due on its own: awaited directly, so a yield that waits on setImmediate never settles and the
+      // test times out (red), with no wall-clock assertion
+      await p;
+      expect(true).toBe(true);
+    },
+    ownTimeout(2000),
+  );
 
   // Red: make yieldTurn wait on the 0 ms timer alone: it never settles.
   test("a starved timer does not stall it either: setImmediate ends the turn", async () => {
