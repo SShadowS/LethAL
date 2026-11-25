@@ -15,10 +15,14 @@ import { generateMutationSet } from "../src/orchestrator";
  * at 300 files, and its one-time allocations (~345 functions, whatever the size) also land in the measured delta.
  * Now a one-file warm-up generation runs first, in its own hook (setup, not the guarded claim), then ONE measured
  * generation of 20 files serves both tests. The signal is per spec: red-checked with the unfixed `synthesizeAfter`
- * (copied arrays and a bound closure) at this size.
+ * (copied arrays and a bound closure) at this size, in both tiers and in tier 2 alone.
+ * Each file varies two literals (`exit(k+1)`, `X - (k+2)`), so a cache keyed by mutated text cannot be pre-filled by the
+ * warm-up (review finding 3).
  */
 const FILES = 20;
 const WARM_UP_TIMEOUT_MS = 60_000;
+/** The measured generation and its two full GCs: setup, not the claim, so a load spike cannot time it out (PR-445). */
+const MEASURE_TIMEOUT_MS = 30_000;
 const unit = (k: number) => `codeunit ${50000 + k} "U${k}"
 {
     procedure P${k}(A: Integer; B: Integer; C: Code[20]): Integer
@@ -31,9 +35,9 @@ const unit = (k: number) => `codeunit ${50000 + k} "U${k}"
             R.Modify(true);
         X := A + B;
         if A > B then
-            exit(1);
+            exit(${k + 1});
         if (A <> B) and (C = '') then
-            X := X - 1;
+            X := X - ${k + 2};
         Message('%1', X);
         exit(X * 2);
     end;
@@ -68,7 +72,7 @@ describe("RUST-03 S4.2c: the spec's after node pins no copies", () => {
     base = counts();
     set = await generateMutationSet("synthetic", { source: snapshot(), emit: () => {} });
     after = counts();
-  });
+  }, MEASURE_TIMEOUT_MS);
 
   const specsOf = () => {
     if (set === undefined) throw new Error("the mutation set was not generated");
@@ -78,9 +82,11 @@ describe("RUST-03 S4.2c: the spec's after node pins no copies", () => {
   test("retained arrays and functions per spec, measured on the heap", () => {
     const specs = specsOf().length;
     const per = (k: string) => ((after[k] ?? 0) - (base[k] ?? 0)) / specs;
-    // Unfixed (measured at 300 files): 1.01 functions and 2.32 arrays per spec, the bound closure and the two copied
-    // child arrays. Fixed: 0.01 and 0.32, the project's own structures.
-    expect(per("Function")).toBeLessThan(0.2);
+    // Measured at this size (PR-445; 540 specs, 60 of them tier 2): fixed ~0.00 functions per spec; arrays ~0.1 in a
+    // plain process but ~0.5 under `bun test`, whose own arrays land between the hooks. Unfixed in both tiers: ~0.93
+    // functions per spec. Unfixed in tier 2 alone: ~0.11 functions per spec, so the FUNCTION bound (0.05) is the one that
+    // catches a one-tier regression; the array bound keeps its original 1 (the runner's noise).
+    expect(per("Function")).toBeLessThan(0.05);
     expect(per("Array")).toBeLessThan(1);
     expect(set?.files.length).toBe(FILES);
   });
