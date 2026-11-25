@@ -411,7 +411,7 @@ that ordering is the priority.
 - **R1206** · The carry walk's B1 check sees a flagged pass only if the serve daemon writes `flagged`: walk rows never get R949's `flaggedUnknown`, so on a build whose serve rows omit the flag, a flagged pass reads as sound inside the walk · [R1206.md](docs/roadmap/R1206.md) · open
 - **R1207** · A carry walk that keeps a serve daemon past a kept refusal never arms PR-56's drift guard (keptRefusal), so the next request on that daemon is not checked · [R1207.md](docs/roadmap/R1207.md) · done (e01bfe638, PR-428)
 - **R1212** · LethAL's static hang refusal misses two loop-hang shapes met on a real project: a negated Next() test that ends a repeat-until loop, and the removal of a Get that puts the loop's record cursor back in place · [R1212.md](docs/roadmap/R1212.md) · done (ef772d98a, PR-429; gaps in R1213)
-- **R1213** · PR-429's loop-cursor hang refusals leave three known gaps: an end test grouped below an outer or/and, a paren-less `R.Next = 0`, and the removal of a filter call before a loop that inserts into its own table (PR-427's M2284) · [R1213.md](docs/roadmap/R1213.md) · open
+- **R1213** · PR-429's loop-cursor hang refusals leave three known gaps: an end test grouped below an outer or/and, a paren-less `R.Next = 0`, and the removal of a filter call before a loop that inserts into its own table (PR-427's M2284) · [R1213.md](docs/roadmap/R1213.md) · open — gaps (1) and (2) closed 2026-11-25 by ruling (PR-430: 0 sites on DO and 0 in the fixtures, by parse)…
 
 ## Product gaps a real project hits
 
