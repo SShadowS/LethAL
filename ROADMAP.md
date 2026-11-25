@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 1187 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**71 of 1187 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1231,7 +1231,7 @@ that ordering is the priority.
 - **R1220** · On full DO, LethAL sends about 124k-157k serve entries where one per (mutant, covering codeunit) is about 106k: each extra entry pays al-runner's fixed per-entry cost and its rows, about 9-27% of the mutants phase · [R1220.md](docs/roadmap/R1220.md) · open — broken down (PR-438): echo entries ~10%, kill pairs ~8-11%, other re-sends ~3%; nothing LethAL-only is…
 - **R1221** · The kill-pair confirms (~8-11% of DO's mutants phase) could share one unmutated confirm per killing test per batch (~3.8%) and drop their echoes (~3.7%, ~6.5% together), but only behind a standing leg-C fact that no state crosses serve entries: reviewed, not built · [R1221.md](docs/roadmap/R1221.md) · open — C1 parked (PR-444, orchestrator ruling 2026-11-25): needs a residue-after-refusal/Commit fact and an…
 - **R1222** · spec-after-retention.test.ts's heap tests (RUST-03 S4.2c) run close to the 5 s per-test timeout and time out in full VERIFY under ordinary load, with io pressure low enough that VERIFY keeps 5 s · [R1222.md](docs/roadmap/R1222.md) · done (1d361afc5)
-- **R1224** · R590's dependency-skip check awaits a setImmediate after every serve answer; in Bun 1.4.4 a pending setImmediate on a loop with no I/O due waits for the next unrelated timer (measured ~0.9 s per wait in a test rig), so the wait's cost depends on whatever else is scheduled · [R1224.md](docs/roadmap/R1224.md) · open
+- **R1224** · R590's dependency-skip check awaits a setImmediate after every serve answer; in Bun 1.4.4 a pending setImmediate on a loop with no I/O due waits for the next unrelated timer (measured ~0.9 s per wait in a test rig), so the wait's cost depends on whatever else is scheduled · [R1224.md](docs/roadmap/R1224.md) · done (f28587645, PR-448)
 
 ---
 
