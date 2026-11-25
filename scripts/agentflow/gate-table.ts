@@ -205,6 +205,12 @@ const RULES: readonly Rule[] = [
     why: "scripts are not on the measurement path; the gate scripts themselves are protected",
   },
   {
+    // R1202: `.claude/settings.json` is NOT here. It decides which hooks run, so it stays default-deny until weighed alone.
+    test: startsWith(".claude/hooks/"),
+    legs: [],
+    why: "a Claude Code hook runs only around a session's tool calls; no gate, itest or LethAL code path loads it, and its tests under scripts/ run in verify and CI",
+  },
+  {
     test: startsWith(
       "packages/engine/",
       "packages/operator-sdk/",
