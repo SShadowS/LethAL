@@ -336,3 +336,21 @@ happens today, and nothing in v3 reads it. Accepted, and named.
 ## Predictions (not gates)
 At the next full DO run on `current`: the baseline phase falls to about 30-50% of its paired figure. That saves about 2-4%
 of the run's wall, from c5's 6.8%. It is read from TIMING and the phase events, and reported.
+
+## Amendment 1 (2026-11-25, from the build; no outcome bar or prediction changes)
+1. **DBM-W's warning set is DBM's plus `al-runner-v3-lanes-started`.** Every `--workers 2` session prints that code when
+   its mutants phase starts lanes, so it is not a difference the spread makes.
+2. **DBM-W runs as a third session inside leg DBM** (`dbm-w-daemon`), not as a separate leg name, because it compares
+   against DBM's own result.
+   - It runs only when DBM's batching seam is on (units [0, 1] and [2, 3] need batches of 2).
+   - Otherwise it prints "not applicable" with the reason.
+   - Its figures go under the new expected key `al-runner-v3/dbm-w-daemon`.
+3. **C4 covers every stop.** With no stop handle, the loop can reach a stop caused by `memoryStopped` (a sample that got
+   no answer) before the position where a worker recorded the memory-bound error.
+   - So after the final settle, `stopped && memoryStopped && no stop handle && an error recorded` rethrows that error.
+   - Today's error stays loud.
+4. **Two counting choices the spec left open:**
+   - R1001's `cleanCompared` counts planned compares only, as R951's minimum does.
+   - A lane sample running beside the loop whose skip becomes known only when it settles leaves its lane needing a
+     sample. That need is met by a later counting sample on the lane, or the daemon baseline drops by name
+     (`baseline-lane-unsampled:<k>`), in the safe direction.
