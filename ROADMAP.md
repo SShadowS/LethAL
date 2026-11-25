@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**70 of 1181 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**72 of 1183 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1223,9 +1223,11 @@ that ordering is the priority.
 - **R1211** · heavy-slot records only admissions: a job's wait in the queue, and why it was refused, are not logged, so R992's symptom (a job waiting while memory has room) cannot be measured · [R1211.md](docs/roadmap/R1211.md) · done (1c8d943e6, PR-425): heavy-events.tsv in the lock folder logs queue, admit, small, refuse, never and the…
 - **R1210** · Culture-dependent BC answers from bc1-bc4 are Linux BC (ICU) data, which Windows BC (NLS) need not share: #8861, #8862 and #8871 were Linux-only. Such answers are recorded as 'measured on Linux BC' and filed upstream only when Windows BC agrees · [R1210.md](docs/roadmap/R1210.md) · open
 - **R1214** · On edge-e5176a9fd two refusal families close serve daemons that no keep row covers: SetRange/SetFilter of a Code or Text value into a BigInteger or Integer field (13 closes on c5), and SystemRowVersion of a row the open transaction inserted (11); PR-411's 24 closes are gone, but these keep c5's refusal restarts at 56 · [R1214.md](docs/roadmap/R1214.md) · open
-- **R1216** · On full DO, about 66% of the mutants phase's lane-seconds runs tests under a mutant they do not cover (each serve entry runs its codeunit's prefix through the last covering test) plus per-test overhead: skipping prefix tests is a lever only where no state carries between tests · [R1216.md](docs/roadmap/R1216.md) · open
+- **R1216** · On full DO, about 66% of the mutants phase's lane-seconds runs tests under a mutant they do not cover (each serve entry runs its codeunit's prefix through the last covering test) plus per-test overhead: skipping prefix tests is a lever only where no state carries between tests · [R1216.md](docs/roadmap/R1216.md) · open — re-measured (PR-436): the prefix rows are only ~13% of the mutants phase and ~0.1% is provably safe to…
 - **R1217** · On full DO, the main session's whole-codeunit daemon baseline runs all its requests on ONE lane (c5: 104 requests, 1,403 s, in a 1,628 s phase, 6.8% of the run): spreading it over the lanes is bounded at about 4-5% of the run · [R1217.md](docs/roadmap/R1217.md) · open
 - **R1218** · On full DO, LethAL's own per-request time is about 4.8% of the mutants phase's lane-seconds (request wall outside al-runner 2.7%, lane time in no request 2.1%), not yet decomposed · [R1218.md](docs/roadmap/R1218.md) · open
+- **R1219** · On full DO, about 43% of the mutants phase's lane-seconds is a fixed al-runner cost per serve entry (~260-270 ms outside every test row), not yet attributable: needs a timing split inside `tests` from al-runner · [R1219.md](docs/roadmap/R1219.md) · open — waits on an al-runner timing split (asked via the orchestrator, PR-436's alrunner-ask.md)
+- **R1220** · On full DO, LethAL sends about 124k-157k serve entries where one per (mutant, covering codeunit) is about 106k: each extra entry pays al-runner's fixed per-entry cost and its rows, about 9-27% of the mutants phase · [R1220.md](docs/roadmap/R1220.md) · open — cause breakdown is coord PR-438
 
 ---
 
