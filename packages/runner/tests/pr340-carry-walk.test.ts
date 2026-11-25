@@ -4,12 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AlRunnerV3Backend,
+  CARRY_SKIP_ENV,
   CARRY_WALK_ENV,
+  CarrySkipError,
   type V3Row,
   V3_SINGLEINSTANCE_NOTE,
   V3_STALE_BUFFER_TEXT,
   judgeCarryWalk,
+  readCarrySkip,
 } from "../src/al-runner-v3-backend";
+import { serveRow } from "../src/al-runner-v3-entries";
 import { mergeChildEnv, v3MutantDaemonEnv } from "../src/al-runner-v3-seed";
 import type {
   BackendCapabilities,
@@ -257,6 +261,11 @@ function shell(
     /** The raw rows of request number `n` (0-based, over ALL daemons), given the resource file's content. */
     answers?: (n: number, file: string) => Rows | Error;
     lanes?: number;
+    /** PR-410: the baseline rows, where each came from, whether codeunits run per test, the real closeLane. */
+    baseline?: Map<number, readonly V3Row[]>;
+    source?: Map<number, { mode: string; daemon: boolean }>;
+    perTest?: boolean;
+    realClose?: boolean;
   } = {},
 ) {
   const lanesN = o.lanes ?? 1;
@@ -310,11 +319,19 @@ function shell(
     [3, 1],
   ]);
   b.suitePerCodeunit = new Map();
-  b.baselineRows = new Map([
-    [1, [row(1, "T1", "pass")]],
-    [2, [row(2, "T2", "pass")]],
-    [3, [row(3, "T3", "pass")]],
-  ]);
+  b.baselineRows =
+    o.baseline ??
+    new Map([
+      [1, [row(1, "T1", "pass")]],
+      [2, [row(2, "T2", "pass")]],
+      [3, [row(3, "T3", "pass")]],
+    ]);
+  // PR-410: the skip's inputs. Default: every codeunit's baseline came from a serve daemon, mode "test".
+  b.baselineSource =
+    o.source ?? new Map([1, 2, 3].map((cu) => [cu, { mode: "test", daemon: true }] as const));
+  b.carrySkipped = 0;
+  b.carryPremise = { y: 0, x: 0, z: 0, misses: [] };
+  b.perTest = () => o.perTest === true;
   b.serveRowFields = false;
   b.memoryStopped = false;
   b.stopHandle = undefined;
@@ -330,9 +347,31 @@ function shell(
     events.push(`bound@lane${lane.index}`);
   };
   b.refuseDaemonDependencySkip = async () => undefined;
-  b.closeLane = async (lane: Lane0, reason: string) => {
-    closes.push({ lane: lane.index, reason });
-  };
+  const closeEvents: Array<Record<string, unknown>> = [];
+  if (o.realClose === true) {
+    // PR-410: the REAL closeLane over stub lanes, so the close event and the close counts are measured.
+    for (const lane of lanes) {
+      Object.assign(lane, {
+        daemonKeys: () => ["test"],
+        closeDaemon: async () => 1,
+        inFlight: undefined,
+        lastClose: new Map(),
+        stats: { refusalCloses: 0 },
+      });
+    }
+    b.closes = new Map();
+    b.closeFamilies = new Map();
+    b.stormFamilies = new Map();
+    b.nearMissChecked = new Set();
+    b.nearMissKnownShown = new Set();
+    b.notify = () => undefined;
+    b.closeSink = (e: Record<string, unknown>) => closeEvents.push(e);
+    Reflect.deleteProperty(b, "closeLane"); // use the prototype's
+  } else {
+    b.closeLane = async (lane: Lane0, reason: string) => {
+      closes.push({ lane: lane.index, reason });
+    };
+  }
   return {
     b: b as unknown as AlRunnerV3Backend,
     raw: b,
@@ -340,6 +379,7 @@ function shell(
     calls,
     events,
     closes,
+    closeEvents,
     walk: (lane: Lane0, covering: readonly TestMethodRef[] = [ref(1, "T1"), ref(2, "T2")]) =>
       (
         b as unknown as {
@@ -1070,5 +1110,335 @@ describe("PR-340 review fixes", () => {
       if (before === undefined) Reflect.deleteProperty(process.env, "AL_STRICT_SEQUENTIAL");
       else process.env.AL_STRICT_SEQUENTIAL = before;
     }
+  });
+});
+
+// ================================================================ part 5: PR-410 (skip, stop early, close, knob)
+
+/** A baseline row as the daemon-baseline path writes a flagged pass: BOTH flags set. */
+const flaggedRow = (cu: number, method: string): V3Row => ({
+  ...row(cu, method, "pass"),
+  flagged: true,
+  flaggedUnknown: true,
+});
+const baselineWith = (
+  first: readonly V3Row[],
+  second: readonly V3Row[] = [row(2, "T2", "pass")],
+): Map<number, readonly V3Row[]> =>
+  new Map([
+    [1, first],
+    [2, second],
+    [3, [row(3, "T3", "pass")]],
+  ]);
+const doomedBaseline = () => baselineWith([flaggedRow(1, "T1")]);
+const SKIP_TEXT =
+  "skipped before request 1: Codeunit1.T1 passed flagged at baseline, so the walk's requests would hold no sound pass (PR-410)";
+/** An answer whose T2 passed flagged: unsound (B1 leftover). */
+const flaggedT2 = (n: number, file: string): Rows => [
+  ...defaultAnswers(n, file).slice(0, 2),
+  { name: "Codeunit2.T2", status: "pass", flagged: true },
+];
+
+async function withSkipKnob<T>(value: string | undefined, body: () => Promise<T>): Promise<T> {
+  const before = process.env[CARRY_SKIP_ENV];
+  if (value === undefined) Reflect.deleteProperty(process.env, CARRY_SKIP_ENV);
+  else process.env[CARRY_SKIP_ENV] = value;
+  try {
+    return await body();
+  } finally {
+    if (before === undefined) Reflect.deleteProperty(process.env, CARRY_SKIP_ENV);
+    else process.env[CARRY_SKIP_ENV] = before;
+  }
+}
+const lineOf = (b: AlRunnerV3Backend, name: string): string | undefined =>
+  (b as unknown as Record<string, () => string | undefined>)[name]?.call(b);
+
+/** The three answers a full walk would hold, each as `V3Row`s, with request `bad` (0-based) replaced. */
+const rowsOf = (raw: Rows): V3Row[] =>
+  raw.map((t) => {
+    const r = serveRow(t, false);
+    if (typeof r === "string") throw new Error(r);
+    return r;
+  });
+const fullJudge = (answerFor: (n: number, file: string) => Rows) =>
+  judgeCarryWalk({
+    mutantId: "M0009",
+    echoId: ECHO,
+    expected: new Map([
+      [1, new Set(["t1"])],
+      [2, new Set(["t2"])],
+    ]),
+    answers: ["M0009", "NONE", "M0009"].map((f, n) => rowsOf(answerFor(n, f))),
+    stopSeconds: 60,
+  });
+
+describe("PR-410: the carry walk skip", () => {
+  // Red (a): drop the `doomed && skipOn` return in carryWalkSend.
+  test("doomed: kept[0]'s first baseline row is a flagged pass from a daemon: nothing sent, no close, the exact reason, the line counts 1, carry walks does not", async () => {
+    await withSkipKnob(undefined, async () => {
+      const s = shell({ baseline: doomedBaseline() });
+      const r = await s.walk(s.lanes[0] as Lane0);
+      expect(r).toEqual({ kind: "failed", reason: SKIP_TEXT });
+      expect(s.calls).toHaveLength(0);
+      expect(s.events).toEqual([]);
+      expect(s.closes).toEqual([]);
+      expect(lineOf(s.b, "carryWalkSkipLine")).toBe(
+        "[lethal] al-runner-v3 carry walks skipped (PR-410): 1, before any request (a baseline-flagged pass in the first codeunit)",
+      );
+      // Red (h): count a skipped walk in carryWalkStats.
+      expect(lineOf(s.b, "carryWalkLine")).toBeUndefined();
+      expect(lineOf(s.b, "carryPremiseLine")).toBeUndefined();
+    });
+  });
+
+  test("no skip line when no walk was skipped", async () => {
+    await withSkipKnob(undefined, async () => {
+      const s = shell();
+      await s.walk(s.lanes[0] as Lane0);
+      expect(lineOf(s.b, "carryWalkSkipLine")).toBeUndefined();
+    });
+  });
+
+  const sent: Array<[string, Parameters<typeof shell>[0]]> = [
+    // Red (b): look at any row instead of the first.
+    [
+      "kept[0]'s flagged pass is its SECOND row",
+      { baseline: baselineWith([row(1, "T0", "pass"), flaggedRow(1, "T1")]) },
+    ],
+    [
+      "only a LATER codeunit has a flagged pass",
+      { baseline: baselineWith([row(1, "T1", "pass")], [flaggedRow(2, "T2")]) },
+    ],
+    // Red (c): drop the transport check.
+    [
+      "the first row came from a one-shot call",
+      {
+        baseline: doomedBaseline(),
+        source: new Map([
+          [1, { mode: "test", daemon: false }],
+          [2, { mode: "test", daemon: true }],
+          [3, { mode: "test", daemon: true }],
+        ]),
+      },
+    ],
+    [
+      "only flaggedUnknown (not flagged)",
+      { baseline: baselineWith([{ ...row(1, "T1", "pass"), flaggedUnknown: true }]) },
+    ],
+    // Red (d): drop the mode check.
+    [
+      "the mode changed after the baseline",
+      {
+        baseline: doomedBaseline(),
+        source: new Map([
+          [1, { mode: "codeunit", daemon: true }],
+          [2, { mode: "test", daemon: true }],
+          [3, { mode: "test", daemon: true }],
+        ]),
+      },
+    ],
+    ["the codeunit runs per test", { baseline: doomedBaseline(), perTest: true }],
+  ];
+  for (const [name, o] of sent) {
+    test(`not doomed: ${name}: the walk is sent`, async () => {
+      await withSkipKnob(undefined, async () => {
+        const s = shell(o);
+        await s.walk(s.lanes[0] as Lane0);
+        expect(s.calls.length).toBeGreaterThan(0);
+        expect(lineOf(s.b, "carryWalkSkipLine")).toBeUndefined();
+      });
+    });
+  }
+
+  test("the knob off: a doomed walk is sent with exactly today's three requests", async () => {
+    await withSkipKnob("off", async () => {
+      const s = shell({ baseline: doomedBaseline() });
+      const r = await s.walk(s.lanes[0] as Lane0);
+      expect(s.calls).toHaveLength(3);
+      expect(r?.kind).toBe("killed");
+      expect(lineOf(s.b, "carryWalkSkipLine")).toBeUndefined();
+    });
+  });
+
+  // Build review NIT. Red: read the knob on every walk (drop the `??=` memo in carryWalkSend).
+  test("the knob is read once per backend: a mid-session change does not alter its walks", async () => {
+    const s = await withSkipKnob(undefined, async () => {
+      const b = shell({ baseline: doomedBaseline() });
+      await b.walk(b.lanes[0] as Lane0);
+      return b;
+    });
+    await withSkipKnob("off", async () => {
+      const r = await s.walk(s.lanes[0] as Lane0);
+      expect(r).toEqual({ kind: "failed", reason: SKIP_TEXT });
+      expect(s.calls).toHaveLength(0);
+    });
+  });
+
+  // Red (e): drop the stop-early block in carryWalkSend.
+  for (const bad of [0, 1]) {
+    test(`stop early: request ${bad + 1} unsound sends ${bad + 1}; the reason is judgeCarryWalk's over the full answers, byte for byte`, async () => {
+      await withSkipKnob(undefined, async () => {
+        const answerFor = (n: number, f: string): Rows =>
+          n === bad ? flaggedT2(n, f) : defaultAnswers(n, f);
+        const s = shell({ answers: answerFor });
+        const r = await s.walk(s.lanes[0] as Lane0);
+        expect(s.calls).toHaveLength(bad + 1);
+        const want = fullJudge(answerFor);
+        expect(want.kind).toBe("failed");
+        expect(r).toEqual(want);
+        // knob off: today's three sends, the same reason
+        await withSkipKnob("off", async () => {
+          const o = shell({ answers: answerFor });
+          const r2 = await o.walk(o.lanes[0] as Lane0);
+          expect(o.calls).toHaveLength(3);
+          expect(r2).toEqual(want);
+        });
+      });
+    });
+  }
+
+  test("stop early: request 1 unsound and request 2 set to time out: request 1's reason wins, 1 sent", async () => {
+    const { AlRunnerServerRequestError } = await import("../src/al-runner-server");
+    await withSkipKnob(undefined, async () => {
+      const s = shell({
+        answers: (n, f) =>
+          n === 0 ? flaggedT2(n, f) : new AlRunnerServerRequestError("deadline", "late"),
+      });
+      const r = await s.walk(s.lanes[0] as Lane0);
+      expect(s.calls).toHaveLength(1);
+      expect(failedReason(r1ShouldFail(r))).toContain("request 1: Codeunit2.T2 passed but");
+      expect(s.closes).toEqual([]);
+    });
+  });
+});
+
+describe("PR-410: the premise line (knob off)", () => {
+  const t1UnderNone = (flag: boolean) => (n: number, file: string) =>
+    n === 1 && flag
+      ? defaultAnswers(n, file).map((t) =>
+          t.name === "Codeunit1.T1" ? { ...t, flagged: true } : t,
+        )
+      : defaultAnswers(n, file);
+
+  test("a predicted walk whose request 2 holds the test as a flagged pass counts 1 of 1", async () => {
+    await withSkipKnob("off", async () => {
+      const s = shell({ baseline: doomedBaseline(), answers: t1UnderNone(true) });
+      await s.walk(s.lanes[0] as Lane0);
+      expect(lineOf(s.b, "carryPremiseLine")).toBe(
+        "[lethal] al-runner-v3 carry premise (PR-410): the predicted test passed flagged under NONE in 1 of 1 walks the skip would skip (misses: none); request 2 not reached in 0",
+      );
+    });
+  });
+
+  test("one whose request 2 does not counts 0 of 1 and names the mutant", async () => {
+    await withSkipKnob("off", async () => {
+      const s = shell({ baseline: doomedBaseline(), answers: t1UnderNone(false) });
+      await s.walk(s.lanes[0] as Lane0);
+      expect(lineOf(s.b, "carryPremiseLine")).toContain(
+        "in 0 of 1 walks the skip would skip (misses: M0009); request 2 not reached in 0",
+      );
+    });
+  });
+
+  test("request 2 not reached (request 1 times out) counts in Z, never as a miss", async () => {
+    const { AlRunnerServerRequestError } = await import("../src/al-runner-server");
+    await withSkipKnob("off", async () => {
+      const s = shell({
+        baseline: doomedBaseline(),
+        answers: () => new AlRunnerServerRequestError("deadline", "late"),
+      });
+      await s.walk(s.lanes[0] as Lane0);
+      expect(lineOf(s.b, "carryPremiseLine")).toContain(
+        "in 0 of 0 walks the skip would skip (misses: none); request 2 not reached in 1",
+      );
+    });
+  });
+
+  test("no line for a walk the skip would not skip, and none with the knob on", async () => {
+    await withSkipKnob("off", async () => {
+      const s = shell();
+      await s.walk(s.lanes[0] as Lane0);
+      expect(lineOf(s.b, "carryPremiseLine")).toBeUndefined();
+    });
+    await withSkipKnob(undefined, async () => {
+      const s = shell({ baseline: doomedBaseline() });
+      await s.walk(s.lanes[0] as Lane0);
+      expect(lineOf(s.b, "carryPremiseLine")).toBeUndefined();
+    });
+  });
+});
+
+describe("PR-410: the walk's unkept-row close", () => {
+  // Red (f): pass the family through closeLane's `family` argument instead of the event-only one.
+  test("a refusal row gives a close event with its family, text and test; the close counts do not move", async () => {
+    await withSkipKnob(undefined, async () => {
+      const refusal = "out-of-scope: WithEvents 'Foo' is not supported";
+      const s = shell({
+        realClose: true,
+        answers: (n, f) => [
+          ...defaultAnswers(n, f).slice(0, 2),
+          { name: "Codeunit2.T2", status: "error", notRun: true, message: refusal },
+        ],
+      });
+      const r = await s.walk(s.lanes[0] as Lane0);
+      expect(r?.kind).toBe("failed");
+      expect(s.closeEvents).toHaveLength(1);
+      expect(s.closeEvents[0]).toMatchObject({
+        reason: "unkept-row",
+        text: refusal,
+        test: "Codeunit2.T2",
+      });
+      expect(String(s.closeEvents[0]?.family)).toStartWith("WithEvents");
+      const raw = s.raw as {
+        closes: Map<string, number>;
+        closeFamilies: Map<string, number>;
+        nearMissChecked: Set<string>;
+      };
+      expect(raw.closes.get("unkept-row")).toBe(1);
+      expect(raw.closeFamilies.size).toBe(0);
+      expect(raw.nearMissChecked.size).toBe(0);
+      expect(
+        (s.lanes[0] as unknown as { stats: { refusalCloses: number } }).stats.refusalCloses,
+      ).toBe(0);
+    });
+  });
+});
+
+describe("PR-410: the knob", () => {
+  test("only off or unset is valid; anything else is refused by name", () => {
+    expect(readCarrySkip({})).toBe(true);
+    expect(readCarrySkip({ [CARRY_SKIP_ENV]: "" })).toBe(true);
+    expect(readCarrySkip({ [CARRY_SKIP_ENV]: "off" })).toBe(false);
+    for (const v of ["on", "OFF", "0"])
+      expect(() => readCarrySkip({ [CARRY_SKIP_ENV]: v })).toThrow(CarrySkipError);
+    expect(() => readCarrySkip({ [CARRY_SKIP_ENV]: "on" })).toThrow(/carry-skip-value-refused/);
+  });
+
+  test("a session refuses a bad value before any run", async () => {
+    const backend = new WalkStub("al-runner-v3", () => undefined);
+    await withSkipKnob("maybe", async () => {
+      await expect(session(backend)).rejects.toThrow(/carry-skip-value-refused/);
+    });
+    expect(backend.walks).toEqual([]);
+  });
+
+  // Red (g): drop `v3CarrySkipOff` from sessionFingerprint (resume.ts) or from fingerprintWith.
+  test("off puts v3CarrySkipOff in the fingerprint; absent leaves the digest as a default run's", async () => {
+    const project = await makeProject();
+    const digest = async (v: string | undefined, tag: string) => {
+      const store = new ResultsStore(":memory:");
+      await withSkipKnob(v, () =>
+        session(new WalkStub("al-runner-v3", () => ({ kind: "walked" })), { store, tag, project }),
+      );
+      const got = store.db.query("SELECT config_fingerprint AS f FROM runs").get() as {
+        f: string;
+      };
+      store.close();
+      return got.f;
+    };
+    const base = await digest(undefined, "-a");
+    expect(base.length).toBeGreaterThan(0);
+    expect(await digest("", "-b")).toBe(base);
+    expect(await digest("off", "-c")).not.toBe(base);
   });
 });
