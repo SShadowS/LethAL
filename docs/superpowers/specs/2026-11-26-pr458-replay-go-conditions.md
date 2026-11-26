@@ -110,6 +110,30 @@ lethal-code, 2026-11-26. Written BEFORE any measurement.
 - **FAIL:** above 8 GiB. The confirm lane then needs al-runner to cap `Tally.firsts`, or a different design.
 - **(S4) The serial seconds** are scaled by pair entries (not by the capture's 9,000 s).
 
+## Amendment A1 (2026-11-26, after condition 4's result): a confirm lane WITHOUT CHECK — a different design
+
+- **Condition 4 as pre-committed FAILED,** and that is recorded as measured.
+  - All the capture's kill pairs (8,436 sessions, 60 keys) ran on one `=0` + `_CHECK=1` daemon: 8,376 compared,
+    0 differ; replay vs run 8,092 checked, 0 differ.
+  - Peak RSS was 4.66 GiB, growing about 29 MB per new key (2.9 → 4.6 GiB), from CHECK's uncapped `Tally.firsts`.
+  - A full c5-sized run's confirm lane would see about 6,573 keys (109 codeunits + the echo + 141 killed login-bucket
+    mutants × their covering codeunits). That projects to 100+ GiB against 8 GiB.
+- **The ruling (orchestrator):** the confirm lane runs `=0` WITHOUT CHECK.
+  - Form A's soundness comes from `=0` alone: every kill stands on a real login.
+  - CHECK in that lane sampled only kills, so it could never watch R1226's door (PR-453 r3, N1).
+  - al-runner is NOT asked to cap `Tally.firsts`: CHECK at that scale is no longer needed.
+  - Key-completeness evidence now rests on condition 1's per-key CHECK and on r3 §5.3's survivor-direction mechanism,
+    not on the confirm lane.
+- **Condition 4' (pre-committed now, before running):** the same pair traffic, in the same order, on ONE `=0` daemon
+  without CHECK (C app, cap and MB irrelevant at `=0`), with RSS sampled per request.
+  - **PASS:**
+    - VmHWM ≤ 4.0 GiB, about one regular lane (PR-453's off arm was 3.55 GiB);
+    - NO growth with keys: the RSS at the last request is within 0.3 GiB of the RSS at request 100.
+  - **FAIL:** either one fails. The confirm lane then costs more than a regular lane, and the value formula charges
+    the excess.
+  - The serial seconds of this run feed condition 2's value formula, in place of the CHECK run's.
+  - This is a different design measured fresh, not a re-run of condition 4 toward a pass.
+
 ## GO / NO-GO
 
 - **"GO for 1, 2 and 4"** only if:
