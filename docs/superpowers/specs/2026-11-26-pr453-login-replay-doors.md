@@ -1,11 +1,13 @@
-# PR-453: closing R1223 and R1226 under PR-447's shape C, the real hit rate, and a go/no-go — r2 (no build)
+# PR-453: closing R1223 and R1226 under PR-447's shape C, the real hit rate, and a go/no-go — r3 (no build)
 
 lethal-code, 2026-11-26.
 - **r1** was a9aa5ef1f: a one-lane CHECK canary, Form A dropped, GO.
-- **r2** answers r1's spec-adversary, marked "(B1)" and so on.
+- **r2** (29b0453f8) answers r1's spec-adversary, marked "(B1)" and so on.
   - It gave 4 BLOCKs and 5 SHOULDs.
   - The orchestrator asked for its weight on the canary, because retiring the flag makes C plus replay the only v3 path.
-- **r2's verdict: NO-GO now,** on three named conditions (§5).
+- **r3** answers the delta review (N1-N9). Its §5 and §7 replace r2's §5.
+- **The verdict stays NO-GO now.** The GO conditions are restated so they can be measured, and the open design items
+  are listed.
 
 Evidence: `/coord/handoff/PR-453/` (`findings.md`, `capture/`, `life/`, `alrunner-step2.md`). Names and numbers only.
 
@@ -112,15 +114,64 @@ Evidence: `/coord/handoff/PR-453/` (`findings.md`, `capture/`, `life/`, `alrunne
   CHECK lane's memory;
 - the direct life walls do not confirm even that.
 
-**Conditions for a GO, each measured, nothing built:**
-1. **A full DO run with CHECK on every lane** (fewer lanes if memory needs it), covering the 3 lives' login-path keys:
-   0 errors on the three counters.
-2. **An interleaved A/B of lane time** on the probed life: off against on at cap 32 with `MAX_MB` set, at least
-   A, B, A, B on the same cores, with outside load named. On must beat off by more than the C selector's cost.
-3. **alrunner's sampled check** on replay-on daemons (the R1226 ask), or the orchestrator accepts the confirm lane's
-   CHECK as R1226's only sample, with its limit stated.
+- **(N2) That arithmetic assumed the confirm lane is cheap. It is not.**
+  - `batchKillPairs` is awaited inside each lane's prefetch.
+  - One serial shared daemon would carry ≥ 13,650 s (R1223's 11,100 s, plus CHECK's +23%), plus the fallbacks, the
+    carry walk and the windows. That is against a 19,758 s phase, fed in bursts.
+  - It would sit on every lane's critical path.
+  - So the saving is not known until the confirm lane is sized (§7).
 
-If 1 and 2 hold, the build is: C, the confirm lane, the trip fact and the three-counter signal, with the flag retired.
+**Conditions for a GO (r3), each measured, nothing built:**
+1. **(N4) Key coverage, per key.** A full DO run, run to the end and not stopped by a timer, with CHECK on every lane
+   (fewer lanes if memory needs it):
+   - for EACH of the 42 login-path mutants' keys, at least one replay-vs-run comparison (more than one session of the
+     key on one daemon);
+   - 0 errors on the three counters;
+   - the compared counts reported per counter and per key class (NONE-equivalent vs login-path);
+   - whether it crossed midnight;
+   - a run with 0 compared fails the condition.
+2. **(N7) Lane time, representative.** An interleaved A/B, at least A, B, A, B on the same cores with outside load
+   named, between:
+   - (a) TODAY's selector with replay off, and (b) C with replay on, at cap 32 with `MAX_MB` set;
+   - on the probed life AND on at least one of the three login-path lives.
+   - GO only if (a) − (b) beats the confirm lane's SIZED cost (§7).
+3. **(N1) A survivor-direction sample that can see R1226's door.**
+   - The confirm lane sees only kills, so its CHECK cannot see a survivor whose replay hid its login effect. It is NOT
+     an alternative.
+   - Required, one of:
+     - al-runner's sampled check on replay-on daemons that INCLUDES NONE-equivalent keys (a stated random rate);
+     - a LethAL-side survivor sample: a random fraction of survivors re-run on the confirm lane at `=0`, where a
+       survivor that flips to killed is a trip.
+4. **(N3) The confirm lane's peak memory, measured on confirm-lane traffic.** Replay the capture's kill pairs on one
+   daemon with CHECK, or have al-runner cap `Tally.firsts` first.
+5. **(N6) The gated pin carries the `login-replay` fact AND the cap setting.** Otherwise `itest:alrunner-v3` measures
+   only replay-off, and replay-on ships ungated.
+
+## 7. Open design items before any build spec (N2, N5, N6, N8, N9, NIT2)
+
+- **(N2) The confirm lane:**
+  - dedicated (a sixth daemon, costing a lane) or in-lane;
+  - its queue, sized with ALL routed traffic, the windows included;
+  - in-flight and timeout rules for a daemon shared by several lanes (`lane.inFlight` is per lane);
+  - the warm-up proof after a respawn;
+  - serialising `activate`;
+  - chunked runs with several artifacts;
+  - a named `confirm-lane-lost` caveat with a count, when it dies for good (every later kill is withheld).
+- **(N5) After a trip mid-run,** ONE continuation: stop, with every verdict invalidated, and the next run replay-off by
+  the trip fact. R1223 D5's list of verdicts scored without a pair (for example `timeout-killed`) is carried over and
+  argued per verdict.
+- **(N6) Principle 16, stated:**
+  - the selector is C on EVERY route; the replay-off route differs only by the spawn env;
+  - the confirm lane exercises that route in every run;
+  - a run that went replay-off because a fact was missing or a trip fired says so in its report.
+- **(N8) The trip fact is keyed on the al-runner BUILD alone.** A key-inventory gap belongs to the build, so editing a
+  project must not clear it.
+- **(N9)** No replay-on runs from PR-402's old flag exist in any store: the interlock refused them. So the "unmarked
+  replay-on run" class is empty.
+- **(NIT2, principle 4)** The trip enforces from day one. That is defensible, because it only fails toward safety
+  (replay off, verdicts invalidated). Its false-alarm sources are those of §3's B4 rules.
+- **(B1 label)** The CHECK arm that was measured ran `=1` + CHECK. `=0` + CHECK, the confirm lane's setting, follows
+  from the source (`session_flags.rs` `login_replay()`; `run.rs` takes no replay under check) and was not run.
 
 ## 6. Owner principles weighed
 
