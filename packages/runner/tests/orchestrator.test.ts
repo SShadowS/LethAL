@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { clock } from "../src/clock";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
@@ -14318,6 +14319,108 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
     });
     expect(warnings(events, "lease-renew-unanswered")).toHaveLength(1);
     expect(warnings(events, "lease-renew-blip")).toHaveLength(0);
+  });
+
+  /**
+   * R1227: three stalled ticks during the FIRST mutant's run, 61 s apart on the monotonic clock
+   * (stepped, never waited for): the stop fires at the third, while that mutant is still in flight.
+   */
+  async function renewStopSession(prepare?: (s: ResultsStore) => void) {
+    const { calls, client } = wired({ RenewLease: () => "stall" });
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const dir = freshTmpDir();
+    const { lease } = leaseCfg(client, { timers });
+    const store = new ResultsStore(":memory:");
+    prepare?.(store);
+    const realMono = clock.mono;
+    let bump = 0;
+    clock.mono = () => realMono() + bump;
+    let active: string | null = null;
+    let fired = false;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+      },
+      run: async (ref, opts) => {
+        if (active !== null && !fired) {
+          fired = true;
+          for (let i = 0; i < 3; i++) {
+            bump += 61_000;
+            await timers.fire();
+          }
+        }
+        return pass(ref, opts);
+      },
+    });
+    try {
+      const report = await runSessionForTest(backend, {
+        store,
+        quarantineDir: dir,
+        lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e as Error);
+      return { report, events, store, dir, calls };
+    } finally {
+      clock.mono = realMono;
+    }
+  }
+
+  test("R1227: the stop quarantines, drops the window from the report and the store, records the recycle and is no lease loss", async () => {
+    const { report, events, store, dir, calls } = await renewStopSession();
+    if (report instanceof Error) throw report;
+    expect(report.quarantined?.reason.startsWith("lease-renew-unanswered:")).toBe(true);
+    expect(warnings(events, "lease-renew-unanswered-stop")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "degraded-window")).toHaveLength(1);
+    expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    // the in-flight mutant was scored AFTER the stop: the report and the raw store row both say error
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote?.startsWith("lease-renew-unanswered:")).toBe(true);
+    }
+    const rows = store.db.query("SELECT verdict, failure_note FROM mutants").all() as Array<{
+      verdict: string;
+      failure_note: string;
+    }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.verdict === "error")).toBe(true);
+    expect(store.db.query("SELECT COUNT(*) AS n FROM lost_batches").get()).toEqual({ n: 0 });
+    const rec = await new QuarantineStore(dir).read(TIER);
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("stopped answering lease renews");
+    expect(rec?.detail).not.toContain("ForceResetLease");
+    expect(calls.ReleaseLease).toBe(1); // the lease released cleanly
+  });
+
+  test("R1227: a store write that throws inside pulse does not reject; the teardown writes it again", async () => {
+    let first = true;
+    const { report, events, store } = await renewStopSession((s) => {
+      const real = s.markDegradedWindow.bind(s);
+      s.markDegradedWindow = (...a) => {
+        if (first) {
+          first = false;
+          throw new Error("disk full");
+        }
+        real(...a);
+      };
+    });
+    expect(report).not.toBeInstanceOf(Error);
+    expect(warnings(events, "degraded-window-store-not-corrected")).toHaveLength(1);
+    const rows = store.db.query("SELECT verdict FROM mutants").all() as Array<{ verdict: string }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.verdict === "error")).toBe(true);
+  });
+
+  test("R1227: when the teardown's write fails too, the session throws DegradedWindowNotStoredError", async () => {
+    const { report, events } = await renewStopSession((s) => {
+      s.markDegradedWindow = () => {
+        throw new Error("disk full");
+      };
+    });
+    expect(report).toBeInstanceOf(orchestratorModule.DegradedWindowNotStoredError);
+    expect((report as Error).message).toContain("do not --resume run");
+    expect(warnings(events, "degraded-window-store-not-corrected")).toHaveLength(1);
   });
 
   /**

@@ -1098,6 +1098,33 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "afterSeq",
+        "reason",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "degraded-window"
+        },
+        "afterSeq": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "atMs": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "batchIndex",
         "verdicts",
         "seq"
