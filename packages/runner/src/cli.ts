@@ -132,7 +132,7 @@ import { formatFailure } from "./format-failure";
 import { ApiBaseUnsetError, HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
 import type { HarnessDetails, LeaseSnapshot } from "./harness";
 import { httpPolicyLines, httpPolicyOf } from "./http-policy";
-import { largeFoldWarning } from "./large-fold";
+import { largeFoldWarning, methodGuardsRefusal, methodsOverGuardLimit } from "./large-fold";
 import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
@@ -4482,6 +4482,9 @@ export async function printDryRun(
   if (paths.backendKind === undefined || isBcdev(paths.backendKind)) {
     const foldWarning = largeFoldWarning(files, dryRunTierOf);
     if (foldWarning !== undefined) console.log(`NOTE: ${foldWarning.replace("[lethal] ", "")}`);
+    // PR-461: the run refuses these on bcdev; the dry run says so first.
+    const refusal = methodGuardsRefusal(methodsOverGuardLimit(files, dryRunTierOf));
+    if (refusal !== undefined) console.log(`NOTE: ${refusal.replace("[lethal] ", "")}`);
   }
   // R48: a dry run exists to answer "how big is this going to be", so it is the right place to say
   // that the answer is "too big to run". Saying it here — rather than only when `lethal run`
