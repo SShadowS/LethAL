@@ -1,8 +1,44 @@
-# PR-456 (R1229): carry decided SURVIVORS across a BC restart that lost the database — design r2 (no build)
+# PR-456 (R1229): carry decided SURVIVORS across a BC restart that lost the database — design r3 (no build)
 
 lethal-code, 2026-11-26.
 - **r1** was 657e6ad70: it carried every verdict on equal apps plus an equal per-batch baseline.
-- **r2** answers its spec-adversary: BLOCKs 1-2, SHOULDs 3-6, NITs 7-10, marked "(B1)" and so on.
+- **r2** (2fd48a4bc, 930aa973a) answers its spec-adversary: BLOCKs 1-2, SHOULDs 3-6, NITs 7-10, marked "(B1)" and so
+  on.
+- **r3** answers the delta review (D1-D7). Its "r3 changes" section overrides any r2 text it contradicts.
+
+## r3 changes (delta review)
+
+- **(D1, BLOCK) Item 5 is DELETED. Strand skipping stays exactly as it is today.**
+  - A healthy-tier strand is a real measurement of a mutant that hangs. Re-running it after the restart it causes
+    would bring back R53/R201's endless resume: it hangs, the tier is restarted, the database id changes, it is
+    re-run, it hangs again.
+  - A strand skip is already fail-closed: `error`, nothing scored, nothing carried.
+  - `--retry-stranded` stays the opt-in, and R1227 already re-runs strands inside a degraded window.
+  - Red test: a prior `quarantined:` row outside a degraded window, then a generation and id change, is still skipped.
+- **(D2) The yield in S4(c) is a CEILING.** Each PR-427 run was one batch, so its carry is all or nothing.
+  - **New probe (d), a GO condition next to (a) and (b):** for batch hashes that have snapshots in two server
+    generations (PR-427's voided runs and their redos), count how many pass item 2's exact rule. Counts only.
+  - PR-427's coverage mode was checked: `fenced` in all four runs, not hub mode, so the table applies.
+- **(D3) The label reaches the report reader: a new caveat, `resumed-across-restart`,** set when any batch carried
+  across a lost database.
+  - It says: the survivors were measured on the earlier database; equality was checked on the unmutated baseline
+    only; kills were re-run.
+  - It corrects the `resumed` caveat's claim that the exposure is "the same as every run's".
+  - It needs `CAVEAT_INTERPRETATIONS`, the counts in `interpretation.test.ts` and `report.test.ts`, and the schema
+    enum. No new `SessionReport` field, no sample regeneration.
+- **(D4) `resume-across-restart` is emitted ONCE PER BATCH, at that batch's decision,** like `resume-baseline-reused`.
+  A run stopped mid-way still names each batch that carried.
+- **(D5) The live leg cannot pass empty.** Its pre-commitment names at least one carried survivor and at least one
+  re-run kill, by mutant id. It allows differences in `killingTest` alone, because seeding the prior killers gives an
+  order no other run used (R197's allowance).
+- **(D6) The re-run kills are seeded only through `isSeedableCarriedKill` and `carriedKillerRef`.** A
+  `[ledger-order-survived]` kill is not seeded, as R1179 already does. A seeded killer moves no verdict: R577
+  reproduction, and R1174's re-walk on bcdev.
+- **(D7) Clarifications:**
+  - item 3 carries `survived` only; `known-survivor` stays as today's R644 path;
+  - "exactly equal" compares coverage entries as SETS, not in array order;
+  - under `coverageMode: "none"` the coverage compare is empty against empty, which is safe because only survivors
+    carry. It is stated, not left implicit.
 - **The orchestrator's condition:** carry only if the re-setup uses the same app hashes AND the fresh baseline equals
   the stored one per test; degraded-window verdicts never carry.
 - **Prior rulings:** R959 (the refusal stays: an app check cannot see company data) and R969 (a database id survives a
