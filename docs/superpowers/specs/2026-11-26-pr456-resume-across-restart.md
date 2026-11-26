@@ -92,6 +92,20 @@ MISSING on either side still refuses, as today.
   snapshot? Their redo time against the kills' (counts and durations only).
 - If (a) or (b) fails, nothing ever carries, and R1229 needs another basis. If (c) is small, the item is not worth
   building (principle 13).
+- **(c) MEASURED (PR-427's stores, counts and summed `duration_ms` only):** each run is one batch with one stored
+  snapshot. Survivors hold most of the redo time:
+
+  | run | survivors | kills |
+  |---|---|---|
+  | edocs | 21, 110 min | 75, 32 min |
+  | queue2 | 460, 257 min | 354, 22 min |
+  | subs | 362, 229 min | 197, 22 min |
+  | email | 248, 92 min | 264, 9 min |
+
+  - So carrying survivors only keeps about 90% of the time a full carry would save, while kills stay re-run.
+  - Errors are left aside: edocs' 36 errors cost 433 min, mostly at the 330 s cap, and are re-run in any case.
+- (a) and (b) need a leased bc server and a real restart (a kraken operation). They are the first step of the build
+  task.
 
 ## Red tests (for the build)
 
