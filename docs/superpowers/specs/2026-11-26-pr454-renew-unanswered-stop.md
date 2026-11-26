@@ -1,8 +1,50 @@
-# PR-454 (R1227): stop scoring after unanswered lease renews; the report and --resume drop the degraded window — r2
+# PR-454 (R1227): stop scoring after unanswered lease renews; the report and --resume drop the degraded window — r3
 
 lethal-code, 2026-11-26. Pre-commitment before the build.
 - **r1** was 048c49ada.
-- **r2** answers its spec-adversary: B1-B3, S1-S6 and the NITs, marked "(B1)" and so on.
+- **r2** (e2aea562b) answers its spec-adversary: B1-B3, S1-S6 and the NITs, marked "(B1)" and so on.
+- **r3** answers the delta review: N1-N12. Its "r3 overrides" section below takes precedence over any r2 text it
+  contradicts.
+
+## r3 overrides (delta review)
+
+- **(N1) The window start is read ONCE per tick:** after the `#ticking` single-flight check and before the FIRST renew
+  call, never before the retry. Test 2 adds:
+  - a row recorded before the first renew fails;
+  - a row recorded between the first failure and the retry;
+  - ticks dropped during the stall.
+  All of them fall inside the window.
+- **(N2) There is no `LeaseRenewUnansweredError`.** The session returns its quarantined report, and the CLI exits with
+  `QUARANTINED_EXIT_CODE` (3), as every latch does.
+  - The cause is carried by the latch reason and the `lease-renew-unanswered-stop` warning.
+  - `DegradedWindowNotStoredError` still throws from teardown, as `LostBatchNotStoredError` does.
+- **(N3) The heartbeat runs no SQL.** `record()` is the only caller of `recordMutant`, and it emits synchronously. It
+  keeps `lastRecordedRowId` and `lastScoredSeq` in the process, and the snapshot-recording site keeps the last snapshot
+  id. `pulse` copies them at tick start: no I/O, nothing that can throw. Zero when there are none.
+- **(N4) Snapshots: no suspect mark.** A read-time filter goes in `findBaselineSnapshot` and `snapshotBatchHash`: NOT
+  EXISTS a `degraded_windows` row of the snapshot's run with `id > after_snapshot_id`. This mirrors `lost_batches`,
+  survives a crash, and no owner can clear it.
+- **(N5) The elapsed time is measured on the monotonic clock** (`clock.mono` / monoNow, PR-252), never by subtracting
+  wall times.
+  - `#lastAnsweredAt` starts at `start()`.
+  - Tests step `clock.mono` through the existing seam.
+- **(N8) The stop rule is streak ≥ 2 AND ≥ 100 s since the last answered renew** (r2 said 120 s).
+  - The 2nd timeout warning comes about 125 s after the last answer, so 120 s left only 5-10 s of margin.
+  - S1 needs more than about 10 s.
+  - PR-427 then stops at the 2nd warning, ≈ 8.934 h.
+- **(N6) The recycle comes before every early return in `finish()`.** Those returns are the lost batch,
+  `lease-marker-read-failed`, a foreign marker and `#keepLease`.
+  - A test makes `getOperationStatus` throw at finish, and the recycle is still recorded.
+  - "No ForceResetLease" holds for the recycle detail only, unless `quarantineRecoverySteps` (cli.ts) is made
+    conditional. The build says which.
+- **(N7) A named limit:** a session that ends with a window open but no stop (streak 0 or 1 at the end, or the time
+  budget ran out) keeps those rows. That is no worse than today.
+- **(N9) Carried rows** (`carried = 1`) are excluded from `invalidateAfter` and from the read-time predicate. The fold
+  keeps them as `mutant-carried`, so the store and the report agree.
+- **(N10)** `QUARANTINE_INTERPRETATION` is chosen by whether the `degraded-window` event or the stop warning is present,
+  never by the reason text.
+- **(N11)** `noteRenewUnanswered` is idempotent: it emits once and writes the store once.
+- **(N12)** R1228's wording is corrected in the same commit.
 
 Evidence: `/coord/handoff/PR-454/timeline.md`. Codes, times and counts only.
 
