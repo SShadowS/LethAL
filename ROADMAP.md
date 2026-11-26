@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**71 of 1191 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**72 of 1192 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1236,6 +1236,7 @@ that ordering is the priority.
 - **R1222** · spec-after-retention.test.ts's heap tests (RUST-03 S4.2c) run close to the 5 s per-test timeout and time out in full VERIFY under ordinary load, with io pressure low enough that VERIFY keeps 5 s · [R1222.md](docs/roadmap/R1222.md) · done (1d361afc5)
 - **R1224** · R590's dependency-skip check awaits a setImmediate after every serve answer; in Bun 1.4.4 a pending setImmediate on a loop with no I/O due waits for the next unrelated timer (measured ~0.9 s per wait in a test rig), so the wait's cost depends on whatever else is scheduled · [R1224.md](docs/roadmap/R1224.md) · done (f28587645, PR-448)
 - **R1225** · selectLegs runs the four BC legs for al-runner-v3-only files (al-runner-server.ts, al-runner-v3-*.ts, the v3 itests), because the packages/runner/ row unions them in: 10 of the last 30 merges were v3-only by path alone (~3.7 lease-hours where logged) · [R1225.md](docs/roadmap/R1225.md) · closed 2026-11-25 — measured by PR-450: the premise fails for packages/runner/src…
+- **R1229** · --resume cannot carry decided verdicts across a BC restart that lost the database, even when the re-setup republished the same apps and the fresh baseline equals the stored one: three bc4 restarts on 2026-11-26 voided about 2,800 verdicts (R680's refusal) · [R1229.md](docs/roadmap/R1229.md) · open — design: PR-456 (no build)
 
 ---
 
