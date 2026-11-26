@@ -324,6 +324,39 @@ export function applyBatchInvalidations(
   }
 }
 
+interface DegradedWindow {
+  readonly afterSeq: number;
+  readonly reason: string;
+}
+
+/**
+ * R1227: every outcome a `mutant-scored` event with a `seq` after the window's `afterSeq` made
+ * becomes an `error` carrying the window's reason, under the rule `applyBatchInvalidations` has: an
+ * error that already has a cause, and a known survivor, are kept. A kill scored before the window
+ * stays a kill. The FIRST window wins, like the store's.
+ */
+export function applyDegradedWindows(
+  outcomes: SessionOutcome[],
+  scoredSeq: WeakMap<SessionOutcome, number>,
+  windows: readonly DegradedWindow[],
+): void {
+  const [w] = windows;
+  if (w === undefined) return;
+  for (let i = 0; i < outcomes.length; i++) {
+    const o = outcomes[i];
+    if (o === undefined) continue;
+    const seq = scoredSeq.get(o);
+    if (seq === undefined || seq <= w.afterSeq) continue;
+    if (o.cause !== undefined || o.verdict === "known-survivor") continue;
+    outcomes[i] = {
+      mutant: o.mutant,
+      verdict: "error",
+      batchIndex: o.batchIndex,
+      failureNote: w.reason,
+    };
+  }
+}
+
 /**
  * R272: one record per qualified name (`Codeunit.method`, the shape `qualifiedTestName` and
  * `coveringTests` use), sorted by `compareCodeUnits`. Two `#if` arms can declare one name (R403):
@@ -522,6 +555,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const carriedFromRunIds: number[] = [];
   const outcomes: SessionOutcome[] = [];
   const invalidations: BatchInvalidation[] = [];
+  const degradedWindows: DegradedWindow[] = [];
+  const scoredSeq = new WeakMap<SessionOutcome, number>();
   let carriedCount = 0;
   let strandedSkipCount = 0;
 
@@ -768,6 +803,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           ...(e.cause !== undefined ? { cause: e.cause } : {}),
           ...(e.runner !== undefined ? { runner: e.runner } : {}),
         });
+        // R1227: which stream position scored it, for `degraded-window`.
+        for (const pushed of outcomes.slice(-1)) scoredSeq.set(pushed, e.seq);
         // R206: a warm kill is a kill whose position is KNOWN and greater than 1; a kill without a
         // position is never counted (it predates the field), so this cannot read a default.
         if (isKill(e.verdict) && e.killPosition !== undefined && e.killPosition > 1) warmKills += 1;
@@ -821,6 +858,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "batch-invalidated":
         invalidations.push({ batchIndex: e.batchIndex, reason: e.reason });
+        break;
+      case "degraded-window":
+        degradedWindows.push({ afterSeq: e.afterSeq, reason: e.reason });
         break;
       case "recheck-baseline-finished":
         // PR-144: the recheck's own baseline. Deliberately read into NOTHING: the session's baseline
@@ -958,6 +998,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   // See `applyBatchInvalidations`'s doc comment for the rule and why order-independence depends
   // on applying it in a second pass, after full accumulation.
   applyBatchInvalidations(outcomes, invalidations);
+  applyDegradedWindows(outcomes, scoredSeq, degradedWindows);
 
   // The final sort — `orchestrator.ts` used to sort its in-memory `outcomes[]` before handing it to
   // `buildReport`; that array is gone, so this is where determinism now lives. Events arrive in
