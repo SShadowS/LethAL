@@ -1548,6 +1548,62 @@ describe("runSession --resume (R47)", () => {
     expect(rescored.every((m) => m.killReproduced === true)).toBe(true);
   });
 
+  test("R1227: a resume warns how many mutants the prior run's degraded window drops, and re-runs them", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new CountingBackend("pass", 1),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(first.quarantined).toBeDefined();
+    const firstId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const rows = (
+      store.db.query("SELECT COUNT(*) AS n FROM mutants WHERE run_id = ?").get(firstId) as {
+        n: number;
+      }
+    ).n;
+    expect(rows).toBeGreaterThan(1); // one scored, one stranded
+    store.markDegradedWindow(firstId, 0, 0, "lease-renew-unanswered: test window");
+    const events: RunEvent[] = [];
+    const again = new CountingBackend("pass", undefined, undefined, true);
+    const report = await runSession({
+      backend: again,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: firstId,
+      emit: [(e) => events.push(e)],
+    });
+    const said = events.flatMap((e) =>
+      e.type === "warning" && e.code === "resume-degraded-window" ? [e.message] : [],
+    );
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain(`${rows} mutant(s)`);
+    expect(report.resumedFrom?.carriedMutants).toBe(0);
+    expect(report.resumedFrom?.skippedStranded).toBe(0); // the stranded row in the window is re-run
+    expect(again.mutantRuns).toBeGreaterThan(0);
+  });
+
+  test("R1227: a resume of a run with no window says nothing about one", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new CountingBackend("pass", 1), store, ...dirs, selectorIds });
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    expect(events.some((e) => e.type === "warning" && e.code === "resume-degraded-window")).toBe(
+      false,
+    );
+  });
+
   test("recovers the verdicts an aborted run had already scored, and re-runs only the rest", async () => {
     // The R47 scenario end to end: a run quarantines partway, and the mutants it had already
     // scored are recovered instead of discarded.

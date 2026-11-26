@@ -293,7 +293,7 @@ import {
 import { QuarantineStore } from "./quarantine-store";
 import { ReachTrace, ReachTraceError, reachSiteKey } from "./reach-trace";
 import type { ReachNullCause } from "./reach-trace";
-import { buildReport, withheldKillOf } from "./report";
+import { RENEW_UNANSWERED_REASON_PREFIX, buildReport, withheldKillOf } from "./report";
 import type {
   Caveat,
   DeclarativeSiteFile,
@@ -3834,7 +3834,7 @@ function noteLeaseLostOrThrow(leaseSession: LeaseSession | undefined, detail: st
   leaseSession.noteLeaseLost(detail);
 }
 
-interface LeaseSessionDeps {
+export interface LeaseSessionDeps {
   readonly client: LeaseApi;
   readonly lease: Lease;
   readonly safety: SessionSafety;
@@ -3852,7 +3852,36 @@ interface LeaseSessionDeps {
    * or SIGTERM only spends the time budget, R955) does not leave that batch carryable. Must not throw.
    */
   readonly onLost: (batchIndex: number) => void;
+  /**
+   * R1227: where the run stands, read before each renew: its highest mutant row id and baseline
+   * snapshot id, and the `seq` of the last `mutant-scored` event. Must not throw.
+   */
+  readonly windowMark: () => DegradedWindowMark;
+  /**
+   * R1227: called once, at the stop, with the window. Writes it to the store at once, like `onLost`;
+   * the session's teardown writes again (`invalidateDegradedWindow`). Must not throw.
+   */
+  readonly onDegraded: (window: DegradedWindowStart, note: string) => void;
 }
+
+/** R1227: where the run stood when a renew began. */
+export interface DegradedWindowMark {
+  readonly mutantId: number;
+  readonly snapshotId: number;
+  readonly scoredSeq: number;
+}
+
+/** R1227: the window a renew stop opened: rows with an id after `afterMutantId` are suspect. */
+export interface DegradedWindowStart {
+  readonly afterMutantId: number;
+  readonly afterSnapshotId: number;
+  readonly afterSeq: number;
+}
+
+/** R1227: this many `lease-renew-unanswered` warnings in a row, AND ... */
+export const RENEW_UNANSWERED_STOP = 2;
+/** ... this long (ms) since the last ANSWERED renew, stops the session. Fast failures alone never do. */
+export const RENEW_UNANSWERED_STOP_MS = 100_000;
 
 /**
  * The lease a session holds, plus everything the session does WITH it: the renew heartbeat, the
@@ -3862,9 +3891,18 @@ interface LeaseSessionDeps {
  * invalidation to the batch that was in flight when the lease was lost: earlier batches stand,
  * since every `RunMutant` in them was individually phase-1/phase-3 fence-validated.
  */
-class LeaseSession {
+export class LeaseSession {
   #handle: unknown;
   #ticking = false;
+  /** R1227: when the last renew was ANSWERED (either outcome), in ms; the acquire counts as one. */
+  #lastAnsweredAt: number;
+  /** R1227: `lease-renew-unanswered` warnings since the last answered renew (a blip adds none). */
+  #unansweredStreak = 0;
+  /** R1227: where the run stood when the first failed tick since the last answered renew began. */
+  #windowMark: DegradedWindowMark | undefined;
+  /** R1227: set once, when the stop fires. */
+  #renewStop: { readonly streak: number; readonly seconds: number } | undefined;
+  #degraded: (DegradedWindowStart & { readonly note: string }) | undefined;
   /** R852: the last tick got no answer, so one more makes it `lease-renew-unanswered`. */
   #lastTickUnanswered = false;
   /** R852: a tick came and went while this renew was still open, so it counts as a tick. */
@@ -3913,6 +3951,17 @@ class LeaseSession {
       recoverOp: (...a) => inner.recoverOp(...a).catch(note),
     };
     this.d = { ...d, client };
+    this.#lastAnsweredAt = monoNow();
+  }
+
+  /** R1227: the window the renew stop opened, for the teardown's second write. */
+  get degradedWindow(): (DegradedWindowStart & { readonly note: string }) | undefined {
+    return this.#degraded;
+  }
+
+  /** R1227: set once the session stopped for unanswered renews. */
+  get renewStopped(): boolean {
+    return this.#renewStop !== undefined;
   }
 
   /**
@@ -3950,6 +3999,7 @@ class LeaseSession {
 
   /** design §6 step 3: a single-flight renew at ttl/3. */
   start(): void {
+    this.#lastAnsweredAt = monoNow(); // R1227: the acquire was answered; the stop clock starts here
     const periodMs = Math.max(1, Math.floor((this.d.ttlSeconds * 1000) / 3));
     this.#handle = this.d.timers.setInterval(() => this.pulse(), periodMs);
   }
@@ -3987,6 +4037,9 @@ class LeaseSession {
     this.#ticking = true;
     this.#tickDropped = false;
     try {
+      // R1227 (B1): read BEFORE the first renew, so rows recorded while a stalled renew waits fall
+      // inside the window it may open. Inside the try: a throw cannot leave `#ticking` set.
+      const mark = this.d.windowMark();
       let outcome: Awaited<ReturnType<LeaseApi["renew"]>>;
       try {
         outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
@@ -3996,25 +4049,70 @@ class LeaseSession {
         try {
           outcome = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
         } catch (second) {
+          const unanswered = this.#lastTickUnanswered || this.#tickDropped;
           this.d.emit({
             type: "warning",
-            code:
-              this.#lastTickUnanswered || this.#tickDropped
-                ? "lease-renew-unanswered"
-                : "lease-renew-blip",
+            code: unanswered ? "lease-renew-unanswered" : "lease-renew-blip",
             message: `[lethal] lease renew could not be answered twice in a row (${messageOf(first)}; ${messageOf(second)}) — not treated as lease loss (design §6: only renewed:false is loss); the next tick retries`,
           });
           this.#lastTickUnanswered = true;
+          this.#noteFailedTick(mark, unanswered);
           return;
         }
       }
       this.#lastTickUnanswered = false;
+      // R1227: any ANSWER (renewed or not) ends the streak and the window.
+      this.#lastAnsweredAt = monoNow();
+      this.#unansweredStreak = 0;
+      this.#windowMark = undefined;
       if (!outcome.renewed && !this.#stopped) {
         this.noteLeaseLost("RenewLease answered renewed:false — the lease is no longer ours");
       }
     } finally {
       this.#ticking = false;
     }
+  }
+
+  /**
+   * R1227: a tick got no answer. The first since the last answered renew opens the window (at the
+   * mark read before THIS tick's renew). The stop rule: `RENEW_UNANSWERED_STOP` warnings in a row AND
+   * `RENEW_UNANSWERED_STOP_MS` since the last answered renew. Like `noteRefusal` it latches and does
+   * NOT stop the heartbeat (the lease must not lapse under the operation in flight, and a lost lease
+   * still reaches `noteLeaseLost`); it is not a lease loss and writes no `lost_batches` row.
+   */
+  #noteFailedTick(mark: DegradedWindowMark, unanswered: boolean): void {
+    if (this.#stopped) return;
+    this.#windowMark ??= mark;
+    const window = this.#windowMark;
+    if (!unanswered) return;
+    this.#unansweredStreak += 1;
+    if (this.#renewStop !== undefined) return;
+    // The monotonic clock (PR-252), never a difference of two wall times; the ISO below is display.
+    const elapsedMs = monoNow() - this.#lastAnsweredAt;
+    if (this.#unansweredStreak < RENEW_UNANSWERED_STOP || elapsedMs < RENEW_UNANSWERED_STOP_MS) {
+      return;
+    }
+    const seconds = Math.round(elapsedMs / 1000);
+    const streak = this.#unansweredStreak;
+    this.#renewStop = { streak, seconds };
+    const since = new Date(Date.now() - elapsedMs).toISOString();
+    this.d.safety.latchUnsafe(
+      `${RENEW_UNANSWERED_REASON_PREFIX} ${streak} in a row, no answer for ${seconds} s since ${since}`,
+    );
+    const start: DegradedWindowStart = {
+      afterMutantId: window.mutantId,
+      afterSnapshotId: window.snapshotId,
+      afterSeq: window.scoredSeq,
+    };
+    const note = degradedWindowNote(streak, seconds, since);
+    this.#degraded = { ...start, note };
+    this.d.onDegraded(start, note);
+    this.d.emit({ type: "degraded-window", afterSeq: start.afterSeq, reason: note });
+    this.d.emit({
+      type: "warning",
+      code: "lease-renew-unanswered-stop",
+      message: `[lethal] the control app stopped answering lease renews: ${streak} in a row, no answer for ${seconds} s since ${since}. The session stops scoring. Mutant rows recorded after row ${start.afterMutantId} (after event ${start.afterSeq}) were measured while the tier was degraded: they are dropped from the report and from --resume. Restart the service tier (R1227).`,
+    });
   }
 
   /**
@@ -4463,6 +4561,29 @@ class LeaseSession {
    */
   async finish(): Promise<void> {
     this.stop();
+    try {
+      await this.#finishBody();
+    } finally {
+      // R1227 (S5, N6): in a `finally`, so it covers every early return and a throw. The first record on
+      // a tier stands, so a stranded-marker recycle the body wrote (which names ForceResetLease) wins.
+      // A restart is what clears a tier whose renews stopped being answered, so it is unconditional.
+      if (this.#renewStop !== undefined) {
+        try {
+          await this.recordRecycle(
+            `the control app stopped answering lease renews (${this.#renewStop.streak} in a row, ${this.#renewStop.seconds} s); restart the service tier`,
+          );
+        } catch (err) {
+          this.d.emit({
+            type: "warning",
+            code: "lease-renew-recycle-not-recorded",
+            message: `[lethal] could not record the container recycle after the renew stop (${messageOf(err)}); restart the service tier anyway`,
+          });
+        }
+      }
+    }
+  }
+
+  async #finishBody(): Promise<void> {
     if (this.#lostBatchIndex !== undefined) return;
     let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
     try {
@@ -5244,6 +5365,15 @@ function resolveResume(
         : ""
     }`,
   });
+  // R1227: the prior run's tier stopped answering lease renews part way; rows from then on read as
+  // `error` and are re-run. Said apart, because the count overlaps the 'error' count above.
+  if (index.degradedWindowRows > 0) {
+    emit({
+      type: "warning",
+      code: "resume-degraded-window",
+      message: `[lethal] --resume: run ${priorRunId}'s BC tier stopped answering lease renews part way (R1227). ${index.degradedWindowRows} mutant(s) it recorded from then on are dropped and will be re-executed; they are part of the 'error' verdict count above, not extra. A mutant stranded in that window is re-run once too, not skipped.`,
+    });
+  }
   // resume-resolved: emitted before any mutant event (this function runs before the batch loop
   // starts). `carryable`/`strandedKeys` are the LEARNED half of `--resume` — see events.ts's doc
   // comment. Final `carriedMutants`/`skippedStranded` deliberately do NOT ride here; the fold
@@ -5654,6 +5784,8 @@ async function openLeaseScope(a: {
   resourceKey: string | undefined;
   nowIso: () => string;
   emit: RunEmitter;
+  /** R1227: the `seq` of the last `mutant-scored` event emitted so far (0 before any). */
+  scoredSeq: () => number;
 }): Promise<{
   leaseSession: LeaseSession | undefined;
   resyncOpSeq: (() => Promise<void>) | undefined;
@@ -5705,6 +5837,19 @@ async function openLeaseScope(a: {
             type: "warning",
             code: "lease-loss-store-not-corrected",
             message: `[lethal] could not correct run ${a.runId} batch ${batchIndex} at the lease loss (${messageOf(err)}); the session's teardown tries again`,
+          });
+        }
+      },
+      // R1227: the same shape as `onLost`: synchronous, never throws, the teardown writes again.
+      windowMark: () => ({ ...a.store.windowMark(a.runId), scoredSeq: a.scoredSeq() }),
+      onDegraded: (w, note) => {
+        try {
+          a.store.markDegradedWindow(a.runId, w.afterMutantId, w.afterSnapshotId, note);
+        } catch (err) {
+          a.emit({
+            type: "warning",
+            code: "degraded-window-store-not-corrected",
+            message: `[lethal] could not drop run ${a.runId}'s verdicts after mutant row ${w.afterMutantId} at the renew stop (${messageOf(err)}); the session's teardown tries again`,
           });
         }
       },
@@ -5803,6 +5948,64 @@ function surfaceLateRefusal(
   });
 }
 
+/** R1227: the note a degraded window's verdicts carry, in the report and in the store. */
+function degradedWindowNote(streak: number, seconds: number, since: string): string {
+  return `${RENEW_UNANSWERED_REASON_PREFIX} the BC tier stopped answering lease renews (${streak} in a row, no answer for ${seconds} s since ${since}); this verdict was recorded after the window began and is dropped (R1227) — re-run it with --resume once the service tier is restarted`;
+}
+
+/**
+ * R1227: the run's degraded window could not be written to the store, so its rows may still be
+ * carried by `--resume`. Conservative, like `LostBatchNotStoredError`.
+ */
+export class DegradedWindowNotStoredError extends Error {
+  constructor(
+    readonly runId: number,
+    cause: unknown,
+  ) {
+    super(
+      `run ${runId}: the BC tier stopped answering lease renews, and the stored verdicts from that window were NOT dropped (${messageOf(cause)}); do not --resume run ${runId}`,
+      { cause },
+    );
+    this.name = "DegradedWindowNotStoredError";
+  }
+}
+
+/**
+ * R1227: the session's teardown writes the degraded window again (the second chance after
+ * `onDegraded`), which rewrites a row recorded after the stop by the operation still in flight. A
+ * failed write throws `DegradedWindowNotStoredError`; the errors it would replace are warned first.
+ */
+export function invalidateDegradedWindow(
+  store: ResultsStore,
+  runId: number,
+  leaseSession: LeaseSession | undefined,
+  emit: RunEmitter,
+  late: Error | undefined,
+  earlier: { readonly error: unknown } | undefined,
+): void {
+  const w = leaseSession?.degradedWindow;
+  if (w === undefined) return;
+  try {
+    store.markDegradedWindow(runId, w.afterMutantId, w.afterSnapshotId, w.note);
+  } catch (err) {
+    if (earlier !== undefined) {
+      emit({
+        type: "warning",
+        code: "degraded-window-error-replaced",
+        message: `[lethal] ${messageOf(earlier.error)}`,
+      });
+    }
+    if (late !== undefined) {
+      emit({
+        type: "warning",
+        code: "degraded-window-error-replaced",
+        message: `[lethal] ${late.message}`,
+      });
+    }
+    throw new DegradedWindowNotStoredError(runId, err);
+  }
+}
+
 /** The note a lease-lost batch's verdicts carry, in the report and in the store. */
 function lostBatchNote(safety: SessionSafety): string {
   return `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
@@ -5832,6 +6035,39 @@ export class LostBatchNotStoredError extends Error {
     );
     this.name = "LostBatchNotStoredError";
   }
+}
+
+/**
+ * The teardown's store corrections: the lost batch (R508), then the degraded window (R1227). Both
+ * always run. When both fail, the lost-batch error is thrown and the window's is warned
+ * (`degraded-window-error-replaced`), never silently dropped.
+ */
+export function correctStoreAtEnd(
+  store: ResultsStore,
+  runId: number,
+  leaseSession: LeaseSession | undefined,
+  safety: SessionSafety,
+  emit: RunEmitter,
+  late: Error | undefined,
+  earlier: { readonly error: unknown } | undefined,
+): void {
+  let lostFailure: { readonly error: unknown } | undefined;
+  try {
+    invalidateLostBatch(store, runId, leaseSession, safety, emit, late, earlier);
+  } catch (err) {
+    lostFailure = { error: err };
+  }
+  try {
+    invalidateDegradedWindow(store, runId, leaseSession, emit, late, earlier);
+  } catch (err) {
+    if (lostFailure === undefined) throw err;
+    emit({
+      type: "warning",
+      code: "degraded-window-error-replaced",
+      message: `[lethal] ${messageOf(err)}`,
+    });
+  }
+  if (lostFailure !== undefined) throw lostFailure.error;
 }
 
 /**
@@ -7032,8 +7268,13 @@ async function runSessionBody(
   const churn = new DaemonChurnGuard();
   const suspendWatch = createSuspendWatch();
   const onChurn: { stop?: (s: DaemonChurnStop) => void } = {};
+  // R1227: the `seq` of the last `mutant-scored` event, where a degraded window starts in the stream.
+  let lastScoredSeq = 0;
   const emit: RunEmitter = createEmitter([
     (e) => collectedEvents.push(e),
+    (e) => {
+      if (e.type === "mutant-scored") lastScoredSeq = e.seq;
+    },
     // PR-298: one trace row per scored mutant: the loop's full row, or a bare one for a mutant that
     // never reached the loop (no coverage, an error row). Not a mutant a probe scored: its events
     // are never emitted here.
@@ -8268,6 +8509,7 @@ async function runSessionBody(
     resourceKey,
     nowIso,
     emit,
+    scoredSeq: () => lastScoredSeq,
   }));
   if (leaseSession !== undefined) {
     const ending = leaseSession;
@@ -10016,7 +10258,7 @@ async function runSessionBody(
       // R508: in the store too, and in a `finally` so it runs even when the session is failing or
       // the teardown throws. After `closeLeaseScope` so the teardown and the lease release always
       // run, even if this write throws.
-      invalidateLostBatch(cfg.store, runId, leaseSession, safety, emit, late, failure);
+      correctStoreAtEnd(cfg.store, runId, leaseSession, safety, emit, late, failure);
     }
     surfaceLateRefusal(late, failing, safety, emit);
   }
@@ -10592,8 +10834,10 @@ async function runNamedMutantsBody(
   const invalidations: Array<{ batchIndex: number; reason: string }> = [];
   // PR-252: suspend detection is deliberately not wired on this attach path (a few named mutants;
   // durations are monotonic anyway).
+  let lastScoredSeq = 0; // R1227: the same subscriber as `runSession`'s
   const emit: RunEmitter = createEmitter([
     (e) => {
+      if (e.type === "mutant-scored") lastScoredSeq = e.seq;
       if (e.type === "batch-invalidated") {
         invalidations.push({ batchIndex: e.batchIndex, reason: e.reason });
       }
@@ -10635,6 +10879,7 @@ async function runNamedMutantsBody(
     resourceKey,
     nowIso,
     emit,
+    scoredSeq: () => lastScoredSeq,
   });
   if (leaseSession !== undefined) {
     const ending = leaseSession;
@@ -10778,7 +11023,7 @@ async function runNamedMutantsBody(
       late = await closeLeaseScope({ backend, safety, leaseSession, emit });
     } finally {
       // R508: the lost batch's event and store correction, as in `runSession`'s `finally`.
-      invalidateLostBatch(store, runId, leaseSession, safety, emit, late, failure);
+      correctStoreAtEnd(store, runId, leaseSession, safety, emit, late, failure);
     }
     surfaceLateRefusal(late, failing, safety, emit);
   }

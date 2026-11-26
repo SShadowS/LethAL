@@ -21,11 +21,13 @@ import {
   NOT_RUN_NOT_RECORDED_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   REACH_INTERPRETATIONS,
+  RENEW_UNANSWERED_INTERPRETATION,
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
   guardEvidenceOf,
   markIdentityOf,
   markTupleOfRow,
+  quarantineInterpretationFor,
   survivorReachOf,
 } from "./report";
 import type {
@@ -353,6 +355,7 @@ export const ADMISSIBLE_INTERPRETATIONS: readonly Interpretation[] = [
   ...Object.values(ERROR_CAUSE_INTERPRETATIONS),
   COVERAGE_NOT_MEASURED_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
+  RENEW_UNANSWERED_INTERPRETATION,
   STRANDED_SKIP_INTERPRETATION,
   NOT_RUN_NOT_RECORDED_INTERPRETATION,
   MARK_KEYS_STALE_INTERPRETATION,
@@ -1805,7 +1808,7 @@ function toolConditionsOf(report: SessionReport): ExplainToolCondition[] {
       condition: "quarantined",
       count: 0,
       ...(quarantined.reason !== "" ? { detail: quarantined.reason } : {}),
-      interpretation: QUARANTINE_INTERPRETATION,
+      interpretation: quarantineInterpretationFor(quarantined.reason),
     });
   }
   // Non-zero only. A zero here is an honest "the resume skipped nothing", and emitting a condition

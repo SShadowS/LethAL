@@ -1346,3 +1346,62 @@ describe("PR-36 (R1048, #8160): the restrictive-default label, never a verdict c
     expect(lines[0]).toContain("1 kill(s) and 1 survivor(s) rest on them");
   });
 });
+
+describe("foldEvents — degraded-window (R1227)", () => {
+  const scored = (id: string, verdict: "killed" | "survived") =>
+    ({
+      type: "mutant-scored",
+      mutant: mutant(id),
+      verdict,
+      batchIndex: 0,
+      durationMs: 5,
+      coveringTests: [],
+    }) as const;
+  const head: RunEventInput[] = [
+    {
+      type: "mutation-set-generated",
+      siteCount: 3,
+      deployedCount: 3,
+      hangCapableCount: 0,
+      totalFiles: 1,
+      instrumentableFiles: 1,
+      notInstrumentedFiles: [],
+      declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
+      excludedByOnly: 0,
+      excludedByExclude: 0,
+      excludedByOperator: 0,
+    },
+    { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+  ];
+
+  test("turns every outcome scored after afterSeq into error and leaves a pre-window kill a kill", () => {
+    // seq: 1 set, 2 baseline, 3 M1 (before the window), 4 M2, 5 M3, 6 the window event
+    const events = seq([
+      ...head,
+      scored("M0001", "killed"),
+      scored("M0002", "killed"),
+      scored("M0003", "survived"),
+      { type: "degraded-window", afterSeq: 3, reason: "lease-renew-unanswered: window note" },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    const folded = foldEvents(STATICS, events);
+    const by = (id: string) => folded.outcomes.find((o) => o.mutant.mutantId === id);
+    expect(by("M0001")?.verdict).toBe("killed");
+    for (const id of ["M0002", "M0003"]) {
+      expect(by(id)?.verdict).toBe("error");
+      expect(by(id)?.failureNote).toBe("lease-renew-unanswered: window note");
+    }
+  });
+
+  test("no window event: nothing is rewritten", () => {
+    const events = seq([
+      ...head,
+      scored("M0001", "killed"),
+      scored("M0002", "survived"),
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    const folded = foldEvents(STATICS, events);
+    expect(folded.outcomes.map((o) => o.verdict).sort()).toEqual(["killed", "survived"]);
+  });
+});

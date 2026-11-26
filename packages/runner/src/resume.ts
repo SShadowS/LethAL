@@ -166,6 +166,12 @@ export interface ResumeIndex {
    */
   readonly strandedKeys: ReadonlySet<string>;
   /**
+   * R1227: prior rows recorded inside the run's degraded window (the tier had stopped answering lease
+   * renews) that this session will re-run: they read as `error`. Counted in `nonCarryableRows` too,
+   * and said so in the warning. A stranded row among them is re-run once, not skipped.
+   */
+  readonly degradedWindowRows: number;
+  /**
    * R307 section 3 (fail closed): loose tuples of files this run refused under the header rule. A
    * mutant matching one is not carried (`isCarryDisabled`), but a stranded skip still holds. Set by
    * `runSession` after generation; absent means nothing is disabled.
@@ -256,12 +262,22 @@ export function buildResumeIndex(
   let ambiguousKeys = 0;
   let nonCarryableRows = 0;
   let unreproducedKills = 0;
+  let degradedWindowRows = 0;
   for (const [key, bucket] of seen) {
     // R53: checked BEFORE the ambiguity and carryability rules, and across every row in the bucket.
     // A stranding mutant must be recognised even when its identity key collides with a sibling,
     // because the consequence of missing it is not a lost verdict — it is a resume that hangs on
     // the same mutant forever and can never reach the ones behind it.
-    if (bucket.some((r) => isStrandedNote(r.failureNote))) strandedKeys.add(key);
+    // R1227: a stranded note inside the degraded window was written by a tier that had stopped
+    // answering, so it proves nothing about the mutant: it is re-run once, not skipped. Only a
+    // MEASURED strand: a row that is itself a resume's skip (STRANDED_SKIP_NOTE) carries an earlier
+    // run's measured strand, so it stays a stranded key inside the window too.
+    const inWindowRerun = (r: MutantVerdictRow) =>
+      r.inDegradedWindow === true && r.failureNote !== STRANDED_SKIP_NOTE;
+    if (bucket.some((r) => !inWindowRerun(r) && isStrandedNote(r.failureNote))) {
+      strandedKeys.add(key);
+    }
+    degradedWindowRows += bucket.filter((r) => inWindowRerun(r) && r.verdict === "error").length;
     if (bucket.length > 1) {
       ambiguousKeys += 1;
       continue;
@@ -291,6 +307,7 @@ export function buildResumeIndex(
     nonCarryableRows,
     unreproducedKills,
     strandedKeys,
+    degradedWindowRows,
   };
 }
 

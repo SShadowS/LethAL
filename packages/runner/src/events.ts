@@ -339,6 +339,16 @@ export type RunEventInput =
   | { readonly type: "batch-invalidated"; readonly batchIndex: number; readonly reason: string }
   | {
       /**
+       * R1227: the BC tier stopped answering lease renews. Every `mutant-scored` event with a `seq`
+       * greater than `afterSeq` (the last one seen when the first failed renew began) is read as an
+       * `error` carrying `reason`, in the fold's second pass, as `batch-invalidated` is.
+       */
+      readonly type: "degraded-window";
+      readonly afterSeq: number;
+      readonly reason: string;
+    }
+  | {
+      /**
        * The moment of observation is the batch's baseline RETURNING, not each test inside it: the
        * silence is inside the backend call, so per-test events would buy no liveness. Carries
        * per-test rows, not aggregates — `baselineGreen` and the pass/fail counts are folded from
