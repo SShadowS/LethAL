@@ -307,3 +307,30 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
 - **Amendment 5's flag-on gates are judged by this rule.** Prediction 4 reads "the stop forced ON (the print) AND, per leg
   with a multi-test entry and a kill, `skipped > 0`".
 
+## Amendment 8 (2026-11-26, coord PR-459, lethal-preproc): a speed A/B with concurrent arms on disjoint cores, pre-committed
+- **Why:** PR-452's sequential series was confounded. Both B arms ran at about twice the box load of the A arms. Here A and B
+  run AT THE SAME TIME on disjoint, equal core sets, then swap sets, so both arms of a pair see the same outside load and
+  each set is used once by each kind.
+- **The runs:**
+  - two pairs, from ONE master commit (a clean scratch worktree; its sha is recorded);
+  - `current` (edge-e5176a9fd), c5's settings (`isolation: test`), PR-452's three `--only` files (1121 mutants);
+  - **pair 1:** A on CPUs 0-5, B on CPUs 6-11, started together;
+  - **pair 2:** A on CPUs 6-11, B on CPUs 0-5, started together;
+  - each arm `--workers 3` (6 cores each), a fresh store, and its OWN copy of the warm al-runner cache (no shared cache
+    writes);
+  - A: stopGroups unset (off); B: `alRunnerV3.stopGroups: true`;
+  - each pair under ONE heavy-slot admission (`--peak 24`: two arms that peaked at about 10 GiB each at 5 workers);
+  - each arm's own LethAL pid; a watchdog TERMs only that pid.
+- **Correctness (any difference is a BLOCK on the flag):**
+  - verdicts equal across all four arms;
+  - killingTest: A = A and B = B across the pairs;
+  - each A-B move is checked by amendment 7 with the arm's own build. A form-(a) move counts only once `current`'s gate
+    record reads `stop-groups-earlier-killer: matches` (the re-gate after PR-452 lands);
+  - the stop fired in each B (`skipped > 0`, `reruns > 0`) and is absent from each A.
+- **The speed read, per pair:** B/A = B's mutants phase divided by A's, the two arms of the same pair only.
+- **The claim rule (pre-committed):**
+  - **"stop groups make the run faster"** only when B/A < 0.90 in BOTH pairs;
+  - **"stop groups make the run slower"** only when B/A > 1.10 in BOTH pairs;
+  - **otherwise "no speed effect shown"** (inconclusive).
+  - Load is recorded per arm, but the pairing is the control. No pair is re-run toward the bar.
+
