@@ -74,6 +74,101 @@ export function listPackageEntries(buf: Buffer): readonly string[] {
 }
 
 /**
+ * PR-457 (R1230): walks the central directory ONCE and yields each entry with its uncompressed
+ * bytes, inflating one entry at a time (the caller drops each after hashing). The generator's
+ * return value is `headerEnd`: the offset of the first local header, so `buf.subarray(0, headerEnd)`
+ * is the header before the zip. Throws (never a partial walk) on a duplicate name, the encryption
+ * flag, a method other than stored (0) or deflate (8), an inflate error, a length that differs
+ * from the central directory's, or an EOCD entry count that differs from the entries walked.
+ * Any reader error (RangeError, zlib) escapes as a throw too; the caller names the package.
+ */
+export function* packageEntries(buf: Buffer): Generator<
+  {
+    name: string;
+    nameBytes: Buffer;
+    flags: number;
+    method: number;
+    uncompressedSize: number;
+    localOffset: number;
+    data: Buffer;
+  },
+  { headerEnd: number }
+> {
+  const eocdPos = findEndOfCentralDirectory(buf);
+  const centralDirSize = buf.readUInt32LE(eocdPos + 12);
+  const centralDirOffsetRaw = buf.readUInt32LE(eocdPos + 16);
+  const baseOffset = eocdPos - centralDirSize - centralDirOffsetRaw;
+  const declared = buf.readUInt16LE(eocdPos + 10);
+  const names = new Set<string>();
+  let firstLocal = Number.POSITIVE_INFINITY;
+  let count = 0;
+
+  let pos = baseOffset + centralDirOffsetRaw;
+  const centralDirEnd = pos + centralDirSize;
+  while (pos < centralDirEnd) {
+    if (buf.readUInt32LE(pos) !== CENTRAL_DIR_SIGNATURE) {
+      throw new Error(`corrupt zip central directory at offset ${pos}`);
+    }
+    const flags = buf.readUInt16LE(pos + 8);
+    const method = buf.readUInt16LE(pos + 10);
+    const compressedSize = buf.readUInt32LE(pos + 20);
+    const size = buf.readUInt32LE(pos + 24);
+    const nameLen = buf.readUInt16LE(pos + 28);
+    const extraLen = buf.readUInt16LE(pos + 30);
+    const commentLen = buf.readUInt16LE(pos + 32);
+    const localPos = baseOffset + buf.readUInt32LE(pos + 42);
+    const nameBytes = buf.subarray(
+      pos + CENTRAL_DIR_FIXED_SIZE,
+      pos + CENTRAL_DIR_FIXED_SIZE + nameLen,
+    );
+    const name = nameBytes.toString("utf8");
+    pos += CENTRAL_DIR_FIXED_SIZE + nameLen + extraLen + commentLen;
+
+    if (names.has(name)) throw new Error(`duplicate zip entry name ${name}`);
+    names.add(name);
+    firstLocal = Math.min(firstLocal, localPos);
+    if ((flags & 1) !== 0) throw new Error(`zip entry ${name} is encrypted`);
+    if (method !== 0 && method !== 8) {
+      throw new Error(`unsupported zip compression method ${method} for ${name}`);
+    }
+    if (buf.readUInt32LE(localPos) !== LOCAL_HEADER_SIGNATURE) {
+      throw new Error(`corrupt zip local file header for ${name}`);
+    }
+    const dataStart =
+      localPos +
+      LOCAL_HEADER_FIXED_SIZE +
+      buf.readUInt16LE(localPos + 26) +
+      buf.readUInt16LE(localPos + 28);
+    const raw = buf.subarray(dataStart, dataStart + compressedSize);
+    let data: Buffer;
+    try {
+      data = method === 0 ? raw : inflateRawSync(raw, { maxOutputLength: size + 1 });
+    } catch (err) {
+      throw new Error(`zip entry ${name} cannot be inflated: ${(err as Error).message}`);
+    }
+    if (data.length !== size) {
+      throw new Error(
+        `zip entry ${name} is ${data.length} bytes, the central directory says ${size}`,
+      );
+    }
+    count++;
+    yield {
+      name,
+      nameBytes,
+      flags,
+      method,
+      uncompressedSize: size,
+      localOffset: localPos,
+      data,
+    };
+  }
+  if (count !== declared) {
+    throw new Error(`zip lists ${declared} entries in its end record but holds ${count}`);
+  }
+  return { headerEnd: Number.isFinite(firstLocal) ? firstLocal : 0 };
+}
+
+/**
  * Parses the bytes of a package's `SymbolReference.json`. AL writes a UTF-8 BOM, which is stripped.
  * R932: a Windows BC server rebuilds the package it serves and pads this entry with trailing NUL
  * bytes; those are stripped too, but a NUL anywhere else stays a parse error. Throws on bad JSON.

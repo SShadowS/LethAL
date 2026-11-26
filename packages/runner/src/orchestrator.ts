@@ -9137,7 +9137,7 @@ async function runSessionBody(
                 old.proven,
               )}, with dependencies ${old.deps ?? "not recorded"}, and this session's test app is ${describeTestApp(historyTestApp?.hash)}${
                 historyTestApp === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency. No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
+              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency, or LethAL changing how it fingerprints System (R1230; a store recorded before it refuses once, so start a fresh run). No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
             });
           },
           carryUntrusted: (old) => {
