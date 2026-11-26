@@ -3326,6 +3326,29 @@ describe("T24 (I1) and I3: the notes", () => {
     expect(note).not.toContain("not run");
   });
 
+  // PR-452 (PR-256 amendment 6, bugs' condition 1; amendment 7 form (a)): flag off, the cascade killer F after an
+  // earlier covering test P that FAILED in the same codeunit run carries the note naming P with outcome fail.
+  // Red: in stateNote, print anything but `r.status` for a plain row (e.g. "ran"), or skip stateNote on a fail verdict.
+  test("PR-452: flag off, F after an earlier FAILED covering P carries [v3-codeunit-state-possible] naming P (fail)", async () => {
+    const l = await layout();
+    const rows = () => [
+      { method: "P", status: "fail" as const, message: "P's own assertion" },
+      { method: "F", status: "fail" as const, message: "The TestPage is already open." },
+    ];
+    const b = backendOf(l, fakeV3(rows, { coverage: plainCoverage }).spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    b.useCoveringBudgets("M0001", [
+      { ref: ref("P"), budgetMs: 1000 },
+      { ref: ref("F"), budgetMs: 1000 },
+    ]);
+    const v = await b.run(ref("F"), { coverage: "none", timeoutMs: 1000 });
+    expect(v.outcome).toBe("fail");
+    expect(v.backendNote).toBe(
+      `${V3_STATE_NOTE_TAG} F ran after covering test(s) P (fail) in the same v3 codeunit run (#5611), so their state may have reached it`,
+    );
+  });
+
   test("a first-row kill gets no note", async () => {
     const l = await layout();
     const rowsBA = () => [

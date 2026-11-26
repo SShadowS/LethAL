@@ -13,6 +13,7 @@ import {
   type EntryMode,
   type EntryRow,
   type EntryRun,
+  STOP_EARLIER_KILLER_FACT,
   V3_CAPABILITY_FACTS,
   V3_CARRY_FACT,
   V3_ENTRY_FACTS,
@@ -259,7 +260,13 @@ describe("PR-442: classifyLegC", () => {
       measured: "ok",
     })),
     ...V3_WARN_FACTS.map((fact) => ({ fact, verdict: "matches", measured: "ok" })),
-    ...[...V3_CAPABILITY_FACTS, V3_CARRY_FACT, "stop-groups", ...V3_ENTRY_FACTS].map((fact) => ({
+    ...[
+      ...V3_CAPABILITY_FACTS,
+      V3_CARRY_FACT,
+      "stop-groups",
+      STOP_EARLIER_KILLER_FACT, // PR-452
+      ...V3_ENTRY_FACTS,
+    ].map((fact) => ({
       fact,
       verdict: "matches",
       measured: "ok",
@@ -270,9 +277,9 @@ describe("PR-442: classifyLegC", () => {
   const run = (facts: ReturnType<typeof base>) =>
     classifyLegC(facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS);
 
-  test("the count is 52 and an all-matches reading passes with no line", () => {
-    expect(V3_LEG_C_FACTS).toBe(52);
-    expect(base().length).toBe(52);
+  test("the count is 53 (PR-452: + stop-groups-earlier-killer) and an all-matches reading passes with no line", () => {
+    expect(V3_LEG_C_FACTS).toBe(53);
+    expect(base().length).toBe(53);
     expect(run(base())).toEqual({ outcome: "pass", lines: [] });
   });
   test("a diverged carry never gate-fails and prints al-runner-v3-entry-carry", () => {
