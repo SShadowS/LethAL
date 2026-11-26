@@ -6,6 +6,27 @@ lethal-code, 2026-11-26.
   on.
 - **r3** answers the delta review (D1-D7). Its "r3 changes" section overrides any r2 text it contradicts.
 
+## Probe results so far (lethal-bugs, 2026-11-26, `/coord/handoff/PR-456/probes/result-2026-11-26.md`)
+
+- **(a) PASS on real data.** `test_app_hash` was `package:81bf16f5…` in all five PR-427 stores, across two bc4
+  restarts, with the same `.app` files republished each time.
+- **(b) FAIL.** `test_app_deps` differed after EVERY restart (63d9c6c0 → 549e8f02 → 0e18165d), with identical
+  dependency files.
+  - **The cause, read from the source.** `dependencyFingerprint` (`digest-inputs.ts`) hashes RAW served bytes for two
+    kinds of line: `P <sha256(System package bytes)>`, and `X <dep> <sha256(zip bytes)>` for every partner
+    dependency.
+  - Only the test app's hash normalises the served package (`hashPackage` zeroes the NAVX id). So a per-publish or
+    per-database stamp in a served package changes the digest although the content is the same.
+  - Only the final digest is stored, so which line moved is not known.
+  - **Consequence:** R496's check, as built, is NOT restart-stable, so it would refuse every carry. R1229 therefore
+    needs, as a PRECONDITION, a content-normalised dependency fingerprint, with `hashPackage`'s rule applied to the P
+    and X lines.
+  - Next measurement: download the System and partner packages twice across a restart and diff them. The diff names
+    the field that moves; normalise only that field, then re-run (b).
+  - Normalising more than the measured field would weaken R496 for every run. It is not done blind.
+- **(d) not yet measured.** No two stores share a batch hash with a stored baseline on both sides (email2 was paused
+  before its snapshot). It runs on the next restart.
+
 ## r3 changes (delta review)
 
 - **(D1, BLOCK) Item 5 is DELETED. Strand skipping stays exactly as it is today.**
