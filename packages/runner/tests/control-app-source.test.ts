@@ -566,3 +566,54 @@ describe("PR-309: the lease renew does not lock during a run", () => {
     }
   });
 });
+
+/**
+ * PR-462 (1.0.0.30, R1170): the Generation counter must never refresh the cache of a session inside
+ * its own op, nor after its phase 3. Inside an op the row's Generation never moves (every write is
+ * fenced), so no gate can see this gate missing: only these pins can (pre-commitment
+ * 2026-11-26-pr462-control-1030-generation.md).
+ */
+describe("the Generation refresh gate (PR-462)", () => {
+  const state = read("ControlState.Codeunit.al");
+
+  test("phase 1 (WriteActive) opens the op and clears the reset; ResetAttestationState does the reverse", () => {
+    const write = codeOnly(procedureBody(state, "WriteActive"));
+    expect(write).toContain("InOdataOp := true;");
+    expect(write).toContain("ResetSinceLoad := false;");
+    const reset = codeOnly(procedureBody(state, "ResetAttestationState"));
+    expect(reset).toContain("InOdataOp := false;");
+    expect(reset).toContain("ResetSinceLoad := true;");
+    // and nothing else assigns either flag
+    expect(codeOnly(state).match(/InOdataOp\s*:=/g)).toHaveLength(2);
+    expect(codeOnly(state).match(/ResetSinceLoad\s*:=/g)).toHaveLength(2);
+  });
+
+  test("RefreshIfMoved exits on either flag BEFORE it reads the row", () => {
+    const body = codeOnly(procedureBody(state, "RefreshIfMoved"));
+    const gate = body.indexOf("if InOdataOp or ResetSinceLoad then");
+    const firstGet = body.indexOf("Active.Get(");
+    expect(gate).toBeGreaterThan(-1);
+    expect(firstGet).toBeGreaterThan(gate);
+    expect(statementsAfter(body, "if InOdataOp or ResetSinceLoad then", 1)).toEqual(["exit;"]);
+  });
+
+  test("the guard and the reach marker go through RefreshIfMoved, never EnsureLoaded directly", () => {
+    for (const name of ["IsActive", "NoteReached"]) {
+      const body = codeOnly(procedureBody(state, name));
+      expect(body, name).toContain("RefreshIfMoved();");
+      expect(body, name).not.toContain("EnsureLoaded();");
+    }
+  });
+
+  test("every write of the tuple bumps Generation right before its Modify (exactly three writers)", () => {
+    const writers = ["WriteActive", "ClearActiveIf", "ForceClearActive"];
+    for (const name of writers) {
+      const body = procedureBody(state, name);
+      expect(statementsBefore(body, "Active.Modify();", 1), name).toEqual([
+        "Active.Generation += 1;",
+      ]);
+    }
+    expect(codeOnly(state).match(/Active\.Modify\(\);/g)).toHaveLength(writers.length);
+    expect(codeOnly(state).match(/Active\.Generation \+= 1;/g)).toHaveLength(writers.length);
+  });
+});

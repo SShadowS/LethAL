@@ -30,8 +30,8 @@
  * and a dependent was added to the plan and cycled); (3) the refusal before publishing is the
  * decision table (it was a version check over a removal plan).
  *
- * `control` publishes the pinned LethAL Control build (`CONTROL_APP`, checked against
- * `CONTROL_SHA256` in bc-linux-setup.ts) over the dev endpoint as an UPGRADE: it never removes
+ * `control` publishes the server's pinned LethAL Control build (`controlFor(server)` in
+ * bc-linux-setup.ts, sha256-checked; PR-462) over the dev endpoint as an UPGRADE: it never removes
  * anything, so the control app is never absent. It refuses when the server holds a higher version,
  * or the same version with other contents, and reads back version and sha256 after publishing.
  *
@@ -70,8 +70,6 @@ import {
   refuseDependent,
 } from "./bc-app-content.ts";
 import {
-  CONTROL_APP,
-  CONTROL_SHA256,
   type Conn,
   type LeaseDeps,
   PUBLISH_PLAN,
@@ -79,6 +77,7 @@ import {
   alcCompile,
   compileResidentSource,
   compiledLine,
+  controlBytesFor,
   downloadSymbols,
   errText,
   kraken,
@@ -464,10 +463,9 @@ async function republish(args: Args): Promise<void> {
 }
 
 async function control(args: Args): Promise<void> {
-  const bytes = readFileSync(CONTROL_APP);
+  // PR-462: this server's pin (bc4 keeps 1.0.0.29), sha256-checked; a mismatch is refused.
+  const bytes = controlBytesFor(args.server);
   const sha = sha256Of(bytes);
-  if (sha !== CONTROL_SHA256)
-    throw new Error(`${CONTROL_APP}: sha256 ${sha}, not the pinned ${CONTROL_SHA256}; refused`);
   const local = readAppIdentity(bytes);
   const c = connFor(args.server);
   await withLease(args.server, leaseFor(args.lane, args.tokenDir, "control"), async () => {
