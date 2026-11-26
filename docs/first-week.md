@@ -216,8 +216,8 @@ These come from a real pilot on a large app. None is hard, all of them cost time
   Either pass `--allow-large-run` (it does not make the run cheaper), or narrow with `--lines`
   or `--changed-since`. Always read `--dry-run` first.
 - **On bcdev, one method of more than 4,800 guards is refused** (R826, measured on BC 28.4), and
-  `--allow-large-run` does not lift it. `--dry-run` names the file and method; narrow with `--lines`,
-  `--only` or fewer operators.
+  `--allow-large-run` does not lift it. `--dry-run` names the file and method; narrow that method with
+  `--lines` or fewer operators, or leave the file out.
 - **`lethal verify` leaves the edited test app installed on the server.** It does not put back the test
   app that was there before, and LethAL has no restore command. To get your own test app back, build and
   publish it yourself the way you normally do, and bump its `app.json` version if BC refuses it as a
