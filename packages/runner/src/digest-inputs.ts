@@ -42,7 +42,7 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { readPackageEntry } from "./app-package";
+import { packageEntries, readPackageEntry } from "./app-package";
 import { type PackageUnread, type PublishedPackageRead, isUnread } from "./backend";
 import { CONTROL_APP_ID, UnfilteredExtensionsQueryError } from "./harness";
 import { readAppIdentity, symbolPackageId, unwrapSymbolPackage } from "./published-test-app";
@@ -272,11 +272,50 @@ export type MicrosoftMode =
   | { readonly kind: "declared" }
   | { readonly kind: "folder" };
 
+/**
+ * PR-457 (R1230): the content digest of the package AS SERVED (a Ready-to-Run wrapper is hashed
+ * whole, its embedded app included). Zip timestamps, entry order and compression level do not
+ * count. Lines: `H <sha256 of the bytes before the first local header>`, then per entry sorted by
+ * raw UTF-8 name bytes `E <name>\t<size>\t<sha256 of the uncompressed bytes>`.
+ * `DependencyUnreadableError` naming `what` when any entry cannot be read; never a partial digest.
+ */
+export function packageContentDigest(buf: Buffer, what: string): string {
+  try {
+    const rows: { nameBytes: Buffer; line: string }[] = [];
+    const walk = packageEntries(buf);
+    let step = walk.next();
+    for (; step.done !== true; step = walk.next()) {
+      const e = step.value;
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
+      if (/[\u0000-\u001f]/.test(e.name)) {
+        throw new Error(`entry name ${JSON.stringify(e.name)} holds a control character`);
+      }
+      rows.push({
+        nameBytes: e.nameBytes,
+        line: `E ${e.name}\t${e.uncompressedSize}\t${sha256(e.data)}`,
+      });
+    }
+    rows.sort((a, b) => Buffer.compare(a.nameBytes, b.nameBytes));
+    const head = `H ${sha256(buf.subarray(0, step.value.headerEnd))}`;
+    return sha256([head, ...rows.map((r) => r.line)].join("\n"));
+  } catch (err) {
+    throw new DependencyUnreadableError(
+      `the package read for ${what} has no readable content: ${message(err)}`,
+    );
+  }
+}
+
 /** A package's identity and manifest, or `DependencyUnreadableError` naming `what`. */
 function openPackage(
   bytes: PublishedPackageRead,
   what: string,
-): { bytes: Uint8Array; identity: ReturnType<typeof readAppIdentity>; manifest: string } {
+): {
+  bytes: Uint8Array;
+  identity: ReturnType<typeof readAppIdentity>;
+  manifest: string;
+  /** PR-457: the content digest (timestamps, entry order and compression do not count). */
+  content(): string;
+} {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
     throw new DependencyUnreadableError(
       `the package of ${what} could not be read${causeOf(bytes)}`,
@@ -289,7 +328,12 @@ function openPackage(
     const identity = readAppIdentity(app);
     const manifest = readPackageEntry(app, "NavxManifest.xml");
     if (manifest === null) throw new Error("no NavxManifest.xml");
-    return { bytes, identity, manifest: manifest.toString("utf8") };
+    return {
+      bytes,
+      identity,
+      manifest: manifest.toString("utf8"),
+      content: () => packageContentDigest(buf, what),
+    };
   } catch (err) {
     throw new DependencyUnreadableError(
       `the package read for ${what} is not a readable app package: ${message(err)}`,
@@ -341,7 +385,8 @@ export async function dependencyFingerprint(
         `the platform package read for "System" is "${system.identity.name}" by "${system.identity.publisher}", not Microsoft's System`,
       );
     }
-    lines.add(`P ${sha256(system.bytes)}`);
+    // PR-457 (R1230): BC serves a different zip of System per server instance (measured across restarts, R1230), so hash its content, not its bytes.
+    lines.add(`P content c1:${system.content()}`);
     enqueue(appInputsOfManifest(system.manifest));
     // R-385 control root: the dependencies of the control app the server RUNS (Test Runner). Its
     // own bytes are not hashed (limit L3); its version proves the served package is the running one.

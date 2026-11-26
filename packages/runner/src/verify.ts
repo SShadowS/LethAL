@@ -1254,7 +1254,8 @@ const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
     "a subscriber, install or upgrade codeunit, extension, enum implementation or permission set changed, or LethAL widened what these cover (every one is in every test's digest, so every test is new)",
   fallback:
     "a test-app edit, for a test whose reach has an edge the walk cannot follow (it covers the whole test-app source)",
-  dependency: "a dependency changed",
+  dependency:
+    "a dependency changed, or LethAL changed how it fingerprints System (R1230: against a store recorded before it, every test is new once)",
   build: "an app.json build input changed",
   "closed-world":
     "the closed-world guard answered differently (R389: whether another published app depends on the test app)",
