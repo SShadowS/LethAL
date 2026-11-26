@@ -86,6 +86,14 @@ behind master by many commits. It checks a minimum of 1.0.0.29 and calls only ac
   apps). So the clean way back is kraken resetting bc2's in-memory database, then setup at 1.0.0.29 from master, then bc2
   re-proved at 1.0.0.29 before the lease is released.
 
+## Amendment 1 (2026-11-26, from the build review, before any server call)
+- **`bc-republish.ts control` also reads the per-server pin** (`controlBytesFor(server)`): it read `CONTROL_APP` directly, so
+  `--server bc4` would have upgraded bc4 to 1.0.0.30, which cannot be undone.
+- **`bc-demo` stays on 1.0.0.29 too** (`DEMO_CONTROL`), kraken and laptop mode: 1.0.0.30 adds nothing there, and moving it
+  would make the owner's laptop mode refuse until a new build is copied. It moves with bc4.
+- **`older.sh` reads the build back** (master's `--predict`, "already-pinned LethAL Control 1.0.0.30") before its first gate
+  and after its doctor, as `prove.sh` does, and starts only after `prove.sh bc2` ended ALL PASS.
+
 ## What this does not prove
 - **The refresh itself** (a session outside any op following a new Generation) runs only in a client session. There is
   none on bc1-bc4 (no `/cs`). PR-314 measured it on Windows BC 28.4. On Linux it is first exercised by the driver's gate
