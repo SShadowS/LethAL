@@ -8732,7 +8732,7 @@ async function runSessionBody(
             : prior.testAppDeps === null
               ? "it recorded no dependency fingerprint (it ran before R496, or its fingerprint could not be taken)"
               : prior.testAppDeps !== historyTestApp.deps
-                ? `the test app's dependencies changed (${prior.testAppDeps}, now ${historyTestApp.deps})`
+                ? `the test app's dependencies changed (${prior.testAppDeps}, now ${historyTestApp.deps}) (or LethAL changed how it fingerprints System, R1230: a run recorded before it cannot be resumed; start a fresh run)`
                 : undefined;
       if (reason !== undefined) {
         throw new TestAppRepublishedError(
@@ -9137,7 +9137,7 @@ async function runSessionBody(
                 old.proven,
               )}, with dependencies ${old.deps ?? "not recorded"}, and this session's test app is ${describeTestApp(historyTestApp?.hash)}${
                 historyTestApp === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency, or LethAL changing how it fingerprints System (R1230; a store recorded before it refuses once, so start a fresh run). No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
+              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency, or LethAL changing how it fingerprints System (R1230). No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
             });
           },
           carryUntrusted: (old) => {

@@ -385,7 +385,7 @@ export async function dependencyFingerprint(
         `the platform package read for "System" is "${system.identity.name}" by "${system.identity.publisher}", not Microsoft's System`,
       );
     }
-    // PR-457 (R1230): BC re-zips System on every request, so hash its content, not its bytes.
+    // PR-457 (R1230): BC serves a different zip of System per server instance (measured across restarts, R1230), so hash its content, not its bytes.
     lines.add(`P content c1:${system.content()}`);
     enqueue(appInputsOfManifest(system.manifest));
     // R-385 control root: the dependencies of the control app the server RUNS (Test Runner). Its

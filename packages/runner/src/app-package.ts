@@ -121,7 +121,12 @@ export function* packageEntries(buf: Buffer): Generator<
       pos + CENTRAL_DIR_FIXED_SIZE,
       pos + CENTRAL_DIR_FIXED_SIZE + nameLen,
     );
-    const name = nameBytes.toString("utf8");
+    let name: string;
+    try {
+      name = new TextDecoder("utf-8", { fatal: true }).decode(nameBytes);
+    } catch {
+      throw new Error(`zip entry name at offset ${pos} is not valid UTF-8`);
+    }
     pos += CENTRAL_DIR_FIXED_SIZE + nameLen + extraLen + commentLen;
 
     if (names.has(name)) throw new Error(`duplicate zip entry name ${name}`);
@@ -144,7 +149,9 @@ export function* packageEntries(buf: Buffer): Generator<
     try {
       data = method === 0 ? raw : inflateRawSync(raw, { maxOutputLength: size + 1 });
     } catch (err) {
-      throw new Error(`zip entry ${name} cannot be inflated: ${(err as Error).message}`);
+      throw new Error(
+        `zip entry ${name} cannot be inflated: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     if (data.length !== size) {
       throw new Error(
@@ -165,7 +172,8 @@ export function* packageEntries(buf: Buffer): Generator<
   if (count !== declared) {
     throw new Error(`zip lists ${declared} entries in its end record but holds ${count}`);
   }
-  return { headerEnd: Number.isFinite(firstLocal) ? firstLocal : 0 };
+  if (!Number.isFinite(firstLocal)) throw new Error("zip holds no entries");
+  return { headerEnd: firstLocal };
 }
 
 /**

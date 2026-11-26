@@ -29,8 +29,12 @@ interface ZipOpts {
   date?: number;
   /** zlib level; 0 stores the entry. */
   level?: number;
-  /** Overwrite every deflated entry's data with 0xff bytes. */
+  /** Overwrite src/B.al's deflated data with 0xff bytes (the manifest stays readable). */
   corrupt?: boolean;
+  /** Declare every entry two bytes smaller than it is (one smaller still fits the size+1 bound). */
+  sizeShort?: boolean;
+  /** End src/B.al's name with the invalid UTF-8 byte 0xff. */
+  badName?: boolean;
   /** Declare every entry one byte larger than it is. */
   sizeLie?: boolean;
   /** Set the encryption flag. */
@@ -49,15 +53,20 @@ function zip(entries: Entries, o: ZipOpts = {}): Buffer {
   const centrals: Buffer[] = [];
   let offset = 0;
   for (const [entryName, content] of entries) {
-    const name = Buffer.from(entryName, "utf8");
+    const name =
+      o.badName === true && entryName === "src/B.al"
+        ? Buffer.concat([Buffer.from(entryName, "utf8"), Buffer.from([0xff])])
+        : Buffer.from(entryName, "utf8");
     const data = typeof content === "string" ? Buffer.from(content, "utf8") : content;
     let body = level === 0 ? data : deflateRawSync(data, { level });
-    if (o.corrupt === true && level !== 0) body = Buffer.alloc(body.length, 0xff);
+    if (o.corrupt === true && level !== 0 && entryName === "src/B.al")
+      body = Buffer.alloc(body.length, 0xff);
     // The method lie is told on src/B.al only: openPackage reads the manifest first and would
     // refuse for its own reason, hiding whether the content walk refuses.
     const method =
       o.method !== undefined && entryName === "src/B.al" ? o.method : level === 0 ? 0 : 8;
-    const usize = o.sizeLie === true ? data.length + 1 : data.length;
+    const usize =
+      o.sizeLie === true ? data.length + 1 : o.sizeShort === true ? data.length - 2 : data.length;
     const flags = o.encrypted === true ? 1 : 0;
     const time = o.time ?? 0;
     const date = o.date ?? 0;
@@ -175,38 +184,49 @@ describe("PR-457: System content digest", () => {
     expect(await fp(zip(BASE, { header: "NAVX-header-0002" }))).not.toBe(await fp(zip(BASE)));
   });
 
-  const refuses = async (system: PublishedPackageRead): Promise<void> => {
+  // The refusal must come from the content digest (not from openPackage's own read) and from the
+  // named branch, so each test names a phrase only its branch writes.
+  const refuses = async (system: PublishedPackageRead, phrase: string): Promise<void> => {
     const err = await fp(system).then(
       () => undefined,
       (e: unknown) => e,
     );
     expect(err).toBeInstanceOf(DependencyUnreadableError);
-    expect((err as Error).message).toContain("System");
+    const text = (err as Error).message;
+    expect(text).toContain("System");
+    expect(text).toContain("has no readable content");
+    expect(text).toContain(phrase);
   };
 
   test("7a: a duplicate entry name refuses", async () => {
-    await refuses(zip([...BASE, ["src/A.al", "again"]]));
+    await refuses(zip([...BASE, ["src/A.al", "again"]]), "duplicate zip entry name");
   });
   test("7b: an entry that cannot be inflated refuses", async () => {
-    await refuses(zip(BASE, { corrupt: true }));
+    await refuses(zip(BASE, { corrupt: true }), "cannot be inflated");
   });
   test("7c: a size that differs from the central directory's refuses (stored)", async () => {
-    await refuses(zip(BASE, { sizeLie: true, level: 0 }));
+    await refuses(zip(BASE, { sizeLie: true, level: 0 }), "the central directory says");
   });
   test("7d: a size that differs from the central directory's refuses (deflated)", async () => {
-    await refuses(zip(BASE, { sizeLie: true, level: 6 }));
+    await refuses(zip(BASE, { sizeLie: true, level: 6 }), "the central directory says");
+  });
+  test("7d2: a central directory size SMALLER than the real one refuses (deflated, bounded inflate)", async () => {
+    await refuses(zip(BASE, { sizeShort: true, level: 6 }), "cannot be inflated");
   });
   test("7e: the encryption flag refuses", async () => {
-    await refuses(zip(BASE, { encrypted: true }));
+    await refuses(zip(BASE, { encrypted: true }), "is encrypted");
   });
   test("7f: an unsupported compression method (14) refuses", async () => {
-    await refuses(zip(BASE, { method: 14 }));
+    await refuses(zip(BASE, { method: 14 }), "unsupported zip compression method");
   });
   test("7g: an end-record entry count that differs from the entries walked refuses", async () => {
-    await refuses(zip(BASE, { eocdCount: BASE.length + 1 }));
+    await refuses(zip(BASE, { eocdCount: BASE.length + 1 }), "entries in its end record");
   });
   test("7h: an entry name with a control character refuses", async () => {
-    await refuses(zip([...BASE, ["src/a\u0001.al", "x"]]));
+    await refuses(zip([...BASE, ["src/a\u0001.al", "x"]]), "control character");
+  });
+  test("7i: an entry name that is not valid UTF-8 refuses", async () => {
+    await refuses(zip(BASE, { badName: true }), "not valid UTF-8");
   });
 
   test("8: a partner X line is still raw bytes: re-zipping a partner package changes it", async () => {

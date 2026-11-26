@@ -1255,7 +1255,7 @@ const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
   fallback:
     "a test-app edit, for a test whose reach has an edge the walk cannot follow (it covers the whole test-app source)",
   dependency:
-    "a dependency changed, or LethAL changed how it fingerprints System (R1230); a store recorded before it refuses once, so start a fresh run",
+    "a dependency changed, or LethAL changed how it fingerprints System (R1230: against a store recorded before it, every test is new once)",
   build: "an app.json build input changed",
   "closed-world":
     "the closed-world guard answered differently (R389: whether another published app depends on the test app)",
