@@ -1,130 +1,131 @@
-# PR-453: closing R1223 and R1226 under PR-447's shape C, the real hit rate, and a go/no-go — r1 (no build)
+# PR-453: closing R1223 and R1226 under PR-447's shape C, the real hit rate, and a go/no-go — r2 (no build)
 
-lethal-code, 2026-11-26. The orchestrator ruled PR-447's C not to be built yet (owner principles 1, 4, 13 and 16):
-- its value was modelled;
-- it added a flag beside today's path;
-- R1223 and R1226 were unbuilt.
+lethal-code, 2026-11-26.
+- **r1** was a9aa5ef1f: a one-lane CHECK canary, Form A dropped, GO.
+- **r2** answers r1's spec-adversary, marked "(B1)" and so on.
+  - It gave 4 BLOCKs and 5 SHOULDs.
+  - The orchestrator asked for its weight on the canary, because retiring the flag makes C plus replay the only v3 path.
+- **r2's verdict: NO-GO now,** on three named conditions (§5).
 
-This spec measures all three and designs the closures. Evidence: `/coord/handoff/PR-453/` (`findings.md`, `capture/`,
-`life/`, `alrunner-step2.md`). Names and numbers only.
+Evidence: `/coord/handoff/PR-453/` (`findings.md`, `capture/`, `life/`, `alrunner-step2.md`). Names and numbers only.
 
-## 1. Measured
+## 1. Measured (and what it does NOT cover)
 
-- **The real per-daemon request order (§4: measure, never "likely").**
-  - A full DO run with c5's settings ran under strace, which recorded each serve daemon's stdin.
-  - 28 daemon lives, 1,395 entries requests, 44,702 entries.
-  - al-runner's LRU replayed over each real life:
+- **The real per-daemon request order.**
+  - A DO run with c5's settings ran under strace (stdin of every serve daemon).
+  - It was stopped by an outer timer at 9,000 s with 10,979 mutants left unscored, so this is the run's first part.
+  - 28 daemon lives (2 to 9,198 entries each), 44,702 entries.
+  - **Hit rate:** al-runner's LRU over each real life, under C: 58.3% / 82.3% / 92.3% at caps 8 / 32 / 112. Today's
+    selector gets 9.5% / 13.9% / 17.9%.
+  - **The model is validated:** on the probed life alone it predicts 5,600 / 7,975 / 9,088 replays, and the live probe
+    counted exactly those (NIT1).
+- **One real life, replayed on alrunner's limits fork** (221d1f631, gated) with the C prototype, `MAX_MB` = 1024:
+  - replayed 61% / 87% / 99% at 8 / 32 / 128;
+  - peak RSS 3.44 / 3.51 / 3.98 GiB, against 3.55 GiB off;
+  - rows identical per request in all five arms;
+  - CHECK at 128: 9,088 compared, 0 differ.
+- **Not covered: (B2) all 2,470 entries whose C key differs from NONE's sit in 3 of the 23 lives** (pids 1787006,
+  1905189, 1747701). The probed life has ZERO of them (its keys differ only in `test_codeunit`).
+  - So there is NO CHECK evidence on the login-path keys, which are where R1223 lives.
+  - The capture has no pid-to-lane mapping.
+- **(S2) Direct life walls, reported though confounded** (run in sequence, not interleaved, the on arms at load1
+  20-80): off 4,400 s; on at cap 8 4,942 s; cap 32 6,317 s; cap 128 6,340 s; CHECK 5,415 s. They point AGAINST the
+  modelled saving. They are confounded, but they are not dismissed (principle 6).
+- **(S3) Every probe arm set `MAX_MB` = 1024.** al-runner's default byte cap of 64 MB evicts at about 17 images, so
+  cap 32 under default MB would hit between the 8 and 32 figures.
 
-  | cap | today's selector | C |
-  |---|---|---|
-  | 8 | 9.5% | 58.3% |
-  | 32 | 13.9% | 82.3% |
-  | 112 | 17.9% | 92.3% |
+## 2. Why replay can be wrong (one question, two directions)
 
-- **One real daemon life, replayed on al-runner's limits fork (221d1f631, gated) with the C prototype.** 247 requests,
-  9,198 entries.
+- **The key's inventory.** al-runner keys a login on every input it lists (`login_start/outside.rs`): by content or
+  digest, gated, engine-level, untouched, or read only after the login.
+  - The key holds the clock's day: `RunClock` begins per serve request at that UTC day's fixed time.
+  - A replay can differ from a real login only if an input is missing from the key, or wrongly classed. The inventory
+    test checks that every static is LISTED, not that its class is right.
+- **R1223 (kills) and R1226 (survivors)** are that same question in two directions.
+  - **(B1) But their stakes differ.** A false kill is the class this project exists to prevent (principle 1). An
+    under-reported survivor errs in the safe direction.
+  - So the two directions get DIFFERENT closures.
 
-  | arm | replayed | peak RSS |
-  |---|---|---|
-  | off | — | 3.55 GiB |
-  | cap 8 | 5,600 (61%) | 3.44 GiB |
-  | cap 32 | 7,975 (87%) | 3.51 GiB |
-  | cap 128 | 9,088 (99%) | 3.98 GiB |
+## 3. The closures
 
-  - Rows are identical, per request, in all five arms.
-  - The CHECK arm at cap 128 compared 9,088 sessions with 0 differ, and 0 differ across 109 test codeunits.
-- **Kill-pair symmetry over the real order** (requests holding kill pairs: 357). A request is asymmetric when some of
-  its pair entries replay while others log in for real:
+- **R1223: keep Form A, in its shared-daemon variant (B1).**
+  - One `=0` confirm lane per run, with no replay. Every R1223 D5 route goes there:
+    - `batchKillPairs` and `sendKillPairOn` (with its `activate` paths);
+    - the pair-skipped catch;
+    - `pairFallbacks1` and `pairFallbacks2`;
+    - `takeStoredPair` refusals;
+    - the `noneVerdict` mapping;
+    - the carry walk and the coverage windows (PR-447 r3).
+  - A kill stands only on real-login evidence, so its soundness does NOT depend on the key.
+  - If the lane cannot serve, the kill is withheld; it never falls back to `=1`.
+  - R1223 sized this at about 11,100 s of serial pair work against c5's 19,758 s mutants phase. It runs inside the
+    lanes' budget and needs no extra daemon per lane.
+  - R1223's D2 (NONE confirms after warm-up are never checked) and D6 (the "R1223 built" constant) stay as they are.
+- **R1226: a sampled check with a stated limit (survivor direction).** al-runner checks a sample of replayed sessions
+  on EVERY replay-on daemon: it thaws a start into a twin and compares it with a real login.
+  - This is an al-runner ask: a sampling rate per request, or check the first replay of every key.
+  - It ALWAYS checks the first replay of every key that is not NONE-equivalent (5.5% of entries).
+  - Until al-runner has it, the confirm lane's own CHECK (below) is the only check, and its limit is stated.
+- **The confirm lane runs `=0` WITH `ALRUNNER_LOGIN_REPLAY_CHECK=1`.** Check mode logs in for real, so Form A still
+  holds, and it adds a check sample at no extra daemon.
+  - **(S1)** Its memory is measured, not assumed. CHECK costs ≈ +2 GiB (6.04 vs 3.98 GiB at cap 128), because
+    `Tally.firsts` is not capped. The lane decision charges the confirm lane by its own peak, never the session's
+    highest peak for every lane.
+- **(B4) The trip signal: exactly three error counters, read as deltas per engine:**
+  - the `login replay check:` exact differ;
+  - the round-trip differ (`not comparable` counts as an error);
+  - the `login start:` replay-vs-run differ.
+  - The across-codeunit counter is NOT an error.
+  - An ANSWERED request whose sessions raised the login and printed no line counts as an error.
+  - An UNANSWERED request (timeout, kill, SIGTERM, budget end) counts as UNCHECKED: reported, never "fine", and never
+    a trip.
+  - A leg-C contract case pins the line format.
+  - Every respawn of the confirm lane is asserted, at spawn, to carry the CHECK env.
+- **(B3) After a trip:**
+  - The trip is stored as a fact on (project, al-runner build). Every later run and resume on that pair runs
+    replay-off.
+  - This uses the INTERNAL replay-off spawn path, the same one the confirm lane uses. It is not a user toggle, so not
+    a dual path (principle 16).
+  - Carried rows whose origin run had replay on are invalidated at read time when the carrying run trips.
+  - The window is the whole run: `afterMutantId` = the run's first id − 1, and `afterSnapshotId` = the run's start.
+  - Against PR-454's "first window wins", the EARLIEST start wins.
+  - A replay-on run's fingerprint marks it, so a run without the confirm lane is never carried or lent.
 
-  | cap | asymmetric | NONE replays while the mutant logs in for real |
-  |---|---|---|
-  | 8 | 29 | 1 |
-  | 32 | 1 | 0 |
-  | 112 | 0 | 0 |
+## 4. The shape (principle 16)
 
-- **Keyed apart from NONE under C:** 2,470 entries (5.5%), from 42 distinct mutants: the login-path buckets.
+- **C plus replay is the single v3 mutation path.** The internal replay-off path exists only for:
+  - the confirm lane;
+  - after a trip;
+  - (S5) a build whose `login-replay` fact or cap setting is missing.
+  - All of these are decided by facts, never by user config.
+  - A config that still names `loginReplay` is refused by name (no back-compat before release).
+- **(S3) The cap is set with `MAX_MB`** = cap × the measured largest image, plus a margin. Heavy-slot presets are
+  based on MB. Default cap 32, pending the measurements in §5.
 
-## 2. Why replay can be wrong at all (both doors are one question)
+## 5. Go / no-go: NO-GO now
 
-- **The key's inventory.** al-runner's login key holds every login input: by content or a SHA-256 digest, or the input
-  is gated (no start), engine-level, untouched, or read only after the login (`login_start/outside.rs`).
-  - An al-runner test fails for any static it does not list.
-  - The key holds the clock's DAY (`Key::clock`), the database and uncommitted-row digests, and the session state
-    (WorkDate included). It also holds the seed, the license, the flags and the resource texts the login read.
-- **So a replayed login can differ from a real one only if the key is incomplete.** Both doors are that one question:
-  - R1223, the false-kill direction: NONE replays while M logs in for real;
-  - R1226, the survivor direction: a login's read set changes inside one daemon life (the date or data).
-  - R1223's own example, a login across midnight, gets a NEW key.
-- **The evidence the key is complete for DO:**
-  - CHECK, 0 differ in 9,088 sessions of one real life;
-  - PR-443, 0 differ;
-  - PR-446/PR-447's P0 and keying probes.
-  - None of this proves an input that DO never exercises. That is the residue a closure must still cover (§1: correct
-    first; §5: unknown is not no).
+**The arithmetic, corrected (S2):**
+- the canary's share is 1/5 (c5 ran 5 lanes), not 1/8;
+- the CHECK lane's +23% wall, measured on the same life;
+- Form A's serial pair work runs on one lane;
+- the modelled saving at cap 32 nets ≤ ≈ 15k lane-s (≈ 15% of c5's mutants phase), before any lost lane from the
+  CHECK lane's memory;
+- the direct life walls do not confirm even that.
 
-## 3. The closure: one rule for both doors, a CHECK canary that fails closed
+**Conditions for a GO, each measured, nothing built:**
+1. **A full DO run with CHECK on every lane** (fewer lanes if memory needs it), covering the 3 lives' login-path keys:
+   0 errors on the three counters.
+2. **An interleaved A/B of lane time** on the probed life: off against on at cap 32 with `MAX_MB` set, at least
+   A, B, A, B on the same cores, with outside load named. On must beat off by more than the C selector's cost.
+3. **alrunner's sampled check** on replay-on daemons (the R1226 ask), or the orchestrator accepts the confirm lane's
+   CHECK as R1226's only sample, with its limit stated.
 
-- **The canary lane.** In a replay-on run, ONE lane (lane 0) runs its daemon with `ALRUNNER_LOGIN_REPLAY_CHECK=1`.
-  - Check mode never replays. It runs every login for real and compares it with the key's stored image.
-  - LethAL reads its daemon's `login replay check:` line after every request.
-  - **Any `differ > 0` latches the session unsafe**, by the same path as PR-454's degraded window. Every verdict since
-    the run started is invalidated in the store, the report and `--resume`, by name: `login-replay-check-differ`.
-  - That is the whole run, not a window: an incomplete key may have affected any replay.
-  - A missing line is treated as differ (§5).
-- **Why it closes both doors.** The canary lane receives the same kinds of requests from the same queue: kill pairs,
-  prefetches, echoes, across days and data.
-  - Any key incompleteness that shows on lane 0 stops the run.
-  - One that never occurs on lane 0 during the run is not seen. The canary is a sample, which is stated as a LIMIT. It
-    is not claimed as proof.
-  - The rate at which lane 0 sees each kind of request is reported per run.
-- **The cost of the canary:**
-  - lane 0 saves nothing (1/N of the saving);
-  - its RSS is higher: 6.04 GiB at cap 128 vs 3.55 GiB off. Measured with CHECK, which runs both the real login and
-    the image. At cap 8 the canary's extra memory is bounded by about 29 MB of images.
-  - The canary therefore runs at cap 8.
-- **Dropped: R1223's Form A** (every kill pair on a replay-off daemon).
-  - Measured at cap ≥ 32, pairs are symmetric in practice (1 and 0 of 357).
-  - Its soundness rests on the same key-completeness question the canary watches.
-  - Its cost is an extra ~3.5 GiB daemon per lane, which c5's memory hold would turn into a lost lane.
-  - The canary covers the false-kill direction AND the survivor direction, which Form A never did (R1226).
-- **R1226** is closed by the same canary, plus the key's clock-day field.
-  - Limit, stated: no measured run crossed midnight. al-runner's own test
-    (`a_session_whose_run_clock_began_on_another_day_runs_its_own_login`) is the evidence for the day boundary.
-  - A leg-C case cannot set the clock (a set clock start takes no start).
+If 1 and 2 hold, the build is: C, the confirm lane, the trip fact and the three-counter signal, with the flag retired.
 
-## 4. The shape of the build (principle 16: replace, not dual)
+## 6. Owner principles weighed
 
-- **No new flag beside today's path.** C plus replay becomes THE v3 mutation-daemon path, once:
-  - its facts hold: PR-447's four facts and the login-replay fact (PR-443's design);
-  - the canary is built;
-  - al-runner's cap setting is on the gated build.
-- Before that, nothing changes.
-- `alRunnerV3.loginReplay` is retired, not kept as a toggle. PR-402's guard becomes the build's precondition, checked
-  by the update gate's facts.
-- **Default cap 32 (87% of entries replayed, +0.1 GiB per daemon):**
-  - cap 128 adds only 12 points (99%) for +0.43 GiB;
-  - c5's memory hold caps lanes, so the cap is a `--profile` choice (principle 17: a trade-off is an opt-in profile).
-  - The heavy-slot presets add cap × 3.6 MB per daemon: al-runner does not count images against its memory limit.
-
-## 5. Go / no-go
-
-- **GO for C, on the shape in §4,** after the ruling.
-- **The saving, at today's 0.25 s per real login (PR-439):** at cap 32, about 82% of ~157k entries replay, ≈ 32k
-  lane-s.
-  - Minus C's selector cost: +6-8% user instructions, ≈ 27-37 ms per entry, ≈ 4-6k lane-s.
-  - Minus the canary lane's lost share: 1/8 of the replays.
-  - **Net ≈ 23-24k lane-s ≈ 24% of c5's mutants phase (98,792 lane-s).**
-  - It is reported as a calculation from measured parts. The lane time of a built run is the build's own first gate
-    measurement, compared interleaved with a replay-off run (PR-447 step 2).
-- **NO-GO conditions:**
-  - the canary sees any differ on DO;
-  - the upstream cap setting is refused (cap 8 is still ≈ 15%);
-  - the build's replay-on vs replay-off per-mutant verdicts differ.
-
-## 6. For the spec-adversary
-
-- Is a sampled canary sound enough under §1/§5, or must every lane check?
-- Is invalidating the whole run at a differ the right scope?
-- Is dropping Form A sound?
-- Does the canary lane see every request kind?
-- Is retiring the flag compatible with users who have no gated build carrying the cap?
+- 1 (correct first) decides B1: Form A stays.
+- 4 and 6 (measure; label): §1's NOT-covered list and the confounded walls.
+- 5 (unknown is not no): unanswered = unchecked, never fine.
+- 13 (right-sized): no per-lane CHECK daemon; one confirm lane.
+- 16 (clean cutover): one path, with an internal replay-off route decided by facts.
