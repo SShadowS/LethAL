@@ -15,11 +15,13 @@ import type { LeaseApi } from "../src/lease";
 import {
   DegradedWindowNotStoredError,
   LeaseSession,
+  LostBatchNotStoredError,
   RENEW_UNANSWERED_STOP_MS,
+  correctStoreAtEnd,
   invalidateDegradedWindow,
 } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
-import { CARRYABLE_VERDICTS, buildResumeIndex } from "../src/resume";
+import { CARRYABLE_VERDICTS, STRANDED_SKIP_NOTE, buildResumeIndex } from "../src/resume";
 import { SessionSafety } from "../src/session-safety";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 
@@ -84,6 +86,8 @@ function rig(opts: { failMsPerCall?: number } = {}) {
     renewCalls: 0,
     released: 0,
     statusThrows: false,
+    opKind: "none",
+    markThrows: false,
     onRenew: undefined as ((n: number) => void) | undefined,
     lost: 0,
     degraded: 0,
@@ -105,7 +109,7 @@ function rig(opts: { failMsPerCall?: number } = {}) {
     getOperationStatus: async () => {
       if (state.statusThrows) throw new Error("status unreadable");
       return {
-        opKind: "none",
+        opKind: state.opKind,
         opAttemptId: "",
         opSeq: 0,
         lastCompletedOpSeq: 0,
@@ -146,7 +150,10 @@ function rig(opts: { failMsPerCall?: number } = {}) {
     onLost: () => {
       state.lost += 1;
     },
-    windowMark: () => ({ ...store.windowMark(runId), scoredSeq: 0 }),
+    windowMark: () => {
+      if (state.markThrows) throw new Error("mark unreadable");
+      return { ...store.windowMark(runId), scoredSeq: 0 };
+    },
     onDegraded: (w, note) => {
       state.degraded += 1;
       store.markDegradedWindow(runId, w.afterMutantId, w.afterSnapshotId, note);
@@ -237,6 +244,75 @@ describe("R1227 group 1: the stop rule", () => {
     expect(r.stops()).toBe(1);
     expect(r.events.filter((e) => e.type === "degraded-window")).toHaveLength(1);
     expect(r.state.degraded).toBe(1);
+  });
+
+  test("a streak of 2 at about 110 s must stop (a 120 s threshold would not)", async () => {
+    const r = rig({ failMsPerCall: 18_400 }); // three failed ticks of two calls: 110.4 s
+    await r.ticks(3);
+    expect(r.stops()).toBe(1);
+  });
+
+  test("a windowMark that throws cannot wedge the single-flight guard", async () => {
+    const r = rig();
+    r.state.markThrows = true;
+    await expect(r.tick()).rejects.toThrow("mark unreadable");
+    r.state.markThrows = false;
+    r.state.mode = "ok";
+    await r.tick();
+    expect(r.state.renewCalls).toBe(1); // the next tick was not dropped as "still ticking"
+  });
+});
+
+describe("R1227: the teardown's two corrections", () => {
+  test("a failing lost-batch write does not stop the window's write, and is the error thrown", async () => {
+    const r = rig();
+    await r.ticks(3);
+    r.state.mode = "lost";
+    await r.tick(); // a loss after the stop: lostBatchIndex set
+    addRow(r.store, r.runId, "INFLIGHT", "killed", { killingTest: "T" });
+    r.store.markBatchLost = () => {
+      throw new Error("lost write failed");
+    };
+    expect(() =>
+      correctStoreAtEnd(r.store, r.runId, r.session, r.safety, () => {}, undefined, undefined),
+    ).toThrow(LostBatchNotStoredError);
+    expect(r.verdicts().get("INFLIGHT")).toBe("error"); // the window's write still ran
+  });
+
+  test("when both fail the lost-batch error is thrown and the window's is warned, never dropped", async () => {
+    const r = rig();
+    await r.ticks(3);
+    r.state.mode = "lost";
+    await r.tick();
+    r.store.db.close();
+    const seen: RunEventInput[] = [];
+    let err: unknown;
+    try {
+      correctStoreAtEnd(
+        r.store,
+        r.runId,
+        r.session,
+        r.safety,
+        (e) => seen.push(e),
+        undefined,
+        undefined,
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(LostBatchNotStoredError);
+    expect(
+      seen.some((e) => e.type === "warning" && e.code === "degraded-window-error-replaced"),
+    ).toBe(true);
+  });
+
+  test("a failing window write alone is still DegradedWindowNotStoredError", async () => {
+    const r = rig();
+    await r.ticks(3);
+    r.store.db.close();
+    expect(() =>
+      correctStoreAtEnd(r.store, r.runId, r.session, r.safety, () => {}, undefined, undefined),
+    ).toThrow(DegradedWindowNotStoredError);
   });
 });
 
@@ -369,6 +445,20 @@ describe("R1227 group 6: --resume", () => {
     expect(note?.startsWith(NOTE_PREFIX)).toBe(true); // never an error with a NULL note
   });
 
+  test("a resume's own stranded SKIP row inside the window stays a stranded key and is not counted as re-run", async () => {
+    const r = rig();
+    r.state.onRenew = (n) => {
+      if (n === 1) {
+        addRow(r.store, r.runId, "SK", "error", { failureNote: STRANDED_SKIP_NOTE });
+        addRow(r.store, r.runId, "MEAS", "error", { failureNote: "quarantined: measured strand" });
+      }
+    };
+    await r.ticks(3);
+    const index = buildResumeIndex(r.store.mutantVerdicts(r.runId));
+    expect(index.strandedKeys.size).toBe(1); // SK: skipped again; MEAS (measured, in the window) is re-run
+    expect(index.degradedWindowRows).toBe(1); // MEAS only
+  });
+
   test("with no window nothing more is re-run, and a stranded row is still skipped", () => {
     const store = new ResultsStore(":memory:");
     const id = newRun(store);
@@ -458,6 +548,17 @@ describe("R1227 group 9: the durable recycle record", () => {
     expect(rec?.detail).toContain("restart the service tier");
     expect(rec?.detail).not.toContain("ForceResetLease");
     expect(r.state.released).toBe(1);
+  });
+
+  test("a stranded-marker recycle recorded in the same finish() wins: the renew-stop one is second", async () => {
+    const r = rig();
+    await r.ticks(3);
+    r.state.opKind = "run"; // a non-idle marker; the ownership probe then cannot answer (renew fails)
+    await r.session.finish();
+    const rec = await r.quarantine.read("tier");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("ForceResetLease");
+    expect(r.state.released).toBe(0);
   });
 
   test("it is recorded even when the marker read at finish() fails", async () => {

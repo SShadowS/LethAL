@@ -14325,7 +14325,11 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
    * R1227: three stalled ticks during the FIRST mutant's run, 61 s apart on the monotonic clock
    * (stepped, never waited for): the stop fires at the third, while that mutant is still in flight.
    */
-  async function renewStopSession(prepare?: (s: ResultsStore) => void) {
+  async function renewStopSession(
+    prepare?: (s: ResultsStore) => void,
+    /** The mutant (1-based) whose run the three stalled ticks fire in. */
+    stallInMutant = 1,
+  ) {
     const { calls, client } = wired({ RenewLease: () => "stall" });
     const events: RunEvent[] = [];
     const timers = new FakeTimers();
@@ -14338,12 +14342,14 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
     clock.mono = () => realMono() + bump;
     let active: string | null = null;
     let fired = false;
+    let activations = 0; // mutants activated: none may start after the stop
     const backend = leaseBackend({
       activate: async (id) => {
         active = id;
+        if (id !== null) activations += 1;
       },
       run: async (ref, opts) => {
-        if (active !== null && !fired) {
+        if (active !== null && activations >= stallInMutant && !fired) {
           fired = true;
           for (let i = 0; i < 3; i++) {
             bump += 61_000;
@@ -14360,15 +14366,34 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
         lease,
         emit: [(e) => events.push(e)],
       }).catch((e: unknown) => e as Error);
-      return { report, events, store, dir, calls };
+      return { report, events, store, dir, calls, activations };
     } finally {
       clock.mono = realMono;
     }
   }
 
-  test("R1227: the stop quarantines, drops the window from the report and the store, records the recycle and is no lease loss", async () => {
-    const { report, events, store, dir, calls } = await renewStopSession();
+  test("R1227: the seq is wired end to end: mutant 1 scored before the stall keeps its verdict, mutant 2 reads as error, in the report and the store", async () => {
+    const { report, store, activations } = await renewStopSession(undefined, 2);
     if (report instanceof Error) throw report;
+    expect(activations).toBe(2); // no mutant ran after the stop
+    expect(report.mutants).toHaveLength(2);
+    const [m1, m2] = [...report.mutants].sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
+    expect(m1?.verdict).not.toBe("error");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote?.startsWith("lease-renew-unanswered:")).toBe(true);
+    const rows = store.db
+      .query("SELECT mutant_code AS c, verdict AS v FROM mutants ORDER BY id")
+      .all();
+    expect(rows).toEqual([
+      { c: m1?.mutantCode, v: m1?.verdict },
+      { c: m2?.mutantCode, v: "error" },
+    ]);
+  });
+
+  test("R1227: the stop quarantines, drops the window from the report and the store, records the recycle and is no lease loss", async () => {
+    const { report, events, store, dir, calls, activations } = await renewStopSession();
+    if (report instanceof Error) throw report;
+    expect(activations).toBe(1); // no mutant ran after the stop
     expect(report.quarantined?.reason.startsWith("lease-renew-unanswered:")).toBe(true);
     expect(warnings(events, "lease-renew-unanswered-stop")).toHaveLength(1);
     expect(events.filter((e) => e.type === "degraded-window")).toHaveLength(1);

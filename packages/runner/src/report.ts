@@ -2388,8 +2388,8 @@ export const RENEW_UNANSWERED_REASON_PREFIX = "lease-renew-unanswered:";
 /** R1227: what a quarantine caused by the renew stop means, in place of `QUARANTINE_INTERPRETATION`. */
 export const RENEW_UNANSWERED_INTERPRETATION: Interpretation = {
   meaning:
-    "The session stopped because the BC tier stopped answering lease renews for two minutes or " +
-    "more. Verdicts recorded from the first failed renew on were measured while the tier was " +
+    "The session stopped because the BC tier stopped answering lease renews: two unanswered " +
+    "warnings in a row, and 100 s or more since the last answer. Verdicts recorded from the first failed renew on were measured while the tier was " +
     "degraded: they are dropped from this report (read as `error`) and from `--resume`, which " +
     "re-runs them. Recovery: restart the service tier, then `--resume`.",
   entailedNegative:
@@ -2399,7 +2399,14 @@ export const RENEW_UNANSWERED_INTERPRETATION: Interpretation = {
   basis: "R1227",
 };
 
-/** R1227: `QUARANTINE_INTERPRETATION`, or the renew stop's when that was the reason. */
+/**
+ * R1227: `QUARANTINE_INTERPRETATION`, or the renew stop's when that was the reason.
+ *
+ * LIMIT (owner ruling, N10): the choice reads the quarantine reason, the only signal the report
+ * holds (no new `SessionReport` field). `SessionSafety` keeps the FIRST latch reason, so when another
+ * latch came before the renew stop, the generic interpretation is shown even though the stop's
+ * window was still dropped and its rows corrected in the store.
+ */
 export function quarantineInterpretationFor(reason: string): Interpretation {
   return reason.startsWith(RENEW_UNANSWERED_REASON_PREFIX)
     ? RENEW_UNANSWERED_INTERPRETATION

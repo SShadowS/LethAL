@@ -269,13 +269,15 @@ export function buildResumeIndex(
     // because the consequence of missing it is not a lost verdict — it is a resume that hangs on
     // the same mutant forever and can never reach the ones behind it.
     // R1227: a stranded note inside the degraded window was written by a tier that had stopped
-    // answering, so it proves nothing about the mutant: it is re-run once, not skipped.
-    if (bucket.some((r) => r.inDegradedWindow !== true && isStrandedNote(r.failureNote))) {
+    // answering, so it proves nothing about the mutant: it is re-run once, not skipped. Only a
+    // MEASURED strand: a row that is itself a resume's skip (STRANDED_SKIP_NOTE) carries an earlier
+    // run's measured strand, so it stays a stranded key inside the window too.
+    const inWindowRerun = (r: MutantVerdictRow) =>
+      r.inDegradedWindow === true && r.failureNote !== STRANDED_SKIP_NOTE;
+    if (bucket.some((r) => !inWindowRerun(r) && isStrandedNote(r.failureNote))) {
       strandedKeys.add(key);
     }
-    degradedWindowRows += bucket.filter(
-      (r) => r.inDegradedWindow === true && r.verdict === "error",
-    ).length;
+    degradedWindowRows += bucket.filter((r) => inWindowRerun(r) && r.verdict === "error").length;
     if (bucket.length > 1) {
       ambiguousKeys += 1;
       continue;
