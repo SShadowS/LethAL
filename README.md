@@ -297,7 +297,8 @@ lethal explain report.json
 
 Start scoped. A run above 1,000 mutation sites is refused by default: it costs days and usually
 cannot even publish. The limit counts sites, not scope, so one large file can exceed it even with
-`--only` (see [Limits](#limits)).
+`--only` (see [Limits](#limits)). On bcdev, a method holding more than 4,800 guards is refused too,
+whatever `--allow-large-run` says (measured on BC 28.4; R826).
 
 **Not ready to point it at your own app?** There are two complete BC extensions to run it against,
 both of which have a green test suite that misses something real. Each runs in seconds and shows

@@ -162,6 +162,11 @@ operators the warning lists, with one `--exclude-operator` each, or narrow the r
 - **`--lines` is not the lever here:** it narrows which mutants run, but a fold inside one procedure shrinks only guard by guard.
 - **Measured once:** a 23.9 MB method's publish was refused on BC 29 for Linux (System.OutOfMemoryException), and the tier stayed up
   (R826).
+- **Bytes are not what refuses; guards per method are (PR-461).** R826's ladder (BC 28.4 W1 Linux) passed one long chain up to
+  10 MB, but one call that ran 12,507 guards was cut at the 300 s request ceiling. So on bcdev a run whose largest method holds
+  more than 4,800 guards is REFUSED by name before any publish, and `--allow-large-run` does not lift it. Here `--lines` and
+  `--only` ARE levers (fewer mutants in that method means fewer guards), as are `--operator` and `--exclude-operator`. The figure
+  is measured on BC 28.4 only, not on BC 29 or Windows. al-runner-v3 does not refuse.
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--exclude-operator`, `--lines` and
 `--changed-since` select which

@@ -1,4 +1,9 @@
-import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
+import {
+  type ALSyntaxNode,
+  type MutationSpec,
+  isProcedureLike,
+  procedureLikeNameNode,
+} from "@lethal/engine";
 import {
   type TierResolver,
   assignMutantIds,
@@ -214,7 +219,9 @@ export function largeMethodWarning(large: readonly LargeMethod[]): string | unde
     " instead: the two flags do not combine). Or narrow the run with --only.",
     savings(large),
     " --lines narrows which mutants run, but a fold inside one procedure shrinks only guard by guard: leaving the",
-    " listed operators out together is the lever. --max-guards-per-batch will not help: it splits by file.",
+    " listed operators out together is the lever. Bytes alone were not the limit in R826's ladder: one long chain",
+    " passed up to 10 MB on BC 28.4 W1 Linux. What it measured is guards run per call, and a method over",
+    ` ${MAX_GUARDS_PER_METHOD.toLocaleString("en-US")} guards is refused on bcdev (${PLATFORM_NOTE}).`,
   ].join("");
 }
 
@@ -224,6 +231,146 @@ export function largeFoldWarning(
   tierOf: TierResolver,
 ): string | undefined {
   return largeMethodWarning(largeMethodsOf(files, tierOf));
+}
+
+/**
+ * R826 (PR-460 ladder, PR-461): the most guards one emitted method may hold on bcdev. A test that runs a
+ * method once checks every guard in it, and one call's time grows with those checks: on BC 28.4 W1 Linux
+ * one call took 60 s at 2,471 guards, 91 s at 4,811, and was cut at the 300 s request ceiling at 12,507.
+ * 4,800 is at the last pass. Measured on BC 28.4 W1 Linux only: not measured on BC 29 or Windows.
+ */
+export const MAX_GUARDS_PER_METHOD = 4_800;
+
+const PLATFORM_NOTE = "measured on BC 28.4 W1 Linux (R826): not measured on BC 29 or Windows";
+
+export interface MethodGuards {
+  readonly path: string;
+  readonly method: string;
+  /** 1-based line of the method's header in the source. */
+  readonly line: number;
+  /** The guards in that method: the members of every component it encloses. */
+  readonly guards: number;
+}
+
+/** PR-461: the plan does not add up, so G cannot be trusted. Never read as G = 0. */
+export class MethodGuardsPlanError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MethodGuardsPlanError";
+  }
+}
+
+/** PR-461: a file's largest method holds more guards than one BC call is measured to bear. */
+export class MethodGuardsRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MethodGuardsRefusedError";
+  }
+}
+
+const isMember = (n: ALSyntaxNode): boolean =>
+  n.rawKind === "procedure" ||
+  n.rawKind === "trigger_declaration" ||
+  n.rawKind === "preproc_split_trigger_preamble" ||
+  isProcedureLike(n);
+
+const nameOf = (n: ALSyntaxNode): string => {
+  const name = n.childForFieldName("name") ?? procedureLikeNameNode(n);
+  return name === null ? "(unnamed)" : name.text.replace(/^"|"$/g, "");
+};
+
+/**
+ * PR-461: the file's method with the most guards, from the generator's plan (the batch compile's
+ * components), or `undefined` when the file's deduped count cannot pass `limit` (G is at most that).
+ */
+export function largestMethodGuards(
+  file: FileIn,
+  tierOf: TierResolver,
+  limit: number = MAX_GUARDS_PER_METHOD,
+): MethodGuards | undefined {
+  if (dedupeSpecs(file.specs, tierOf).length <= limit) return undefined;
+  const { ided } = planOf(file, tierOf);
+  return largestOfComponents(file.path, buildComponents(ided), ided.length);
+}
+
+/**
+ * PR-461: each component's guards (its members) summed per enclosing method; the largest. Throws when
+ * a component sits in no method, or when the components' members do not add up to `deployed` (a
+ * self-check of this plan: it does not compare with the batch compile). G is never guessed.
+ */
+export function largestOfComponents(
+  path: string,
+  components: readonly { readonly root: ALSyntaxNode; readonly members: readonly unknown[] }[],
+  deployed: number,
+): MethodGuards | undefined {
+  // Keyed by the method's start, not the node object: a wrapper is made fresh on each read (FlatNode).
+  const per = new Map<number, { node: ALSyntaxNode; guards: number }>();
+  let total = 0;
+  for (const c of components) {
+    let m: ALSyntaxNode | null = c.root;
+    while (m !== null && !isMember(m)) m = m.parent;
+    if (m === null) {
+      throw new MethodGuardsPlanError(
+        `${path}: a component at line ${c.root.startPosition.row + 1} sits in no procedure or trigger, so its guards cannot be counted per method (R826)`,
+      );
+    }
+    const at = per.get(m.startIndex);
+    per.set(m.startIndex, { node: at?.node ?? m, guards: (at?.guards ?? 0) + c.members.length });
+    total += c.members.length;
+  }
+  if (total !== deployed) {
+    throw new MethodGuardsPlanError(
+      `${path}: the plan's components hold ${total} guards, but the file deploys ${deployed} (R826)`,
+    );
+  }
+  let best: MethodGuards | undefined;
+  for (const { node, guards } of per.values()) {
+    if (best !== undefined && guards <= best.guards) continue;
+    best = { path, method: nameOf(node), line: node.startPosition.row + 1, guards };
+  }
+  return best;
+}
+
+/** PR-461: the files whose largest method is over `limit`, largest first. */
+export function methodsOverGuardLimit(
+  files: readonly FileIn[],
+  tierOf: TierResolver,
+  limit: number = MAX_GUARDS_PER_METHOD,
+): MethodGuards[] {
+  return files
+    .map((f) => largestMethodGuards(f, tierOf, limit))
+    .filter((m): m is MethodGuards => m !== undefined && m.guards > limit)
+    .sort((a, b) => b.guards - a.guards || a.path.localeCompare(b.path));
+}
+
+/** PR-461: the refusal's (and the dry run's note's) text, or `undefined` when no method is over. */
+export function methodGuardsRefusal(
+  over: readonly MethodGuards[],
+  limit: number = MAX_GUARDS_PER_METHOD,
+): string | undefined {
+  if (over.length === 0) return undefined;
+  const n = (x: number) => x.toLocaleString("en-US");
+  const list = over
+    .map((m) => `${m.path}: ${m.method} (line ${m.line}) holds ${n(m.guards)} guards`)
+    .join("; ");
+  return [
+    `[lethal] ${over.length} file(s) hold a method over ${n(limit)} guards, the most one BC call is measured to bear`,
+    ` (${PLATFORM_NOTE}): ${list}. A test that runs such a method checks every guard in one call, and at 12,507`,
+    " guards that call was cut at the 300 s request ceiling and the run quarantined. Refused before any publish, on",
+    ` bcdev; --allow-large-run does not lift it. To run it, narrow until that method holds ${n(limit)} guards or`,
+    " fewer: --lines or --only, or fewer operators with --exclude-operator or --operator. Splitting the file across",
+    " batches is not built (R1231).",
+  ].join("");
+}
+
+/** PR-461: refuses by name when a file's largest method is over `limit`. The caller checks bcdev. */
+export function assertMethodGuards(
+  files: readonly FileIn[],
+  tierOf: TierResolver,
+  limit: number = MAX_GUARDS_PER_METHOD,
+): void {
+  const why = methodGuardsRefusal(methodsOverGuardLimit(files, tierOf, limit), limit);
+  if (why !== undefined) throw new MethodGuardsRefusedError(why);
 }
 
 /**

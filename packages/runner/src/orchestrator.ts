@@ -211,7 +211,12 @@ import {
   methodCodeunits,
   zeroGreenIsolationRow,
 } from "./isolation-auto";
-import { largeMethodSuspect, largeMethodWarning, largeMethodsOf } from "./large-fold";
+import {
+  assertMethodGuards,
+  largeMethodSuspect,
+  largeMethodWarning,
+  largeMethodsOf,
+} from "./large-fold";
 import {
   type BeginPublishRefusal,
   LeaseUnavailableError,
@@ -8358,6 +8363,9 @@ async function runSessionBody(
     });
   }
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
+  // PR-461 (R826): a BC call bears only so many guard checks; refused by name before any publish. On
+  // the deployed set (after --confirm narrows it), and before R48's refusal: it is the more specific.
+  if (isBcdev(caps.kind)) assertMethodGuards(allFiles, (name) => operatorTiers.get(name));
   // R48: refuse an unscoped run on a large project BEFORE anything is published. See
   // `LARGE_RUN_MUTANT_THRESHOLD` for why this refuses rather than warns.
   assertRunSizeAcceptable({
