@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { clock } from "../src/clock";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
@@ -14318,6 +14319,133 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
     });
     expect(warnings(events, "lease-renew-unanswered")).toHaveLength(1);
     expect(warnings(events, "lease-renew-blip")).toHaveLength(0);
+  });
+
+  /**
+   * R1227: three stalled ticks during the FIRST mutant's run, 61 s apart on the monotonic clock
+   * (stepped, never waited for): the stop fires at the third, while that mutant is still in flight.
+   */
+  async function renewStopSession(
+    prepare?: (s: ResultsStore) => void,
+    /** The mutant (1-based) whose run the three stalled ticks fire in. */
+    stallInMutant = 1,
+  ) {
+    const { calls, client } = wired({ RenewLease: () => "stall" });
+    const events: RunEvent[] = [];
+    const timers = new FakeTimers();
+    const dir = freshTmpDir();
+    const { lease } = leaseCfg(client, { timers });
+    const store = new ResultsStore(":memory:");
+    prepare?.(store);
+    const realMono = clock.mono;
+    let bump = 0;
+    clock.mono = () => realMono() + bump;
+    let active: string | null = null;
+    let fired = false;
+    let activations = 0; // mutants activated: none may start after the stop
+    const backend = leaseBackend({
+      activate: async (id) => {
+        active = id;
+        if (id !== null) activations += 1;
+      },
+      run: async (ref, opts) => {
+        if (active !== null && activations >= stallInMutant && !fired) {
+          fired = true;
+          for (let i = 0; i < 3; i++) {
+            bump += 61_000;
+            await timers.fire();
+          }
+        }
+        return pass(ref, opts);
+      },
+    });
+    try {
+      const report = await runSessionForTest(backend, {
+        store,
+        quarantineDir: dir,
+        lease,
+        emit: [(e) => events.push(e)],
+      }).catch((e: unknown) => e as Error);
+      return { report, events, store, dir, calls, activations };
+    } finally {
+      clock.mono = realMono;
+    }
+  }
+
+  test("R1227: the seq is wired end to end: mutant 1 scored before the stall keeps its verdict, mutant 2 reads as error, in the report and the store", async () => {
+    const { report, store, activations } = await renewStopSession(undefined, 2);
+    if (report instanceof Error) throw report;
+    expect(activations).toBe(2); // no mutant ran after the stop
+    expect(report.mutants).toHaveLength(2);
+    const [m1, m2] = [...report.mutants].sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
+    expect(m1?.verdict).not.toBe("error");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.failureNote?.startsWith("lease-renew-unanswered:")).toBe(true);
+    const rows = store.db
+      .query("SELECT mutant_code AS c, verdict AS v FROM mutants ORDER BY id")
+      .all();
+    expect(rows).toEqual([
+      { c: m1?.mutantCode, v: m1?.verdict },
+      { c: m2?.mutantCode, v: "error" },
+    ]);
+  });
+
+  test("R1227: the stop quarantines, drops the window from the report and the store, records the recycle and is no lease loss", async () => {
+    const { report, events, store, dir, calls, activations } = await renewStopSession();
+    if (report instanceof Error) throw report;
+    expect(activations).toBe(1); // no mutant ran after the stop
+    expect(report.quarantined?.reason.startsWith("lease-renew-unanswered:")).toBe(true);
+    expect(warnings(events, "lease-renew-unanswered-stop")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "degraded-window")).toHaveLength(1);
+    expect(events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    // the in-flight mutant was scored AFTER the stop: the report and the raw store row both say error
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote?.startsWith("lease-renew-unanswered:")).toBe(true);
+    }
+    const rows = store.db.query("SELECT verdict, failure_note FROM mutants").all() as Array<{
+      verdict: string;
+      failure_note: string;
+    }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.verdict === "error")).toBe(true);
+    expect(store.db.query("SELECT COUNT(*) AS n FROM lost_batches").get()).toEqual({ n: 0 });
+    const rec = await new QuarantineStore(dir).read(TIER);
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("stopped answering lease renews");
+    expect(rec?.detail).not.toContain("ForceResetLease");
+    expect(calls.ReleaseLease).toBe(1); // the lease released cleanly
+  });
+
+  test("R1227: a store write that throws inside pulse does not reject; the teardown writes it again", async () => {
+    let first = true;
+    const { report, events, store } = await renewStopSession((s) => {
+      const real = s.markDegradedWindow.bind(s);
+      s.markDegradedWindow = (...a) => {
+        if (first) {
+          first = false;
+          throw new Error("disk full");
+        }
+        real(...a);
+      };
+    });
+    expect(report).not.toBeInstanceOf(Error);
+    expect(warnings(events, "degraded-window-store-not-corrected")).toHaveLength(1);
+    const rows = store.db.query("SELECT verdict FROM mutants").all() as Array<{ verdict: string }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.verdict === "error")).toBe(true);
+  });
+
+  test("R1227: when the teardown's write fails too, the session throws DegradedWindowNotStoredError", async () => {
+    const { report, events } = await renewStopSession((s) => {
+      s.markDegradedWindow = () => {
+        throw new Error("disk full");
+      };
+    });
+    expect(report).toBeInstanceOf(orchestratorModule.DegradedWindowNotStoredError);
+    expect((report as Error).message).toContain("do not --resume run");
+    expect(warnings(events, "degraded-window-store-not-corrected")).toHaveLength(1);
   });
 
   /**

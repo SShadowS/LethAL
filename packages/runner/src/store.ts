@@ -209,6 +209,9 @@ export interface MutantVerdictRow {
   /** R193 — see `MutantRow.identityOrdinal`. A pre-R193 row reads back 0: its twins, if it had
    *  any, then still collide on resume and are re-run, which is the cheap direction. */
   readonly identityOrdinal: number;
+  /** R1227: recorded after the run's degraded window began, so a stranded note on it is not a stranded
+   *  key and `--resume` re-runs it. */
+  readonly inDegradedWindow?: true;
   readonly verdict: MutantVerdict;
   readonly killingTest?: string;
   readonly failureNote?: string;
@@ -543,9 +546,13 @@ function parseTestNarrowing(value: string | null, runId: number): TestNarrowing 
 
 /** Verdicts `invalidateBatch` leaves as they are (and so does the R513 read-time rewrite). */
 const INVALIDATION_KEEPS_SQL = "('error', 'known-survivor')";
-/** R513: a row of a lost batch reads as `invalidateBatch` would have rewritten it. `m` is the
+/** R1227: a row recorded after the run's degraded window began (`degraded_windows`). `m` is the
  *  mutants alias. */
-const EFFECTIVE_VERDICT_SQL = `CASE WHEN m.verdict NOT IN ${INVALIDATION_KEEPS_SQL} AND EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) THEN 'error' ELSE m.verdict END`;
+const IN_DEGRADED_WINDOW_SQL =
+  "EXISTS (SELECT 1 FROM degraded_windows w WHERE w.run_id = m.run_id AND m.id > w.after_mutant_id AND COALESCE(m.carried, 0) = 0)";
+/** R513: a row of a lost batch (R1227: or of a degraded window) reads as `invalidateBatch` would
+ *  have rewritten it. `m` is the mutants alias. */
+const EFFECTIVE_VERDICT_SQL = `CASE WHEN m.verdict NOT IN ${INVALIDATION_KEEPS_SQL} AND (EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) OR ${IN_DEGRADED_WINDOW_SQL}) THEN 'error' ELSE m.verdict END`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
@@ -659,6 +666,17 @@ CREATE TABLE IF NOT EXISTS lost_batches (
   note TEXT NOT NULL,
   recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (run_id, batch_index)
+);
+-- R1227: the BC tier stopped answering lease renews. Rows of the run with id > after_mutant_id were
+-- measured while it was degraded: every resume reader reads them as error (EFFECTIVE_VERDICT_SQL),
+-- and the session's teardown rewrites them. One window per run, the first wins. A whole new TABLE
+-- needs no migrate() step.
+CREATE TABLE IF NOT EXISTS degraded_windows (
+  run_id INTEGER NOT NULL PRIMARY KEY REFERENCES runs(id),
+  after_mutant_id INTEGER NOT NULL,
+  after_snapshot_id INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 -- PR-66: which stored snapshot a run's batch REUSED (it stores none of its own). Read only by the
 -- resume warning for a changed tree. A whole new TABLE needs no migrate() step.
@@ -1631,7 +1649,9 @@ export class ResultsStore {
       .query(
         `SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major,
            ${EFFECTIVE_VERDICT_SQL} AS verdict, m.verdict AS stored_verdict,
-           (SELECT l.note FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index) AS lost_note,
+           COALESCE((SELECT l.note FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index),
+             (SELECT w.note FROM degraded_windows w WHERE w.run_id = m.run_id)) AS lost_note,
+           ${IN_DEGRADED_WINDOW_SQL} AS in_window,
            killing_test, failure_note, killing_test_failure, kill_position, stop_evidence, kill_reproduced,
            reproduced_failure, duration_ms, runner, covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash
          FROM mutants m WHERE m.run_id = ?`,
@@ -1639,6 +1659,7 @@ export class ResultsStore {
       .all(runId) as Array<{
       stored_verdict: string;
       lost_note: string | null;
+      in_window: number;
       file: string;
       member_hash: string | null;
       ast_hash: string;
@@ -1679,6 +1700,7 @@ export class ResultsStore {
         identityOrdinal: r.identity_ordinal ?? 0,
         file: r.file,
         memberHash: r.member_hash,
+        ...(r.in_window !== 0 ? { inDegradedWindow: true as const } : {}),
         ...(r.covering_tests !== null
           ? { coveringTests: this.parseCoveringTests(r.covering_tests, r) }
           : {}),
@@ -2172,7 +2194,7 @@ export class ResultsStore {
     /** PR-21 (L5): the backend's own baseline state (`ExecutionBackend.baselineState`). */
     readonly backendState?: unknown;
   }): void {
-    this.db
+    const inserted = this.db
       .query(
         `INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload, backend_state, payload_format)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -2186,6 +2208,7 @@ export class ResultsStore {
         input.backendState === undefined ? null : JSON.stringify(input.backendState),
         SNAPSHOT_PAYLOAD_FORMAT,
       );
+    this.#markOf(input.runId).snapshotId = Number(inserted.lastInsertRowid);
   }
 
   /**
@@ -2248,6 +2271,7 @@ export class ResultsStore {
              AND COALESCE(test_app_hash, '') NOT LIKE '%|pending')
            AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
            AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
+           AND NOT EXISTS (SELECT 1 FROM degraded_windows d WHERE d.run_id = baseline_snapshots.run_id AND baseline_snapshots.id > d.after_snapshot_id)
          ORDER BY id DESC LIMIT 1`,
       )
       .get(
@@ -2326,6 +2350,7 @@ export class ResultsStore {
                AND r.from_run_id = baseline_snapshots.run_id AND r.from_batch_index = baseline_snapshots.batch_index))
            AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
            AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
+           AND NOT EXISTS (SELECT 1 FROM degraded_windows d WHERE d.run_id = baseline_snapshots.run_id AND baseline_snapshots.id > d.after_snapshot_id)
          ORDER BY (run_id = ?1) DESC, id DESC LIMIT 1`,
       )
       .get(runId, batchIndex) as { batch_hash: string; run_id: number } | null;
@@ -2373,7 +2398,27 @@ export class ResultsStore {
         row.carried === undefined ? null : row.carried ? 1 : 0,
         row.memberHash ?? null,
       ) as { id: number };
+    this.#markOf(runId).mutantId = r.id;
     return r.id;
+  }
+
+  /** R1227: per run, the last mutant row id and baseline snapshot id this process recorded. */
+  readonly #marks = new Map<number, { mutantId: number; snapshotId: number }>();
+  #markOf(runId: number): { mutantId: number; snapshotId: number } {
+    let m = this.#marks.get(runId);
+    if (m === undefined) {
+      m = { mutantId: 0, snapshotId: 0 };
+      this.#marks.set(runId, m);
+    }
+    return m;
+  }
+
+  /** R1227: where the run stands: its last recorded mutant row id and baseline snapshot id (0 when it
+   *  has none). Read from memory at each renew tick: no I/O, cannot throw. Every writer of both goes
+   *  through `recordMutant` and `recordBaselineSnapshot`. */
+  windowMark(runId: number): { mutantId: number; snapshotId: number } {
+    const { mutantId, snapshotId } = this.#markOf(runId);
+    return { mutantId, snapshotId };
   }
 
   /**
@@ -2428,6 +2473,39 @@ export class ResultsStore {
     this.db
       .query("INSERT OR IGNORE INTO lost_batches (run_id, batch_index, note) VALUES (?, ?, ?)")
       .run(runId, batchIndex, note);
+  }
+
+  /**
+   * R1227: the run's tier stopped answering lease renews after mutant row `afterMutantId` (and
+   * baseline snapshot `afterSnapshotId`). Writes the window (the first wins) and rewrites the rows
+   * after it as `invalidateBatch` does, except carried rows (measured by another run). Later baseline
+   * snapshots are refused at read time (`findBaselineSnapshot`). Safe to call again: the teardown does,
+   * for a row recorded after the stop. One transaction.
+   */
+  markDegradedWindow(
+    runId: number,
+    afterMutantId: number,
+    afterSnapshotId: number,
+    note: string,
+  ): void {
+    this.db.transaction(() => {
+      this.db
+        .query(
+          "INSERT OR IGNORE INTO degraded_windows (run_id, after_mutant_id, after_snapshot_id, note) VALUES (?, ?, ?, ?)",
+        )
+        .run(runId, afterMutantId, afterSnapshotId, note);
+      const w = this.db
+        .query("SELECT after_mutant_id, note FROM degraded_windows WHERE run_id = ?")
+        .get(runId) as { after_mutant_id: number; note: string };
+      this.db
+        .query(
+          `UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL,
+             killing_test_failure = NULL, kill_position = NULL, stop_evidence = NULL,
+             kill_reproduced = NULL, reproduced_failure = NULL
+           WHERE run_id = ? AND id > ? AND COALESCE(carried, 0) = 0 AND verdict NOT IN ${INVALIDATION_KEEPS_SQL}`,
+        )
+        .run(w.note, runId, w.after_mutant_id);
+    })();
   }
 
   /**
