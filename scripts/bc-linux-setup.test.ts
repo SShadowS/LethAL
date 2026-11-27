@@ -121,9 +121,9 @@ describe("continiaDependencyProblems", () => {
     expect(() => parseArgs(["--server", "bc6"])).toThrow(/usage/);
   });
 
-  // PR-462: bc4 stays on PR-309's 1.0.0.29 while DOTests' pinned series runs; the rest get 1.0.0.30.
-  test("PR-462: bc4 keeps its own control pin (1.0.0.29); bc1-bc3 get CONTROL_APP (1.0.0.30)", () => {
-    expect(CONTROL_APP).toContain("1.0.0.30");
+  // PR-462/PR-478: bc4 stays on PR-309's 1.0.0.29 while DOTests' pinned series runs; the rest get CONTROL_APP (1.0.0.31).
+  test("PR-478: bc4 keeps its own control pin (1.0.0.29); bc1-bc3 get CONTROL_APP (1.0.0.31)", () => {
+    expect(CONTROL_APP).toContain("1.0.0.31");
     expect(controlFor("bc4")).toEqual({
       path: "/coord/handoff/PR-309/control/LethAL_LethAL Control_1.0.0.29.app",
       sha256: "545efbeaad6d050ea768a257d20a7612c22cd17c3d25567b0b7ab4d5726df578",
