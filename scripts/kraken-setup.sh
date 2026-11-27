@@ -10,23 +10,29 @@ mkdir -p "$src"
 clone() { # <name> <url>
   if [ ! -d "$src/$1/.git" ]; then git clone --quiet "$2" "$src/$1"; else git -C "$src/$1" pull --quiet --ff-only || true; fi
 }
-# PR-484: install a sibling's dependencies (run in its folder). With a lockfile, `npm ci` whenever its sha256 differs
-# from the stamp the last install left in node_modules (a pull that bumps a dependency is then installed; 2026-11-27,
-# business-central-mcp kept bc-toolbox-envelope 0.1 and failed tsc). A failed `npm ci` fails setup and writes no stamp.
-# Without a lockfile: `npm install` only when node_modules is missing, as before.
+# PR-484: install a sibling's dependencies (run in its folder) whenever its TRACKED dependency files (package.json,
+# package-lock.json, bun.lock, as git tracks them) differ from the stamp the last install left in node_modules, so a
+# pull that bumps a dependency is installed (2026-11-27: business-central-mcp kept bc-toolbox-envelope 0.1 and failed
+# tsc). `npm ci` when package-lock.json is tracked; else `npm install` (bc-dev-mcp and pi-mcp track bun.lock, and their
+# package-lock.json is an untracked npm leftover). Every failure fails setup by name and writes no stamp.
+# NOTE: deps runs inside an && list, where `set -e` does not stop on a failure, so every step checks its own status.
 deps() {
-  if [ -f package-lock.json ]; then
-    local want have
-    want=$(sha256sum package-lock.json | cut -c1-64)
-    have=$(cat node_modules/.kraken-lock.sha256 2>/dev/null || true)
-    if [ ! -d node_modules ] || [ "$want" != "$have" ]; then
-      # explicit: deps runs inside an && list, where `set -e` does not stop on a failure
-      npm ci --silent || return 1
-      echo "$want" > node_modules/.kraken-lock.sha256
-    fi
-  else
-    [ -d node_modules ] || npm install --silent || return 1
+  local files want have
+  files=$(git ls-files package.json package-lock.json bun.lock) || { echo "kraken-setup: git ls-files failed in $PWD" >&2; return 1; }
+  if [ -z "$files" ]; then
+    [ -d node_modules ] || npm install --loglevel=error || { echo "kraken-setup: npm install failed in $PWD" >&2; return 1; }
+    return 0
   fi
+  want=$(git ls-files -z package.json package-lock.json bun.lock | xargs -0 cat | sha256sum | cut -c1-64) || { echo "kraken-setup: hashing the dependency files failed in $PWD" >&2; return 1; }
+  [[ $want =~ ^[0-9a-f]{64}$ ]] || { echo "kraken-setup: the dependency hash in $PWD is not a sha256" >&2; return 1; }
+  have=$(cat node_modules/.kraken-deps.sha256 2>/dev/null || true)
+  [ "$want" = "$have" ] && return 0
+  if git ls-files --error-unmatch package-lock.json >/dev/null 2>&1; then
+    npm ci --loglevel=error || { echo "kraken-setup: npm ci failed in $PWD" >&2; return 1; }
+  else
+    npm install --loglevel=error || { echo "kraken-setup: npm install failed in $PWD" >&2; return 1; }
+  fi
+  echo "$want" > node_modules/.kraken-deps.sha256
 }
 # four worktrees run setup at once and share $src: one at a time through the siblings
 (
