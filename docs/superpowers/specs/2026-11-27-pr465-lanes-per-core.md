@@ -1,75 +1,101 @@
-# PR-465 (R1232): lanes per core against entries per hour on DO — pre-commitment r1 (measure only)
+# PR-465 (R1232): lanes per core against entries per hour on DO — pre-commitment r2 (measure only)
 
 lethal-code, 2026-11-27. Written before any run. Nothing is built; changing a default is a separate task.
+- **r1** was 18b298b47.
+- **r2** answers its spec-adversary (B1-B3, S1-S5, N1-N3) and replaces r1 entirely.
 
 ## The question
 
 - PR-463 found that the login is CPU. On server1, the same work's CPU time grew up to 3× as the cores' busy share
   rose.
-- So more runnable threads than cores may LOSE throughput, not only share it.
-- How many lanes per core gives DO the most entries per hour?
+- Do more lanes per core LOSE throughput, not only share it? And what `--workers` should DO default to?
 
-## What a "lane" is in LethAL today (read from the code)
+## What a lane is (B1, read from al-runner's source and checked by a guard)
 
-- `--workers N` starts N al-runner `serve` daemons. LethAL does not set `AL_TEST_THREADS`, so each daemon runs as many
-  test threads as it has pinned cores (`available_parallelism`).
-- A request's codeunits spread over those threads.
-- So a real DO run has up to about N × cores runnable test threads. PR-439 and c5 ran 3 workers on 12 cores.
+- LethAL's entries each name ONE codeunit test. al-runner runs one pass per entry, one after another; a pass with one
+  unit runs on the calling thread.
+- So a serve daemon running entries keeps about ONE test thread busy, whatever `AL_TEST_THREADS` or the core count
+  says. **A lane is a daemon.**
+- **The premise, corrected (N1):** c5's capture ran `--workers 8` on `taskset -c 0-11`: 8 lanes on 12 logical CPUs (6
+  P-cores with hyperthreads), 0.67 lanes per logical CPU. The oversubscription in PR-439 (load1 89) came from OTHER
+  jobs on the host, not from LethAL's own lanes.
 
-## Arms (fixed core set: cores 12-16, 5 cores; everything at nice 10)
+## Cores (B3)
 
-- **W1:** 1 daemon at default threads (5): up to 5 runnable threads, 1 per core.
-- **W2:** 2 daemons at default threads: up to 10, 2 per core.
-- **W3:** 3 daemons at default threads: up to 15, 3 per core (c5's shape: 3 per core).
-- **Order:** W1, W2, W3, W3, W2, W1, interleaved so slow drift brackets every arm.
-  - Each run starts its daemons fresh and sends one warm-up request per daemon, outside the timing.
-- **Memory:** about 3.5 GiB per daemon, about 11 GiB at W3. Each run holds one heavy slot of `--peak 12`.
+- **The arms run on ONE P-core: logical CPUs 1 and 2** (hyperthread siblings, 5.1 GHz), the kind of core a DO run
+  uses.
+  - Sharing a hyperthread is part of what is measured.
+  - The L3 cache is shared with the other P-cores, so it cannot be isolated: the outside load on 0-11 is named.
+- Everything runs at nice 10.
 
-## The fixed entry set
+## Arms
 
-- The first 30 requests of PR-453's captured life 1905189 that carry no kill-pair (`#`) entry, with every captured
-  field passed through and the resources as captured.
-- **App:** today's staging of DO with today's selector. Its mutation set must equal PR-458's staging (compared on
-  the `mutation-set-generated` event), else VOID.
-- **The queue:** the requests go to one shared queue, and each daemon takes the next request when it is free (as
-  LethAL's parallel queue does). Replay is off, as in the life.
+- **W1, W2, W4:** 1, 2 and 4 daemons on CPUs 1-2.
+  - That is 0.5, 1 and 2 lanes per logical CPU (c5 ran 0.67).
+  - Memory: about 3.5 GiB per daemon, about 14 GiB at W4. Each run holds one heavy slot of `--peak 15`.
+- **Order:** W1, W2, W4, W4, W2, W1.
 
-## Measured per run
+## The work, the SAME per lane (S1)
 
-- **Makespan:** the wall time from the first timed request sent to the last answered. Entries per hour (EPH) =
-  entries / makespan.
-- **Rows:** md5 of each request's sorted rows. They must be equal across all six runs, which proves the same work.
-- **Counters:** `perf stat -e instructions:u,cycles:u` over every daemon pid for the makespan (core + atom summed).
-  - IPC = instructions / cycles;
-  - instructions per entry and cycles per entry.
+- **The set:** the first requests of PR-453's captured life 1905189 that carry no kill-pair (`#`) entry, in capture
+  order, until their entries sum to ≥ 600.
+  - Every captured field is passed through; resources as captured; replay off.
+- **The order:** every lane runs that whole set once, starting at a rotated offset (lane i starts at request
+  ⌊i × K / W⌋ of K and wraps).
+  - So all lanes are busy for the same work, concurrent lanes run different requests, and there is no shared-queue
+    tail.
+- **EPH** = W × (the set's entries) / makespan. The makespan runs from the timed start to the LAST lane's end. Each
+  lane's end time is reported. The spread between the first and last lane end bounds the tail.
+- **The claim's scope (S2):** "daemons serving fixed captured request shapes (8-lane split prefetch)". W1 here is NOT
+  `--workers 1`, whose requests are shaped differently.
+
+## Cache and warm-up (S3)
+
+- The daemons share one `ALRUNNER_CACHE`, pre-filled by staging.
+- Each run starts its daemons and warms them up ONE AFTER ANOTHER (one NONE request each), before the timed start.
+- The cache directory's listing (names, sizes) is hashed at the timed start and end. A change flags the run.
+
+## Measured per run (S4, S5)
+
+- **Counters:** each daemon is started under `perf stat -e instructions:u,cycles:u --delay -1 --control fifo:…`,
+  enabled at the timed start and disabled at the end.
+  - perf reports at daemon exit, so threads that ended are included.
+  - The run is VOID if perf's running share is below 100%.
+  - The run is VOID if cpu_atom's counts are above 1% of cpu_core's (a thread ran outside the P-core).
+  - IPC = Σ instructions / Σ cycles; instructions per entry; cycles per entry.
+- **Lane-thread guard (B1):** every daemon's threads' on-CPU time over the window comes from schedstat.
+  - The run is VOID if any daemon has more than one thread with ≥ 20% of that daemon's on-CPU time.
+- **Rows:** md5 of each request's sorted rows. They must be equal for the same request in every lane and run.
 - **Outside load:**
-  - the busy share of cores 12-16 from /proc/stat, minus the daemons' own CPU (utime + stime) = OTHER processes'
-    share;
+  - the busy share of CPUs 1-2 minus the daemons' own CPU;
+  - the busy share of the other P-cores (0, 3-11);
   - host load1 at start and end.
-- **Tail:** the time from the last-but-one daemon going idle to the end, reported. A long tail lowers W2's and W3's
-  EPH unfairly.
 
 ## Claim rules (pre-committed)
 
-- **The work is the same:** rows are equal across the runs, and instructions per entry are within ±3% across arms.
-  If either fails, that arm is VOID.
-- **"Wk beats Wj":**
-  - BOTH runs of Wk have a higher EPH than BOTH runs of Wj;
-  - the median gain is ≥ 5%.
-  - Otherwise: "no difference shown".
-- **IPC inflation shown:**
-  - W3's IPC is ≥ 15% below W1's in both pairs;
-  - cycles per entry rise by at least as much.
-- **Outside load:**
-  - Each run is flagged if its OTHER busy share differs by > 0.15 from its arm's other run.
-  - A claim that rests on a flagged run is reported as "under load" and is not used for the recommendation.
-- **Recommendation:** the SMALLEST W whose median EPH is within 5% of the best arm's. Workers per core =
-  W / 5 cores × the default threads.
-  - If no arm differs by ≥ 5%, the recommendation is "no change shown; keep the current default".
-  - The tail is stated, and its effect is computed (EPH without the tail).
+- **The same work:** rows equal; instructions per entry within ±3% across arms. If either fails, the arm is VOID.
+- **"Wk beats Wj":** both runs of Wk have a higher EPH than both runs of Wj, AND the median gain is ≥ 5%. Otherwise
+  "no difference shown".
+- **IPC inflation shown:** W4's IPC is ≥ 15% below W1's in both pairs (N3: cycles per entry is reported, not a second
+  test).
+- **Outside load:** a run is flagged if the other P-cores' busy share differs by > 0.15 from its arm's other run. A
+  claim resting on a flagged run is reported "under load" and not used for the recommendation.
+- **The curve:** EPH and IPC against lanes per logical CPU (0.5, 1, 2).
+- **Recommendation (B2):**
+  - r* = the lanes per logical CPU of the SMALLEST arm whose median EPH is within 5% of the best arm's.
+  - `--workers` = r* × the logical CPUs of the run's affinity, capped at `MAX_V3_WORKERS` (8).
+  - If no arm differs by ≥ 5%: "no change shown".
+
+## Smoke first
+
+- One W2 pass on 2 requests, checked by hand before the real runs:
+  - perf counted both daemons, with a running share of 100% and cpu_atom ≈ 0;
+  - the thread guard reads one busy thread per daemon;
+  - the rows' md5 are equal across lanes;
+  - the cache-listing hash works.
 
 ## Not covered
 
-- Other core counts (the curve is for 5 cores only), real LethAL orchestration overhead, and the kill-pair confirm
+- Other P-core counts, real LethAL orchestration (queue, prefetch shapes per `--workers`), and the kill-pair confirm
   lane.
-- `AL_TEST_THREADS` below the core count is a second knob, not measured here.
+- E-cores: they are a different curve, and DO runs on P-cores.
