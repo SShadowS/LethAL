@@ -124,7 +124,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import { readFixtureConfig } from "./config-path";
-import { openFixtureStore } from "./fixture-store";
+import { holdFixtureStore, openFixtureStore } from "./fixture-store";
 import { ENVTOOL_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -421,6 +421,8 @@ async function main(): Promise<void> {
     `expected ${EXPECTED.totalMutantSites} mutant sites across the fixture, generated ${total}`,
   );
 
+  // R1241: hold the fixture's shared store before the environment tool provisions anything.
+  const hold = holdFixtureStore(join(PROJECT_DIR, "lethal.sqlite"));
   const scratch = await mkdtemp(join(tmpdir(), "lethal-itest-envtool-"));
   try {
     const report = await runOnce(scratch);
@@ -428,6 +430,7 @@ async function main(): Promise<void> {
     // Per-mutant regression guard against the committed baseline, keyed on semantic identity.
     await assertGateBaseline(report, BASELINE_PATH, "envtool itest");
   } finally {
+    hold.release();
     await rm(scratch, { recursive: true, force: true });
   }
 

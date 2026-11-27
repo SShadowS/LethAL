@@ -52,7 +52,7 @@ import {
   printItestTarget,
   readFixtureConfig,
 } from "./config-path";
-import { openFixtureStore } from "./fixture-store";
+import { holdFixtureStore, openFixtureStore } from "./fixture-store";
 import { TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -1844,6 +1844,8 @@ async function main(): Promise<void> {
   // R9: runs the session TWICE and asserts verdict-identity, matching itest:bcdev/itest:alrunner
   // — a single run left cross-run nondeterminism here indistinguishable from a confusing
   // per-mutant baseline mismatch instead of an explicit determinism failure.
+  // R1241: hold the fixture's shared store for BOTH legs, before either deploys.
+  const hold = holdFixtureStore(join(PROJECT_DIR, "lethal.sqlite"));
   const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-tables-a-"));
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-tables-b-"));
   try {
@@ -1912,6 +1914,7 @@ async function main(): Promise<void> {
         "confusing per-mutant baseline mismatch",
     );
   } finally {
+    hold.release();
     await rm(scratchA, { recursive: true, force: true });
     await rm(scratchB, { recursive: true, force: true });
   }

@@ -47,7 +47,7 @@ import {
   printItestTarget,
   readFixtureConfig,
 } from "./config-path";
-import { openFixtureStore } from "./fixture-store";
+import { holdFixtureStore, openFixtureStore } from "./fixture-store";
 import { BCDEV_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -723,6 +723,8 @@ async function main(): Promise<void> {
     `expected ${EXPECTED.totalMutantSites} mutant sites across the fixture, generated ${total}`,
   );
 
+  // R1241: hold the fixture's shared store for BOTH legs, before either deploys.
+  const hold = holdFixtureStore(join(PROJECT_DIR, "lethal.sqlite"));
   const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-bcdev-a-"));
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-bcdev-b-"));
   try {
@@ -753,6 +755,7 @@ async function main(): Promise<void> {
     // against the artifact scratchB just deployed, before the scratch dirs are cleaned up.
     await runProtocolInvariantProbes(second);
   } finally {
+    hold.release();
     await rm(scratchA, { recursive: true, force: true });
     await rm(scratchB, { recursive: true, force: true });
   }
