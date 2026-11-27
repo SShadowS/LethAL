@@ -26,7 +26,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import type { SessionReport } from "../packages/runner/src/report";
-import { resolveKiller, siteKey } from "./bc-v3-join.ts";
+import { resolveKiller, scoredVerdict, siteKey } from "./bc-v3-join.ts";
 import { loadReport } from "./report-summary.ts";
 
 export interface Family {
@@ -373,7 +373,7 @@ export function costOf(
   };
   const v3Verdict = new Map<string, string>();
   for (const m of v3.mutants as M[]) {
-    v3Verdict.set(siteKey(m), m.verdict);
+    v3Verdict.set(siteKey(m), scoredVerdict(m.verdict));
     if (m.verdict !== "error") continue;
     const note = m.failureNote ?? "";
     const cascade = CASCADE.exec(note);
@@ -394,7 +394,7 @@ export function costOf(
       joined++;
       const covering = m.coveringTests ?? [];
       // a kill is LOST only when v3 did not kill the mutant at all (another test may still kill it)
-      if (m.verdict === "killed" && v !== "killed") {
+      if (scoredVerdict(m.verdict) === "killed" && v !== "killed") {
         const f = testFamily.get(resolveKiller(m.killingTest ?? "", covering));
         if (f !== undefined) of(f).killsLost++;
       }
