@@ -297,6 +297,14 @@ const STDERR_KEEP_BYTES = 64 * 1024;
 /** How long `close()` waits for the shutdown acknowledgement before killing the process. */
 const SHUTDOWN_REPLY_WAIT_MS = 500;
 
+/**
+ * R1233 (PR-470, al-runner #9232): after the shutdown reply, how long `close()` lets the daemon exit on
+ * its own before SIGTERM. serve writes its workspace cache (#8446) after it answers, and a SIGTERM right
+ * after the reply drops that write. Measured on DO (the largest workspace run here; PR-470's probe): 26
+ * closes, every one exited by itself 2-859 ms after its reply (median 258). About 6 times the worst.
+ */
+export const SHUTDOWN_EXIT_WAIT_MS = 5_000;
+
 export class AlRunnerServer {
   private proc: ServerProcessHandle | undefined;
   /** R952: the running child's pid (undefined before `start` or in a fake without one). */
@@ -320,6 +328,8 @@ export class AlRunnerServer {
   /** R807: refuse a summary that reports a seed other than the pinned one. O1's sensitivity daemon
    *  (variable absent) turns this off; nothing else does. */
   enforceRunSeed = true;
+  /** R1233: see `SHUTDOWN_EXIT_WAIT_MS`. Only a test lowers it. */
+  shutdownExitWaitMs = SHUTDOWN_EXIT_WAIT_MS;
   /** R807: the seed and its source the last summary reported; absent when it reported none. */
   lastRunSeed: { readonly seed: unknown; readonly seedSource: unknown } | undefined;
 
@@ -623,6 +633,7 @@ export class AlRunnerServer {
   async close(): Promise<void> {
     const proc = this.proc;
     if (proc === undefined) return;
+    let answered = false;
     try {
       proc.write(`${JSON.stringify({ command: "shutdown" })}\n`);
       // SHORT, and the shortness is the point. The schema says the server writes its response and
@@ -630,20 +641,44 @@ export class AlRunnerServer {
       // below rather than waited on. A generous wait here would stall every teardown, including
       // the teardown on an error path where the daemon is by definition not answering, on the way
       // to reporting the real failure.
-      await this.stdout?.next(SHUTDOWN_REPLY_WAIT_MS);
+      const outcome = await this.stdout?.next(SHUTDOWN_REPLY_WAIT_MS);
+      answered = outcome !== undefined && outcome.kind !== "timeout";
     } catch {
       // Already gone. Killing below is still correct.
     }
-    await this.terminate();
+    // R1233 (al-runner #9232): a daemon that answered is leaving; let it finish its workspace-cache
+    // write and exit by itself, bounded. Only one still running past the bound is signalled.
+    const exited = answered && (await this.exitWithin(proc, this.shutdownExitWaitMs));
+    await this.terminate(exited);
   }
 
-  /** Kills the process (and with it al-runner's .NET sidecar) and reaps it; `close()`'s tail, and R895's cut. */
-  private async terminate(): Promise<void> {
+  /** R1233: true when `proc` exits within `ms`; false at the bound, or when it cannot be awaited. */
+  private async exitWithin(proc: ServerProcessHandle, ms: number): Promise<boolean> {
+    if (proc.wait === undefined) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        proc.wait().then(
+          () => true,
+          () => true,
+        ),
+        new Promise<boolean>((r) => {
+          timer = setTimeout(() => r(false), ms);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /** Kills the process (and with it al-runner's .NET sidecar) and reaps it; `close()`'s tail, and R895's cut.
+   *  R1233: `exited` (the process already exited by itself) skips the signal; the reap and drain still run. */
+  private async terminate(exited = false): Promise<void> {
     const proc = this.proc;
     if (proc === undefined) return;
     this.stdout?.cancel();
     try {
-      proc.kill();
+      if (!exited) proc.kill();
     } catch {
       // Already exited.
     }
