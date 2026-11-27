@@ -2,6 +2,16 @@
 
 lethal-code, 2026-11-27. Written before code. Method: PR-83/PR-87's (`scripts/refusal-family.ts`).
 
+## r2 (during the build, recorded after the review; overrides r1 where they differ)
+
+- **No DeleteAll.** Cells count their OWN key range instead. A DeleteAll is a write, and a write before `Codeunit.Run`'s
+  return value is used changes what BC does.
+- **Two cells DO Commit:** asserterror after a Commit, and Codeunit.Run after a Commit.
+  - Precedent: Y2_XML's cells committed on bc2. The standing yes covers invented probes on a leased server; PR-200's
+    breakage came from creating a company.
+  - Their rows stay committed, so the app is re-run only after uninstalling it with its data.
+- The result, and what the cells do not reach, are in R1236.
+
 ## The family `errors-temp`
 - **Where:** appended to FAMILIES (BC-check number 29). Cell i is codeunit 51001+i, `TestPermissions = Disabled`.
 - **Support objects:**
