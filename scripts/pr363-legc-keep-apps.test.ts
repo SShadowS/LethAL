@@ -55,6 +55,8 @@ const FULL_APP_SHA256: Readonly<Record<string, string>> = {
   "errors-temp": "177c7b36385a73c844a7f61345ba5789558af1184a53257507e6555376e52d88",
   // PR-488: the app bc1 and edge-e5176a9fd ran (the emitted AL equals /coord/handoff/PR-488/bc-check/src)
   "numbers-text": "d8795712500ecf537353c67485c72f1c77a20d550eb995be510eeb2b27d683f6",
+  // PR-489: the app bc1 and edge-e5176a9fd ran (the emitted AL equals /coord/handoff/PR-489/bc-check/src)
+  "io-streams": "eec477a3eb97f38e6ba4e42dddb8f1f701257b62d48e79cd910b2ae3669c5dae",
 };
 
 describe("PR-363: emitApp's subset option", () => {
