@@ -26,9 +26,9 @@ import type { BoundArtifact, TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
 import {
   BcDevAloneUnsupportedError,
+  NO_RESULT_FOR_METHOD,
   PublishFailedError,
   BcDevMcpBackend as RealBcDevMcpBackend,
-  NO_RESULT_FOR_METHOD,
   controlLeftoverWarning,
 } from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
@@ -2198,6 +2198,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
         appPath,
         sha256: hashPackage(NEW),
         packageHash: hashPackage(NEW),
+        identity: `package:${hashPackage(NEW)}`,
         appId: TESTS_APP_ID,
         name: "LethAL Sandbox Tests",
         publisher: "LethAL",
@@ -2280,6 +2281,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
       appPath: "C:/unused/x.app",
       sha256: "0".repeat(64),
       packageHash: "0".repeat(64),
+      identity: `package:${"0".repeat(64)}`,
       appId: "x",
       name: "x",
       publisher: "x",

@@ -12,10 +12,12 @@ import {
   hashTestDir,
   snapshotApplies,
   testAppHashFor,
+  testAppReadFor,
 } from "../src/baseline-snapshot";
 import type { BaselineSnapshot } from "../src/baseline-snapshot";
 import { ResultsStore } from "../src/store";
 import { ProjectSymlinkRefusedError } from "../src/walk";
+import { navxPackage } from "./helpers/navx-package";
 import { scratchDirs } from "./helpers/scratch";
 import { HTTP_500 } from "./helpers/unread";
 
@@ -277,12 +279,18 @@ describe("hashPackage and the NAVX package id (R-920)", () => {
     expect(p).toEqual(copy);
   });
   test("the drift guard's identity: a fresh id per read is stable, a changed payload is not", async () => {
+    // PR-476: a NAVX-shaped package is walked as a zip now, so the payload is a real zip entry.
+    const pkg = (id: number, payload: string) =>
+      new Uint8Array(navxPackage({ id, entries: [["src/a.al", payload]] }));
     let n = 0;
-    const fresh = () => testAppHashFor(async () => navx(++n, "same"), "/nonexistent");
-    expect(await fresh()).toBe(await fresh());
-    const a = await testAppHashFor(async () => navx(1, "v1"), "/nonexistent");
-    const b = await testAppHashFor(async () => navx(1, "v2"), "/nonexistent");
-    expect(a).not.toBe(b);
+    const fresh = () => testAppReadFor(async () => pkg(++n, "same"), "/nonexistent");
+    expect(await fresh()).toEqual(await fresh());
+    const a = await testAppReadFor(async () => pkg(1, "v1"), "/nonexistent");
+    const b = await testAppReadFor(async () => pkg(1, "v2"), "/nonexistent");
+    expect(a).not.toEqual(b);
+    const identity = (a as { identity: string }).identity;
+    expect(identity).toMatch(/^package:c2:[0-9a-f]{64}$/);
+    expect(await testAppHashFor(async () => pkg(1, "v1"), "/nonexistent")).toBe(identity);
   });
 });
 

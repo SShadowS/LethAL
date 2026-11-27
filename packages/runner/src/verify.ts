@@ -2001,8 +2001,9 @@ export async function runVerify(
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The
         // publish is accepted only when the server's package hashes to it, so it is the key a later
-        // bcdev session would compute (`package:` + that hash).
-        testAppHash: `package:${compiled.packageHash}`,
+        // bcdev session would compute: `appContentIdentity` of the same bytes (PR-476), by the shared
+        // function, never `package:${hex}` built by hand.
+        testAppHash: compiled.identity,
         projectPath: source.projectPath,
         backend: "lethal-verify",
         appVersion: "0.0.0.0",
