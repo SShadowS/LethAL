@@ -169,6 +169,7 @@ function verdictRow(m: MutantManifestEntry, verdict: MutantVerdict): MutantVerdi
     operatorMajor: k.operatorMajor,
     file: m.file,
     identityOrdinal: k.ordinal,
+    batchIndex: 0,
     verdict,
     durationMs: 1,
     memberHash: m.memberHash ?? null,

@@ -295,7 +295,9 @@ export type Caveat =
   // R1131: at least one row was not scored because its start WorkDate moved from the batch's baseline.
   | "workdate-changed"
   // PR-381 (R1197), PR-387: survivors in an al-runner-v3 or bcdev run with tests not run at baseline.
-  | "survivors-beside-unrun-tests";
+  | "survivors-beside-unrun-tests"
+  // PR-456 (R1229): a survivor was carried across a server restart that lost the database.
+  | "resumed-across-restart";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -845,6 +847,23 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "no score changed. A test that ran and failed on its own is not counted here: it is red on BC " +
       "too.",
     basis: "R1197",
+  },
+  "resumed-across-restart": {
+    meaning:
+      "At least one SURVIVOR in this report was carried across a server restart that lost the " +
+      "database (the server's generation and database id both changed since the run it was measured in). " +
+      "That survivor was measured on the EARLIER database. Before it was carried, the apps were checked " +
+      "(the test app, its dependencies and the source, as for any resume) and its batch's fresh baseline " +
+      "was compared with the earlier run's, test by test, outcome, start WorkDate and coverage, and was " +
+      "equal. That equality was checked on the UNMUTATED baseline only. Kills were not carried: they were " +
+      "re-run on the current database. Strands stay skipped, as on any resume.",
+    entailedNegative:
+      "Not a claim that the carried survivors are wrong, and not a reliability downgrade like " +
+      "`baseline-red`. It corrects the `resumed` caveat's remark that the exposure is the same as every " +
+      "run's: here the data under the survivors may have changed in ways no baseline test observes (a " +
+      "value that decides a branch inside a procedure, or rows left over since the earlier setup). A " +
+      "survivor can only hide a kill that way, never invent one; re-running without `--resume` removes it.",
+    basis: "R1229",
   },
 };
 
@@ -3602,6 +3621,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if ((input.groupedCalls ?? 0) > 0) caveats.push("session-warm");
   // See CAVEAT_INTERPRETATIONS.resumed for what this caveat means to a reader.
   if (input.resumedFrom !== undefined) caveats.push("resumed");
+  // PR-456: derived from the carried ROWS (`mutant-carried` with `acrossRestart`), never the warning code.
+  if (input.carriedAcrossRestart !== undefined) caveats.push("resumed-across-restart");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
   if (input.unplaceableCount > 0) caveats.push("attribution-unplaceable");
   // R72 — see CAVEAT_INTERPRETATIONS["platform-artifact-kills"]. Built from the mutant rows just
@@ -4507,6 +4528,12 @@ export function renderConsole(r: SessionReport): string {
           ? ` ${r.resumedFrom.skippedStranded} mutant(s) were NOT re-run: a prior run's execution of them could not be confirmed complete and stranded the tier, which is what a mutant that never terminates does every time — and it would block every mutant behind it. They are recorded as errors and excluded from the score, NOT scored as survived. Pass --retry-stranded to attempt them.`
           : ""
       }`,
+    );
+  }
+  // PR-456: survivors carried across a restart that lost the database were measured on the EARLIER database.
+  if (r.validity.caveats.includes("resumed-across-restart")) {
+    lines.push(
+      `RESUMED ACROSS A RESTART: at least one survivor was measured on the database the server has since lost; its batch's baseline equalled the earlier run's, which was checked on the unmutated baseline only. Kills were re-run (validity.caveats "resumed-across-restart", R1229).`,
     );
   }
   // PR-247: one line. It never says "remove": a rarely-killing test can be a mutant's only killer.

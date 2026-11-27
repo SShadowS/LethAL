@@ -335,6 +335,7 @@ function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
     operatorMajor: 1,
     file: "src/SandboxLogic.Codeunit.al",
     identityOrdinal: 0,
+    batchIndex: 0,
     verdict: "survived",
     durationMs: 42,
     memberHash: null,
@@ -1110,6 +1111,7 @@ describe("ResultsStore resume queries (R47)", () => {
         operatorMajor: 2,
         file: "f.al",
         identityOrdinal: 0,
+        batchIndex: 0,
         verdict: "killed",
         killingTest: "T",
         durationMs: 77,
@@ -5769,7 +5771,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(35);
+    expect(out.explainSchemaVersion).toBe(36);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {

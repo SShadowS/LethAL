@@ -28,6 +28,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`--resume` and `--resume-run` carry SURVIVORS across a BC restart that lost the database** (PR-456, R1229). Before,
+  R680 refused when the server generation changed. Now, when the generation AND the database id both changed, both runs
+  recorded an id and both ran on the SAME server (the same resource key), the resume goes on in restart mode. Every app
+  check still applies (test app, R496 dependencies, source). Each batch measures a fresh baseline (no saved baseline is
+  reused) and compares it, test by test, with the one the earlier run measured for the same instrumented source: outcome,
+  start WorkDate and the whole stored coverage map. Only an equal batch carries its `survived` rows. Kills and timeout
+  kills are re-run, with the earlier killer tried first (an ordering hint only). `known-survivor`, error, degraded-window,
+  lost-batch and unattested rows never carry, and a strand stays skipped. The report carries the new caveat
+  `resumed-across-restart` (explain schema v36; v35 stays frozen), a run that resumes such a run keeps it, and the
+  warning `resume-across-restart` names each batch's decision. A missing id on either side, or another server, refuses
+  as before. R959's and R1012's refusal is superseded for this case.
 - **A BC run leaves out test methods that write the Company table; `--keep-company-tests` runs them** (PR-212, R1113).
   Found by parse, in the method or one test-app procedure it calls. They are named in `excludedTests` (reason
   `company-write`), flagged `tests-narrowed`, and a warning `company-write-tests-left-out` lists each with its path and
