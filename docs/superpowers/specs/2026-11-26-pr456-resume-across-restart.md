@@ -27,6 +27,35 @@ lethal-code, 2026-11-26.
 - **(d) not yet measured.** No two stores share a batch hash with a stored baseline on both sides (email2 was paused
   before its snapshot). It runs on the next restart.
 
+## The live leg's pre-commitment (PR-468, 2026-11-27, written BEFORE the restart)
+
+- **Head and prior run:** PR-468 head 1f0027085 (all 11 legs and CI green).
+  - Prior run: `/coord/handoff/PR-468/live/store.sqlite`, run 1, a scoped `lethal run --backend bcdev` of
+    `fixtures/sandbox-app` on bc1.
+  - It was stopped by SIGTERM at 07:24:46Z after 11 scored, so it is UNFINISHED (R955).
+  - One batch (0), with its baseline snapshot stored.
+  - Scored before the stop: M0001-M0003 killed (IsOverBudget, killer OverBudgetDetected); M0004 and M0005 survived
+    (ClampPercent); M0021-M0026 no-coverage (Sandbox Pricing). The other 15 (M0006-M0020) were never scheduled.
+- **The steps:**
+  1. the owner restarts bc1 (a kraken `bc-restart` ask), which gives a new generation and a new database id;
+  2. `bc-linux-setup.ts --server bc1`;
+  3. a lease;
+  4. `lethal run … --resume-run 1` on the SAME store and config.
+- **Predicted, per mutant:**
+  - **Carried across the restart:** EXACTLY M0004 and M0005. The `resume-across-restart` event for batch 0 says
+    "carried 2 survivor(s)", and the report carries the `resumed-across-restart` caveat.
+  - **Re-run, killer seeded:** M0001, M0002 and M0003, each re-scored `killed`. A `killingTest`-only difference is
+    allowed (R197, D5).
+  - **No-coverage:** M0021-M0026 are recorded no-coverage; 0 are executed.
+  - **Fresh:** M0006-M0020 are scheduled and scored.
+  - **Every one of the 26 final verdicts** equals `packages/runner/itest/bcdev.baseline.json`'s (17 survived, 3
+    killed, 6 no-coverage).
+- **BLOCK if:**
+  - anything else carries;
+  - a kill carries;
+  - the batch's compare says "differs" (that would contradict probe (d); investigate before merge);
+  - any verdict differs from the frozen figures.
+
 ## r5 (PR-468's spec review against today's code; overrides r4 and r3 where they differ)
 
 1. **(BLOCK) Strands stay skipped, exactly as today (D1).** "The new branch" item 5 and the red test "a prior strand
