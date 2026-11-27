@@ -37,7 +37,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import { ResultsStore } from "../src/store";
+import type { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import {
   assertLaunchMatchesConfig,
@@ -47,6 +47,7 @@ import {
   printItestTarget,
   readFixtureConfig,
 } from "./config-path";
+import { openFixtureStore } from "./fixture-store";
 import { BCDEV_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -58,7 +59,7 @@ import {
   preflightObserve,
   settleThrown,
 } from "./gate-warnings";
-import { killReproductionFailures, latestRunId } from "./kill-reproduction";
+import { killReproductionFailures } from "./kill-reproduction";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { assertDirectTransportReach, assertReachEvidence } from "./reach-evidence";
 
@@ -267,7 +268,9 @@ async function runOnce(scratchRoot: string, leg: "first" | "second"): Promise<Ru
   // versions are clock-derived via reserveAppVersion (app-version.ts), so deleting
   // lethal.sqlite can no longer break publishing.
   const instrumentedDir = join(scratchRoot, "instrumented");
-  const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
+  // R1241: the fixture's store is SHARED by every gate in this worktree: hold it, and read only this session's run.
+  const fixture = openFixtureStore(join(PROJECT_DIR, "lethal.sqlite"));
+  const store = fixture.store;
   try {
     const warnings = collectWarnings();
     const report = await runSession({
@@ -300,13 +303,13 @@ async function runOnce(scratchRoot: string, leg: "first" | "second"): Promise<Ru
       throw e;
     });
     checkGateWarnings("bcdev", leg, warnings);
-    const runId = latestRunId(store);
+    const runId = fixture.ownRunId();
     const sessionLiveness = store.sessionIdLiveness(runId);
     // R582: the fixture's store is persistent, so the run id scopes the killer rows.
     const repro = killReproductionFailures("bcdev", report, store, runId);
     return { report, odataCfg, instrumentedDir, sessionLiveness, repro };
   } finally {
-    store.close();
+    fixture.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and
     // this script never exits, even on a fully successful run.
     await backend.close();

@@ -122,9 +122,9 @@ import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
-import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import { readFixtureConfig } from "./config-path";
+import { openFixtureStore } from "./fixture-store";
 import { ENVTOOL_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -260,7 +260,9 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
     const backend = await buildBackend(parsed, effectiveConfig, scratchRoot, deploy);
     // Persistent, NOT `:memory:` — historical run data (priorSurvivorKeys) is a supported
     // workflow, matching bcdev.itest.ts.
-    const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
+    // R1241: the fixture's store is SHARED by every gate in this worktree: hold it, and read only this session's run.
+    const fixture = openFixtureStore(join(PROJECT_DIR, "lethal.sqlite"));
+    const store = fixture.store;
     try {
       const warnings = collectWarnings();
       const report = await runSession({
@@ -290,11 +292,11 @@ async function runOnce(scratchRoot: string): Promise<SessionReport> {
       // R582 (UNMEASURED until the owner runs this gate): every kill was re-run under the
       // mutant. The fixture's store is persistent; the check reads only this run's rows. A re-run
       // on a hosted environment can score `session-reused`, the fail-safe direction.
-      assertKillsReproduced("envtool", report, store);
+      assertKillsReproduced("envtool", report, store, fixture.ownRunId());
       checkGateWarnings("envtool", "run", warnings);
       return report;
     } finally {
-      store.close();
+      fixture.close();
       // Without this the spawned bc-dev MCP child keeps the event loop alive and this script
       // never exits, even on a fully successful run.
       if (backend instanceof BcDevMcpBackend) await backend.close();
