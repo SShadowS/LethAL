@@ -852,6 +852,13 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     expect(page.match(/Reason: Text;/g)).toHaveLength(1);
     expect(page).toContain("Bound := State.BindClientSession(AttemptId, OpSeq, Reason);");
     expect(page).toContain("Ended := State.EndClientSession(AttemptId, OpSeq, Reason);");
+    // the page's Reason is shared across clicks, so each procedure must clear it first: a refusal then a success shows ""
+    for (const name of ["BindClientSession", "EndClientSession"]) {
+      const body = codeOnly(procedureBody(state, name)).replace(/\s+/g, " ");
+      const first = body.indexOf("begin");
+      expect(first).toBeGreaterThan(-1);
+      expect(body.indexOf("begin Reason := '';")).toBe(first);
+    }
   });
 
   test("TryRenew's fast path and no-shrink rule both cover client-run", () => {
