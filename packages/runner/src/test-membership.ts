@@ -149,6 +149,10 @@ export class TestAppRepublishedError extends Error {
  * be gone, so none of its verdicts is carried. `recorded` is `null` for a run that recorded none
  * (before R680, or a session with no lease). R969: not thrown when both runs recorded the same
  * database id (a `ForceResetLease` on a database that survived); the resume then carries.
+ * PR-456: nor when the generation AND the id both changed, both runs recorded an id and both ran on
+ * the same server tier: that is a restart that lost the database, and the resume carries SURVIVORS
+ * only, per batch, against an exact baseline compare. So this error is thrown for what is left: one
+ * side recorded no generation or no id, or the two runs ran on different servers.
  */
 export class ServerGenerationChangedError extends Error {
   readonly code = "server-generation-changed" as const;
@@ -158,7 +162,7 @@ export class ServerGenerationChangedError extends Error {
 
   constructor(flag: string, runId: number, recorded: string | null, current: string) {
     super(
-      `${flag}: run ${runId} ${recorded === null ? "has no server generation (none recorded)" : `recorded server generation ${recorded}`}, and the server now reports ${current}. The server was restarted or its lease force-reset since that run${recorded === null ? ", or the run predates R680" : ""}, so the apps and data its verdicts were measured against may be gone. None of its verdicts is carried (R680). What to do: if the server lost its database (an in-memory server restarted, or a new container), re-run its setup first, then drop the flag and run from scratch; if you ran force-reset-lease on a server whose database survived (for example after a host reboot left a lease operation open), a resume carries only when both runs recorded the same database id (R969), and here they did not (a different id, or one side recorded none, as every run before 1.0.0.26 did), so drop the flag and run from scratch as well. Either way the earlier run's report stays readable as a record.`,
+      `${flag}: run ${runId} ${recorded === null ? "has no server generation (none recorded)" : `recorded server generation ${recorded}`}, and the server now reports ${current}. The server was restarted or its lease force-reset since that run${recorded === null ? ", or the run predates R680" : ""}, so the apps and data its verdicts were measured against may be gone. None of its verdicts is carried (R680). What to do: if the server lost its database (an in-memory server restarted, or a new container), re-run its setup first, then drop the flag and run from scratch; if you ran force-reset-lease on a server whose database survived (for example after a host reboot left a lease operation open), a resume carries only when both runs recorded the same database id (R969), and here they did not (a different id, or one side recorded none, as every run before 1.0.0.26 did), so drop the flag and run from scratch as well. A restart that lost the database does NOT refuse when both runs recorded a database id and ran on the SAME server (PR-456): that resume carries survivors only, after each batch's fresh baseline compares equal to the earlier run's, and re-runs the kills. It refuses here because one side recorded no generation or no database id, or the two runs ran on different servers. Either way the earlier run's report stays readable as a record.`,
     );
     this.name = "ServerGenerationChangedError";
     this.flag = flag;

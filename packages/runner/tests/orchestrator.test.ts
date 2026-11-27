@@ -10950,6 +10950,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly unreadCause?: { readonly unread: string };
       /** R630 C7: the dependency `dep` publishes cannot be read back after the hook. */
       readonly depPostUnread?: boolean;
+      /** PR-456: backend members laid over the lease backend's (a run that kills, a dated baseline). */
+      readonly backendOver?: Partial<ExecutionBackend>;
     }
 
     async function envRun(o: EnvRun) {
@@ -11050,6 +11052,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
                 );
               },
             }),
+        ...o.backendOver,
       });
       const store = o.store ?? new ResultsStore(":memory:");
       // R618: --resume-run refuses a finished run; these resume their first run as an interrupted one.
@@ -11104,6 +11107,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         depsWarning: warningsOf("test-app-dependencies-unproven"),
         identityWarning: warningsOf("test-app-identity-unproven"),
         leaseResetWarning: warningsOf("resume-across-lease-reset"),
+        warningsOf,
+        events,
         knownSurvivors: (
           store.db
             .query(
@@ -11528,7 +11533,9 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           r.store.close();
         });
 
-        test("another database id across a changed generation refuses, as a lost database", async () => {
+        // PR-456 (superseding R959's refusal for this case): another database id on the SAME server is a
+        // restart that lost the database, so the resume goes on in restart mode, not as a lease reset.
+        test("another database id on the same server goes on in restart mode, not as a lease reset (PR-456)", async () => {
           const first = await priorWithId(D1);
           const r = await envRun({
             ...proven,
@@ -11537,6 +11544,22 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             dirs: first.dirs,
             store: first.store,
             extra: { resume: first.runId },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.leaseResetWarning).toEqual([]);
+          expect(r.warningsOf("resume-across-restart").length).toBeGreaterThan(0);
+          r.store.close();
+        });
+
+        test("another database id on ANOTHER server still refuses (PR-456: the resource key must match)", async () => {
+          const first = await priorWithId(D1);
+          const r = await envRun({
+            ...proven,
+            generation: G2,
+            databaseId: D2,
+            dirs: first.dirs,
+            store: first.store,
+            extra: { resume: first.runId, resourceServer: "http://another-server" },
           });
           refused(r, G1, G2);
           expect(r.leaseResetWarning).toEqual([]);
@@ -11575,6 +11598,356 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           const r = await envRun({ post: P2, generation: G1, databaseId: "" });
           expect(r.outcome).toBeInstanceOf(LeaseUnavailableError);
           expect((r.outcome as Error).message).toContain("empty databaseId");
+          r.store.close();
+        });
+      });
+
+      // PR-456 (R1229): a restart that lost the database (generation AND database id changed, both
+      // recorded, same server) carries SURVIVORS only, per batch, against an exact baseline compare.
+      // Every case below uses invented names; the fake backend answers a dated baseline.
+      describe("PR-456: a resume across a restart that lost the database", () => {
+        const D1 = "a".repeat(32);
+        const D2 = "b".repeat(32);
+        const DATE = "2026-11-20";
+        const SLOWDOWN = "the tier slowed down (invented note)";
+
+        /** A backend whose unmutated runs pass on `date`, and whose runs of the victim mutant fail. */
+        const datedBackend = (o: {
+          date?: string;
+          /** Kill the first mutant ever activated (the prior run), or this one (the restart). */
+          killFirst?: boolean;
+          victim?: string;
+          log?: string[];
+        }) => {
+          let active: string | null = null;
+          let victim = o.victim;
+          const over: Partial<ExecutionBackend> = {
+            activate: async (id: string | null) => {
+              active = id;
+              if (id !== null) o.log?.push(`activate:${id}`);
+              if (id !== null && o.killFirst === true && victim === undefined) victim = id;
+            },
+            run: async (ref, opts) => {
+              const killed = active !== null && active === victim;
+              return {
+                ref,
+                outcome: killed ? "fail" : "pass",
+                durationMs: 1,
+                ...(killed ? { failureMessage: "asserted (invented)" } : {}),
+                ...(o.date !== undefined ? { workDate: o.date } : {}),
+                ...(opts.coverage === "none"
+                  ? { attestation: { observedAny: true, identityMismatch: false } }
+                  : {}),
+              };
+            },
+          };
+          return { over, victim: () => victim };
+        };
+
+        const rowsOf = (s: ResultsStore, runId: number) =>
+          s.db
+            .query(
+              "SELECT mutant_code AS code, verdict, COALESCE(carried, 0) AS carried, batch_index AS batch FROM mutants WHERE run_id = ? ORDER BY id",
+            )
+            .all(runId) as Array<{ code: string; verdict: string; carried: number; batch: number }>;
+
+        /** A finished first run on G1/D1 with one kill and the rest survivors. */
+        const priorRestart = async (date: string | undefined = DATE) => {
+          const fake = datedBackend({
+            ...(date !== undefined ? { date } : {}),
+            killFirst: true,
+          });
+          const first = await envRun({
+            post: P2,
+            generation: G1,
+            databaseId: D1,
+            backendOver: fake.over,
+          });
+          expect(first.outcome).not.toBeInstanceOf(Error);
+          const rows = rowsOf(first.store, first.runId);
+          expect(rows.filter((r) => r.verdict === "killed")).toHaveLength(1);
+          expect(rows.filter((r) => r.verdict === "survived").length).toBeGreaterThan(0);
+          return { first, killed: fake.victim() ?? "", rows };
+        };
+
+        const restart = (
+          p: Awaited<ReturnType<typeof priorRestart>>,
+          o: {
+            date?: string;
+            log?: string[];
+            extra?: Partial<SessionConfig>;
+            generation?: string;
+            databaseId?: string;
+          } = {},
+        ) =>
+          envRun({
+            ...proven,
+            generation: o.generation ?? G2,
+            databaseId: o.databaseId ?? D2,
+            dirs: p.first.dirs,
+            store: p.first.store,
+            extra: { resume: p.first.runId, ...o.extra },
+            backendOver: datedBackend({
+              ...(o.date !== undefined ? { date: o.date } : { date: DATE }),
+              victim: p.killed,
+              ...(o.log !== undefined ? { log: o.log } : {}),
+            }).over,
+          });
+
+        test("survivors carry, the kill is re-run with its killer tried first, the caveat and the run flag are set", async () => {
+          const p = await priorRestart();
+          const r = await restart(p);
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const report = r.outcome as SessionReport;
+          const rows = rowsOf(r.store, r.runId);
+          const survivors = p.rows.filter((x) => x.verdict === "survived");
+          // every prior survivor is carried, none of the kills is
+          for (const s of survivors) {
+            expect(rows.find((x) => x.code === s.code)).toMatchObject({
+              verdict: "survived",
+              carried: 1,
+            });
+          }
+          expect(rows.find((x) => x.code === p.killed)).toMatchObject({
+            verdict: "killed",
+            carried: 0,
+          });
+          expect(report.resumedFrom?.carriedMutants).toBe(survivors.length);
+          expect(report.validity.caveats).toContain("resumed-across-restart");
+          expect(report.validity.caveats).toContain("resumed");
+          expect(r.store.getRun(r.runId)?.resumedAcrossRestart).toBe(true);
+          expect(r.store.getRun(p.first.runId)?.resumedAcrossRestart).toBe(false);
+          // one per-batch event, naming both generations and both ids
+          const said = r.warningsOf("resume-across-restart");
+          expect(said).toHaveLength(1);
+          expect(said[0]).toContain(`carried ${survivors.length} survivor(s)`);
+          expect(said[0]).toContain(`${G1} -> ${G2}`);
+          expect(said[0]).toContain(`${D1} -> ${D2}`);
+          // the lone covering test is the prior killer: it is seeded, once
+          expect(said[0]).toContain("1 prior kill(s) are re-run, 1 with the prior killer tried first");
+          // no baseline is reused in restart mode (allowReuse is off)
+          expect(r.reuseWarning).toEqual([]);
+          expect(r.leaseResetWarning).toEqual([]);
+          expect(renderConsole(report)).toContain("RESUMED ACROSS A RESTART");
+          r.store.close();
+        });
+
+        test("a start WorkDate that differs re-runs the batch, nothing carries, and the warning is not the caveat", async () => {
+          const p = await priorRestart();
+          const r = await restart(p, { date: "2026-11-21" });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const report = r.outcome as SessionReport;
+          expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
+          const said = r.warningsOf("resume-across-restart");
+          expect(said).toHaveLength(1);
+          expect(said[0]).toContain("re-run, nothing carried");
+          expect(said[0]).toContain("start WorkDate");
+          // the caveat is derived from carried rows, never from the warning's code
+          expect(report.validity.caveats).not.toContain("resumed-across-restart");
+          expect(r.store.getRun(r.runId)?.resumedAcrossRestart).toBe(false);
+          r.store.close();
+        });
+
+        test("hub mode (no start WorkDate on the fresh baseline) re-runs the batch, by name", async () => {
+          const p = await priorRestart();
+          const r = await envRun({
+            ...proven,
+            generation: G2,
+            databaseId: D2,
+            dirs: p.first.dirs,
+            store: p.first.store,
+            extra: { resume: p.first.runId },
+            backendOver: datedBackend({ victim: p.killed }).over,
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.warningsOf("resume-across-restart")[0]).toContain("hub mode");
+          expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
+          r.store.close();
+        });
+
+        test("a prior run with no usable baseline snapshot re-runs the batch, by name", async () => {
+          const p = await priorRestart();
+          p.first.store.db.run("DELETE FROM baseline_snapshots WHERE run_id = ?", [p.first.runId]);
+          const r = await restart(p);
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(r.warningsOf("resume-across-restart")[0]).toContain("no usable baseline snapshot");
+          expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
+          r.store.close();
+        });
+
+        test("a different server (resource key) refuses, a missing id refuses, and carries nothing", async () => {
+          const p = await priorRestart();
+          const other = await restart(p, { extra: { resourceServer: "http://another-server" } });
+          refused(other, G1, G2);
+          expect(maxRunId(other.store)).toBe(p.first.runId);
+          const none = await envRun({
+            ...proven,
+            generation: G2,
+            dirs: p.first.dirs,
+            store: p.first.store,
+            extra: { resume: p.first.runId },
+          });
+          refused(none, G1, G2);
+          p.first.store.close();
+        });
+
+        test("an app check still refuses: a changed dependency fingerprint is refused by name (R496)", async () => {
+          const p = await priorRestart();
+          p.first.store.db.run("UPDATE runs SET test_app_deps = 'changed' WHERE id = ?", [
+            p.first.runId,
+          ]);
+          const r = await restart(p);
+          expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+          expect(maxRunId(r.store)).toBeGreaterThanOrEqual(p.first.runId);
+          p.first.store.close();
+        });
+
+        test("a known-survivor row never carries in restart mode (it is re-run)", async () => {
+          const p = await priorRestart();
+          const victim = p.rows.find((x) => x.verdict === "survived");
+          if (victim === undefined) throw new Error("no survivor in the prior run");
+          p.first.store.db.run(
+            "UPDATE mutants SET verdict = 'known-survivor' WHERE run_id = ? AND mutant_code = ?",
+            [p.first.runId, victim.code],
+          );
+          const r = await restart(p);
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(rowsOf(r.store, r.runId).find((x) => x.code === victim.code)).toMatchObject({
+            carried: 0,
+          });
+          r.store.close();
+        });
+
+        test("a row recorded in a degraded window (a slowdown's note) never carries", async () => {
+          const p = await priorRestart();
+          // every prior mutant row is after the window; the baseline snapshot is kept. The window row is
+          // written WITHOUT `markDegradedWindow`'s rewrite of the rows, so only the read side excludes them.
+          p.first.store.db.run(
+            "INSERT INTO degraded_windows (run_id, after_mutant_id, after_snapshot_id, note) VALUES (?, 0, 1000000, ?)",
+            [p.first.runId, SLOWDOWN],
+          );
+          expect(rowsOf(p.first.store, p.first.runId).some((x) => x.verdict === "survived")).toBe(true);
+          const r = await restart(p);
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
+          r.store.close();
+        });
+
+        test("a strand stays skipped across a restart (D1)", async () => {
+          const p = await priorRestart();
+          const victim = p.rows.find((x) => x.verdict === "survived");
+          if (victim === undefined) throw new Error("no survivor in the prior run");
+          p.first.store.db.run(
+            "UPDATE mutants SET verdict = 'error', failure_note = 'quarantined: invented strand' WHERE run_id = ? AND mutant_code = ?",
+            [p.first.runId, victim.code],
+          );
+          const r = await restart(p);
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const row = r.store.db
+            .query("SELECT verdict, failure_note FROM mutants WHERE run_id = ? AND mutant_code = ?")
+            .get(r.runId, victim.code) as { verdict: string; failure_note: string };
+          expect(row.verdict).toBe("error");
+          expect(row.failure_note).toBe(STRANDED_SKIP_NOTE);
+          r.store.close();
+        });
+
+        test("a survivor whose batch hashes to another snapshot fails loudly, and carries nothing (batch gate)", async () => {
+          const p = await priorRestart();
+          p.first.store.db.run("UPDATE mutants SET batch_index = 5 WHERE run_id = ? AND verdict = 'survived'", [
+            p.first.runId,
+          ]);
+          const r = await restart(p);
+          expect(r.outcome).toBeInstanceOf(Error);
+          expect((r.outcome as Error).message).toContain("caller-contract violation");
+          expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
+          r.store.close();
+        });
+
+        test("ordering: the batch's decision is said before any of its mutants is scheduled (call log)", async () => {
+          const p = await priorRestart();
+          const log: string[] = [];
+          const r = await restart(p, {
+            log,
+            extra: {
+              emit: [
+                createEmitter([
+                  (e) => {
+                    if (e.type === "warning" && e.code === "resume-across-restart") log.push("decision");
+                  },
+                ]),
+              ],
+            },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect(log.filter((x) => x === "decision")).toHaveLength(1);
+          const decided = log.indexOf("decision");
+          const firstScheduled = log.findIndex((x) => x.startsWith("activate:"));
+          // the baseline's own activate(null) is not logged; the first logged activation is a mutant's
+          if (firstScheduled !== -1) expect(decided).toBeLessThan(firstScheduled);
+          r.store.close();
+        });
+
+        test("no saved baseline is reused in restart mode, even one a run on THIS generation stored (allowReuse is off)", async () => {
+          const p = await priorRestart();
+          const earlier = await restart(p); // a run on G2: stores its own snapshot of the same tree
+          expect(earlier.outcome).not.toBeInstanceOf(Error);
+          const stored = earlier.store.db
+            .query("SELECT COUNT(*) AS n FROM baseline_snapshots WHERE run_id = ?")
+            .get(earlier.runId) as { n: number };
+          expect(stored.n).toBeGreaterThan(0);
+          // the prior run again, from the same generation: a reusable G2 snapshot now exists
+          const again = await restart(p);
+          expect(again.outcome).not.toBeInstanceOf(Error);
+          expect(again.reuseWarning).toEqual([]);
+          expect(again.warningsOf("resume-across-restart")[0]).toContain("carried");
+          again.store.close();
+        });
+
+        test("the label survives a later resume of the run that carried (same generation, no restart)", async () => {
+          const p = await priorRestart();
+          const r = await restart(p);
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const later = await envRun({
+            ...proven,
+            generation: G2,
+            databaseId: D2,
+            dirs: p.first.dirs,
+            store: p.first.store,
+            extra: { resume: r.runId },
+            backendOver: datedBackend({ date: DATE, victim: p.killed }).over,
+          });
+          expect(later.outcome).not.toBeInstanceOf(Error);
+          const report = later.outcome as SessionReport;
+          expect(report.resumedFrom?.carriedMutants).toBeGreaterThan(0);
+          expect(report.validity.caveats).toContain("resumed-across-restart");
+          // and a plain resume of a run that never crossed a restart does not get it
+          later.store.close();
+        });
+
+        test("control: a plain same-generation resume carries and does NOT get the caveat", async () => {
+          const fake = datedBackend({ date: DATE, killFirst: true });
+          const first = await envRun({
+            post: P2,
+            generation: G1,
+            databaseId: D1,
+            backendOver: fake.over,
+          });
+          const r = await envRun({
+            ...proven,
+            generation: G1,
+            databaseId: D1,
+            dirs: first.dirs,
+            store: first.store,
+            extra: { resume: first.runId },
+            backendOver: datedBackend({ date: DATE, victim: fake.victim() ?? "" }).over,
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const report = r.outcome as SessionReport;
+          expect(report.resumedFrom?.carriedMutants).toBeGreaterThan(0);
+          expect(report.validity.caveats).toContain("resumed");
+          expect(report.validity.caveats).not.toContain("resumed-across-restart");
+          expect(r.warningsOf("resume-across-restart")).toEqual([]);
+          expect(r.store.getRun(r.runId)?.resumedAcrossRestart).toBe(false);
           r.store.close();
         });
       });

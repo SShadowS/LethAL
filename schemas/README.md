@@ -5,7 +5,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v35.schema.json`](explain-v35.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 35 |
+| [`explain-v36.schema.json`](explain-v36.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 36 |
+| [`explain-v35.schema.json`](explain-v35.schema.json) | the same, from builds before PR-456; kept so a stored v35 document stays checkable (v36 added the caveat `resumed-across-restart`) | `EXPLAIN_SCHEMA_VERSION` = 35 |
 | [`explain-v34.schema.json`](explain-v34.schema.json) | the same, from builds before PR-381; kept so a stored v34 document stays checkable (v35 added the caveat `survivors-beside-unrun-tests` and the optional `score.survivorsBesideUnrunTests`) | `EXPLAIN_SCHEMA_VERSION` = 34 |
 | [`explain-v33.schema.json`](explain-v33.schema.json) | the same, from builds before PR-307; kept so a stored v33 document stays checkable (v34 added the caveat `session-kind-mismatch`) | `EXPLAIN_SCHEMA_VERSION` = 33 |
 | [`explain-v32.schema.json`](explain-v32.schema.json) | the same, from builds before PR-212; kept so a stored v32 document stays checkable (v33 added the cause `left-out-test-reach`) | `EXPLAIN_SCHEMA_VERSION` = 32 |
@@ -92,7 +93,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v35.schema.json`, capped and uncapped.
+   `explain-v36.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must

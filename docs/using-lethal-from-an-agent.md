@@ -469,7 +469,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v35.schema.json](../schemas/explain-v35.schema.json)
+- `lethal explain`: [../schemas/explain-v36.schema.json](../schemas/explain-v36.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
   as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
@@ -530,7 +530,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 35`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 36`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -1074,18 +1074,31 @@ baseline (R486). `--skip-known-survivors` compares the read-back instead: after 
 an unreadable read-back, it skips nothing and warns `history-test-app-changed`. The run records the
 read-back's identity, or none when it could not be read.
 
-**A resume across a server restart is refused (R680).** On bcdev, each run records the server's
+**A resume across a server restart carries survivors only, or is refused (R680, PR-456).** On bcdev, each run records the server's
 generation (LethAL Control's `serverGeneration`), read once at the start of the session. The server
 mints a new generation when its lease row is created, as after a restart that lost an in-memory
 database, and on `ForceResetLease`.
 - **`--resume` and `--resume-run`** refuse with `ServerGenerationChangedError` (code
   `server-generation-changed`) when the run they would resume recorded another generation, or none.
   A run recorded before R680 has none, so it refuses too. The error names both values; drop the
-  flag to run from scratch. One exception (R969): each run also records the server's database id,
+  flag to run from scratch. Two exceptions. (R969) Each run also records the server's database id,
   which a `force-reset-lease` does not change. When the generation changed but both runs recorded
   the same database id, the database survived, so the resume carries, with the warning
-  `resume-across-lease-reset`, and every other resume check still applies. A different id, or a run
-  that recorded none, refuses as above.
+  `resume-across-lease-reset`, and every other resume check still applies.
+- **(PR-456) A restart that lost the database.** When the generation AND the database id both changed,
+  both runs recorded an id, and both ran on the SAME server (the same resource key), the resume goes on
+  in restart mode. Every app check still applies (the test app, its dependencies, the source). Then:
+  - Only `survived` rows carry, and only for a batch whose FRESH baseline equals, exactly, the baseline
+    the earlier run measured for the same instrumented source: the same tests, outcomes, start WorkDate
+    and stored coverage. Any difference re-runs that batch (the warning `resume-across-restart` names
+    it, once per batch, with both generations and ids). No saved baseline is reused in this mode.
+  - Kills and timeout kills are never carried: they are re-run, with the earlier killer tried first
+    (an ordering hint; it moves no verdict). `known-survivor`, no-coverage, error, degraded-window and
+    lost-batch rows never carry. A mutant a prior run stranded the tier on stays skipped (pass
+    `--retry-stranded` to try it).
+  - The report then carries the caveat `resumed-across-restart` (and a run that resumes that run keeps
+    it): the carried survivors were measured on the earlier database, and equality was checked on the
+    unmutated baseline only. A missing database id on either side, or another server, refuses as above.
 - **A saved baseline** is reused only from a run on the same generation.
 - **The lease** is asked at the generation the session recorded. A server that restarted since
   refuses it (`generation-changed`) before anything is deployed.

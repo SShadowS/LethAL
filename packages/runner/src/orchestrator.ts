@@ -324,6 +324,13 @@ import {
   withoutRefusedTests,
 } from "./resume";
 import type { CarriedVerdict, ResumeIndex, SessionFingerprintInput } from "./resume";
+import {
+  type RestartBatchDecision,
+  type RestartResume,
+  assertRestartRowBatch,
+  decideRestartBatch,
+  restartResumeOf,
+} from "./resume-restart";
 import { CONTROL_DRAIN_MS } from "./run-mutant-transport";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
@@ -396,6 +403,7 @@ import {
   orderCoveringTests,
   procedureScopeOf,
   recordKill,
+  seedKill,
 } from "./test-order";
 import {
   type ClosedWorld,
@@ -4879,18 +4887,31 @@ interface PendingResumeCheck {
  * (runs recorded before 1.0.0.26 included). The lease is still asked at the live generation.
  * Returns the warning's text; the session emits it only once every resume check has passed (review:
  * a later check can still refuse, and the warning must not claim a carry that did not happen).
+ *
+ * PR-456: a generation change with a DIFFERENT database id, both recorded and non-empty, on the SAME
+ * server tier (`resourceKey`, never null), is a restart that lost the database. The resume then goes on
+ * in restart mode (returned as `restart`): survivors only, each batch against its own baseline compare;
+ * the app checks that follow are unchanged. A missing id on either side, or another tier, refuses as before.
  */
 function assertSameServerGeneration(
   row: RunRow,
   flag: string,
   current: PendingResumeCheck,
-): string | undefined {
+): { readonly warning?: string; readonly restart?: RestartResume } | undefined {
   const generation = current.serverGeneration;
   if (generation === undefined || row.serverGeneration === generation) return undefined;
   const id = current.databaseId;
   if (id !== undefined && id !== "" && row.databaseId === id) {
-    return `${flag}: carrying run ${row.id}'s verdicts across a lease reset: database id ${id} unchanged, server generation ${row.serverGeneration ?? "(none)"} -> ${generation} (R969). The database survived, so its apps and data are the ones those verdicts were measured against.`;
+    return {
+      warning: `${flag}: carrying run ${row.id}'s verdicts across a lease reset: database id ${id} unchanged, server generation ${row.serverGeneration ?? "(none)"} -> ${generation} (R969). The database survived, so its apps and data are the ones those verdicts were measured against.`,
+    };
   }
+  const restart = restartResumeOf(row, {
+    serverGeneration: generation,
+    databaseId: current.databaseId,
+    resourceKey: current.resourceKey,
+  });
+  if (restart !== undefined) return { restart };
   throw new ServerGenerationChangedError(flag, row.id, row.serverGeneration, generation);
 }
 
@@ -5001,13 +5022,20 @@ function resolveResume(
       recorded: RecordedCarrySide;
       /** R969: the `resume-across-lease-reset` text; the session emits it after its own checks. */
       leaseResetWarning?: string;
+      /** PR-456: set when the prior run measured on another database (restart mode: survivors only). */
+      restart?: RestartResume;
+      /** PR-456: the prior run itself carried across a restart: its carried rows keep the caveat. */
+      priorAcrossRestart: boolean;
     }
   | undefined {
   if (cfg.resume === undefined) return undefined;
   let leaseResetWarning: string | undefined;
+  let restart: RestartResume | undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
     // R680: first, and for a hook session too: the server's generation is fixed before any hook.
-    leaseResetWarning = assertSameServerGeneration(row, flag, pending);
+    const generationCheck = assertSameServerGeneration(row, flag, pending);
+    leaseResetWarning = generationCheck?.warning;
+    restart = generationCheck?.restart;
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
@@ -5044,6 +5072,7 @@ function resolveResume(
   let priorHidden: CarryHidden | null;
   // R601: the resumed run's recorded test-app identity, for the `resume-reusing-run` clause.
   let priorTestAppHash: string | null;
+  let priorAcrossRestart = false;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -5215,6 +5244,7 @@ function resolveResume(
       throw new Error(`--resume: run ${found} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(foundRow);
     priorTestAppHash = foundRow.testAppHash;
+    priorAcrossRestart = foundRow.resumedAcrossRestart;
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -5300,6 +5330,7 @@ function resolveResume(
       throw new Error(`--resume-run ${id} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(row);
     priorTestAppHash = row.testAppHash;
+    priorAcrossRestart = row.resumedAcrossRestart;
     priorRunId = id;
   }
 
@@ -5315,6 +5346,7 @@ function resolveResume(
       cfg.store.mutantVerdicts(priorRunId),
       cfg.stopHungSessions === true,
       cfg.backend.killsMustReproduce === true,
+      restart !== undefined,
     ),
     refusedTests,
   );
@@ -5336,7 +5368,12 @@ function resolveResume(
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing.${
+    message: `${
+      restart !== undefined
+        ? // PR-456: the restart wording. The numbers are CEILINGS: a survivor carries only when its batch's fresh baseline equals the prior run's.
+          `[lethal] --resume: reusing run ${priorRunId} across a server restart that lost the database (generation ${restart.priorGeneration} -> ${restart.generation}, database ${restart.priorDatabaseId} -> ${restart.databaseId}) — at most ${[...index.carryable.values()].filter((v) => v.verdict === "survived").length} survivor(s) may be carried, each only when its batch's fresh baseline equals the baseline run ${priorRunId} measured for the same instrumented source. ${[...index.carryable.values()].filter((v) => v.verdict === "killed" || v.verdict === "timeout-killed").length} prior kill(s) are NOT carried: they are re-run, and the prior killer is tried first (an ordering hint only; R197). Every batch is deployed and baselined fresh, and no baseline is reused (PR-456).`
+        : `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing.`
+    }${
       seeds > 0
         ? ` ${seeds} carried kill(s) may seed R197's kill ledger, so the remaining mutants' tests are ordered as in a fresh run (R1179).`
         : ""
@@ -5344,7 +5381,11 @@ function resolveResume(
       noSeed > 0
         ? ` ${noSeed} carried kill(s) will not seed it: their killing test names no single covering test of this session (R1179).`
         : ""
-    } Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646).${
+    }${
+      restart !== undefined
+        ? ""
+        : " Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192)."
+    } A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646).${
       testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
         ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
         : ""
@@ -5396,7 +5437,9 @@ function resolveResume(
     index,
     carryHidden: priorHidden,
     recorded,
+    priorAcrossRestart,
     ...(leaseResetWarning !== undefined ? { leaseResetWarning } : {}),
+    ...(restart !== undefined ? { restart } : {}),
   };
 }
 
@@ -5543,6 +5586,8 @@ interface BatchScope {
    * stop so far (the largest `v3MutantStopMs` of any batch's baseline); `undefined` before the first.
    */
   readonly v3MutantStop?: { ms: number | undefined };
+  /** PR-456: a resume across a restart that lost the database (survivors only, per batch); the run it resumes. */
+  readonly restart?: { readonly priorRunId: number };
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 
@@ -5649,6 +5694,8 @@ interface ScoreBatchInput {
   readonly select: (
     baseline: readonly BaselineRow[],
     lineEvidence: ReadonlySet<TestMethodRef>,
+    /** PR-456: a restart-mode resume's decision for this batch (carry its survivors, or why not). */
+    restart?: RestartBatchDecision,
   ) => CoveringPlan | undefined;
 }
 /** R514: the run and batch whose stored baseline (R192) a batch reused. */
@@ -6979,7 +7026,27 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // already builds the covering sets from them; leaving their lines out made a resumed session
   // decide trigger mutants differently from an uninterrupted one).
   const lineEvidence = lineEvidenceOf(ranHere, baseline, reused !== undefined);
-  const plan = input.select(baseline, lineEvidence);
+  // PR-456 (r5 #5): a resume across a restart that lost the database decides here, per batch, whether
+  // this batch's survivors may carry: after the fresh baseline and every refusal above, before `select`
+  // and so before any of this batch's mutants is scheduled.
+  const restartDecision: RestartBatchDecision | undefined =
+    scope.restart !== undefined
+      ? decideRestartBatch({
+          prior:
+            snapshotKey === undefined
+              ? null
+              : store.priorRestartSnapshot(scope.restart.priorRunId, snapshotKey.batchHash),
+          fresh: baseline,
+          freshComplete: baseline.length === tests.length,
+          reused: reused !== undefined,
+          isolationMode:
+            backend.isolatesTests === true ||
+            backend.baselineBatchingKnobOff === true ||
+            scope.isolationAuto !== undefined,
+          isStopped: stoppedByUs,
+        })
+      : undefined;
+  const plan = input.select(baseline, lineEvidence, restartDecision);
   if (plan === undefined) return "nothing-to-run";
   const {
     mutants: toExecute,
@@ -8816,6 +8883,9 @@ async function runSessionBody(
       ...(reachTrace !== undefined ? { reachTrace } : {}),
       ...(reachPrune ? { reachPrune: true as const } : {}),
       ...(carryWalk && carryApplies ? { carryWalk: true as const } : {}),
+      ...(resolvedResume?.restart !== undefined
+        ? { restart: { priorRunId: resolvedResume.runId } }
+        : {}),
       ...(timeBudget !== undefined ? { timeBudget } : {}),
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
@@ -9636,6 +9706,7 @@ async function runSessionBody(
       const select = (
         baseline: readonly BaselineRow[],
         lineEvidence: ReadonlySet<TestMethodRef>,
+        restartDecision?: RestartBatchDecision,
       ): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -10034,6 +10105,13 @@ async function runSessionBody(
           toExecute = [];
           const carryNotFaced: MutantManifestEntry[] = [];
           const carryNoRecord: MutantManifestEntry[] = [];
+          // PR-456: a resume across a restart that lost the database carries SURVIVORS only, and only
+          // of a batch whose fresh baseline equalled the prior run's (`restartDecision.carry`).
+          const restartMode = resumeState.restart !== undefined;
+          const rowBatchHashes = new Map<number, string | null>();
+          let restartCarried = 0;
+          let restartKillsRerun = 0;
+          let restartSeeded = 0;
           for (const m of remaining) {
             const covering = perMutantTests.get(m.mutantId);
             if (covering === undefined) continue; // step 5 already recorded no-coverage
@@ -10043,11 +10121,49 @@ async function runSessionBody(
               toExecute.push(m);
               continue;
             }
+            if (restartMode) {
+              // PR-456: the row's whole decision (`restartRowAction`, exported so the offline harness
+              // runs the same code): a kill is re-run with its killer seeded; a survivor carries only
+              // for an equal batch, through the batch gate and R646.
+              const act = restartRowAction({
+                carried,
+                covering,
+                decision: restartDecision,
+                tests,
+                priorRunId: resumeState.runId,
+                rowBatchHash: (b) => {
+                  if (!rowBatchHashes.has(b)) {
+                    rowBatchHashes.set(
+                      b,
+                      cfg.store.snapshotBatchHash(resumeState.runId, b)?.batchHash ?? null,
+                    );
+                  }
+                  return rowBatchHashes.get(b) ?? null;
+                },
+              });
+              if (act.kind === "kill") {
+                // Its prior killer goes into R197's ledger FIRST, as an ordering hint only (D6). A
+                // seeded killer moves no verdict (R577 reproduces the kill live).
+                restartKillsRerun += 1;
+                if (act.seed !== undefined) {
+                  seedKill(killLedger, m, act.seed);
+                  restartSeeded += 1;
+                }
+                toExecute.push(m);
+                continue;
+              }
+              if (act.kind === "rerun") {
+                if (act.why === "no-record") carryNoRecord.push(m);
+                if (act.why === "not-faced") carryNotFaced.push(m);
+                toExecute.push(m);
+                continue;
+              }
+            }
             // R646: R644's rule for a carried survivor. A test green in this session's baseline but
             // red where it was scored covers it now and never ran against it, so it is re-run. A
             // kill carries as is: a test failed under it, whatever else covers it now.
             const survivor = carried.verdict === "survived" || carried.verdict === "known-survivor";
-            if (survivor) {
+            if (survivor && !restartMode) {
               const faced = carried.coveringTests;
               if (faced === undefined || faced.length === 0) {
                 carryNoRecord.push(m);
@@ -10095,7 +10211,13 @@ async function runSessionBody(
               undefined, // killingTestRef
               carriedReproduction(carried),
               carried.stopEvidence,
+              // PR-456: a row carried across a restart (or from a run that did) keeps the caveat.
+              restartMode || resumeState.priorAcrossRestart,
             );
+            if (restartMode || resumeState.priorAcrossRestart) {
+              cfg.store.markResumedAcrossRestart(runId);
+              if (restartMode) restartCarried += 1;
+            }
             // R644 (build review I2): a carried survivor was not run here, so its STORE row keeps
             // the tests it faced where it was scored, never the tests covering it now; a later
             // history session reads that list as "faced". The report row above is unchanged.
@@ -10109,6 +10231,21 @@ async function runSessionBody(
               const killer = carriedKillerRef(carried, tests);
               if (killer !== undefined) recordKill(killLedger, m, killer);
             }
+          }
+          // PR-456 (D4, NIT9): said once per batch, at its decision and AFTER the carries happened (R969's
+          // rule: never claim a carry that did not). It names both generations and both database ids.
+          if (resumeState.restart !== undefined) {
+            const r = resumeState.restart;
+            const where = `run ${resumeState.runId}, server generation ${r.priorGeneration} -> ${r.generation}, database ${r.priorDatabaseId} -> ${r.databaseId}`;
+            const kills = `${restartKillsRerun} prior kill(s) are re-run${restartSeeded > 0 ? `, ${restartSeeded} with the prior killer tried first` : ""}`;
+            emit({
+              type: "warning",
+              code: "resume-across-restart",
+              message:
+                restartDecision?.carry === true
+                  ? `[lethal] --resume across a restart (${where}): batch ${batchIdx}: carried ${restartCarried} survivor(s). The fresh baseline equals the one run ${resumeState.runId} measured for this instrumented source, but equality was checked on the unmutated baseline only: those survivors were measured on the earlier database. ${kills}.`
+                  : `[lethal] --resume across a restart (${where}): batch ${batchIdx}: re-run, nothing carried (${restartDecision?.reason ?? "no decision was made for this batch"}). ${kills}.`,
+            });
           }
           if (carryNoRecord.length > 0) {
             emit({
@@ -10156,8 +10293,11 @@ async function runSessionBody(
           // bytes, test app) cannot tell, so a batch holding such a member never reuses one: the
           // baseline runs again. 0 known sites; the cost is that one baseline.
           // R857: under --isolate-tests a resume runs its baseline again: the warm-up needs its rows.
+          // PR-456: and in restart mode every batch measures a FRESH baseline: it is the one the prior
+          // run's is compared with (a reuse would compare the prior run's baseline with itself).
           allowReuse:
             resumeState !== undefined &&
+            resumeState.restart === undefined &&
             cfg.backend.isolatesTests !== true &&
             cfg.backend.baselineBatchingKnobOff !== true && // PR-235: a stored baseline may be batched
             cfg.backend.isolationAuto !== true && // R896 (review 1)
@@ -11809,6 +11949,58 @@ export function facedEveryCoveringTest(
 ): boolean {
   const had = new Set(faced);
   return covering.length > 0 && covering.every((ref) => had.has(qualifiedTestName(ref)));
+}
+
+const isSeedableKillVerdict = (v: string): boolean => v === "killed" || v === "timeout-killed";
+
+/** PR-456: what a restart-mode resume does with one prior row it matched to this session's mutant. */
+export type RestartRowAction =
+  | { readonly kind: "carry" }
+  /** A kill or timeout-kill: re-run, its prior killer (when one is seedable, D6) goes into R197's ledger first. */
+  | { readonly kind: "kill"; readonly seed?: TestMethodRef }
+  /** A survivor that is re-run: its batch did not compare equal, or R646's record or faced rule failed. */
+  | {
+      readonly kind: "rerun";
+      readonly why: "batch" | "no-record" | "not-faced" | "not-carryable";
+    };
+
+/**
+ * PR-456 (r3 items 3-4, r5 #3-#4): the per-row decision of a resume across a restart that lost the
+ * database. `carried` is the prior verdict `carriedVerdictFor` matched (the index holds `survived` and
+ * kills only: `known-survivor` never enters it in restart mode). A kill is re-run, seeded through
+ * `isSeedableCarriedKill` and `carriedKillerRef` as R1179 does. A survivor carries only when its batch's
+ * baseline compared equal (`decision.carry`), its own batch hashes to that snapshot (a mismatch throws),
+ * and R646 holds (a recorded, non-empty faced list covering every test covering it now).
+ */
+export function restartRowAction(a: {
+  readonly carried: CarriedVerdict;
+  readonly covering: readonly TestMethodRef[];
+  readonly decision: RestartBatchDecision | undefined;
+  readonly tests: readonly TestMethodRef[];
+  readonly priorRunId: number;
+  /** `snapshotBatchHash(prior, batchIndex)?.batchHash ?? null`. */
+  readonly rowBatchHash: (batchIndex: number) => string | null;
+}): RestartRowAction {
+  const { carried, decision } = a;
+  // `known-survivor` (a history lend, R644) and anything else but a survivor or a kill is never carried here.
+  if (carried.verdict !== "survived" && !isSeedableKillVerdict(carried.verdict)) {
+    return { kind: "rerun", why: "not-carryable" };
+  }
+  if (carried.verdict !== "survived") {
+    const killer = isSeedableCarriedKill(carried) ? carriedKillerRef(carried, a.tests) : undefined;
+    return { kind: "kill", ...(killer !== undefined ? { seed: killer } : {}) };
+  }
+  if (decision?.carry !== true) return { kind: "rerun", why: "batch" };
+  assertRestartRowBatch(
+    decision,
+    a.priorRunId,
+    { batchIndex: carried.batchIndex },
+    carried.batchIndex === undefined ? undefined : a.rowBatchHash(carried.batchIndex),
+  );
+  const faced = carried.coveringTests;
+  if (faced === undefined || faced.length === 0) return { kind: "rerun", why: "no-record" };
+  if (!facedEveryCoveringTest(faced, a.covering)) return { kind: "rerun", why: "not-faced" };
+  return { kind: "carry" };
 }
 
 /** What the test project's `app.json` has to say for check 2 to have a local expectation at all. */
@@ -16437,6 +16629,10 @@ export function record(
   // GitHub #49: a `timeout-killed`'s stop evidence (see `MutantOutcome.stopEvidence`). Passed by the
   // covering loop's timeout kill sites and by the resume replay, which carries a prior row's.
   stopEvidence?: StopEvidence,
+  // PR-456: a carried survivor measured on a database the server has since lost (a resume across a
+  // restart, or of a run that carried so). Rides ONLY on `mutant-carried`; the fold derives the
+  // `resumed-across-restart` caveat from it, never from a warning code.
+  acrossRestart?: boolean,
 ): number {
   const key = identityKeyOf(m);
   // PR-212 §2c (i): no remaining test covers this mutant, and a left-out company-writing test names its object,
@@ -16543,6 +16739,7 @@ export function record(
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
       ...(runner !== undefined ? { runner } : {}),
+      ...(acrossRestart === true ? { acrossRestart: true as const } : {}),
     });
   } else if (strandedSkip === true) {
     if (failureNote === undefined) {

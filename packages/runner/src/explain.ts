@@ -303,8 +303,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  * `$.score.survivorsBesideUnrunTests` (three counts, copied from the report's field of the same name), and the tool
  * condition `not-run-tests-not-recorded` (an older al-runner-v3 report with survivors). New values and new paths,
  * so it bumps (R233); v34 is frozen.
+ *
+ * 36: PR-456 (R1229) added the caveat value `resumed-across-restart` to `$.caveats[].caveat`. A new value, so it
+ * bumps (R233); v35 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 35;
+export const EXPLAIN_SCHEMA_VERSION = 36;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
