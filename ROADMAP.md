@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**70 of 1197 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**71 of 1198 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -640,6 +640,7 @@ that ordering is the priority.
 - **R1138** · LethAL's lease renew is a second trigger of the BC 29 tier break for tests that create and delete a company with Commit; a renew that does not contend with the run session is filed, not built, until such tests are run on purpose or Microsoft fixes the platform · [R1138.md](docs/roadmap/R1138.md) · open
 - **R1171** · A bcdev run without --stop-hung-sessions (the product default) turns a hanging mutant into a tier quarantine, and nothing before the run says so; the one warning that names the risk fires only for plug-in-tagged sites (GitHub #52) · [R1171.md](docs/roadmap/R1171.md) · done (947c9bc58): option (c), ruled on q-20261122T001447-398e02e9: the default stays off; every bcdev run…
 - **R1231** · A file whose largest method holds over 4,800 guards is refused on bcdev (R826, PR-461); splitting its mutants across batches instead is not built, and needs 7 fixes because today one file sits in one batch · [R1231.md](docs/roadmap/R1231.md) · open, filed 2026-11-26 (coord PR-461): build when the first real project hits the refusal
+- **R1235** · bcdev has no CI-faithful test order: neither the default (R197's kill ledger) nor --no-kill-ledger (fewest covered members first, then name) runs a mutant's covering tests in the test codeunit's own declared order, which is the order a project's CI runs · [R1235.md](docs/roadmap/R1235.md) · open, filed 2026-11-27 (coord PR-472): build when a user asks for CI-faithful order
 
 ## Backends and tooling
 
