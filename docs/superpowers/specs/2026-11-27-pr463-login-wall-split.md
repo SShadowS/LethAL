@@ -36,6 +36,15 @@ lethal-code, 2026-11-27. Written before any run. Nothing is built.
      `starts.kept()`), not sessions that logged in. With replay off it stays 0, so it cannot prove a login.
      - The guard "the change in `loginStarts` equals the entries" is replaced by: `testsParts.codeunits` equals the
        entries AND `loginMs` > 0 AND `loginReplays` and `loginStarts` do not grow.
+   - **r3b (after a smoke pass of 3 codeunits, before the full run).** The smoke measured three things:
+     - The codeunit thread's on-CPU plus run-queue wait EXCEEDS W in every request (OFF over W from −98 to −568 ms).
+       So that thread works over the whole request, not only the tests phase. OFF is therefore taken over the
+       request's WALL: OFF = wall − on − rq. Every reading's denominator is the request wall, not W. `loginMs / W` stays
+       the "even stretch" check.
+     - Arm Q is not quiet: host load1 was 72-184 during the smoke, and Q's run-queue wait was already ≈ 25-40% of its
+       wall. By the owner's rule there is no quiet window. So Q is "ambient": the driver records the busy share of
+       cores 12-16 per request, and Q is reported with it, not called quiet.
+     - perf record needs `--user-callchains` with dwarf (paranoid 2). The smoke's perf file was empty.
 5. **Proof of nice.** The nice LethAL's real daemons run at is read from `/proc/<pid>/stat` (field 19) of a live
    daemon, if one exists, and reported. r2's "as LethAL runs it" was unchecked.
 
