@@ -375,7 +375,10 @@ describe("R670: symbolTarDrift", () => {
     ]);
   });
   test("a project outside fixtures/ with no folder is not this guard's (examples are optional)", () => {
-    const ex: FixtureApp[] = [...apps, { dir: "examples/e", name: "E", version: "1.0.0.0", lethalDeps: [] }];
+    const ex: FixtureApp[] = [
+      ...apps,
+      { dir: "examples/e", name: "E", version: "1.0.0.0", lethalDeps: [] },
+    ];
     expect(symbolTarDrift(ms("LethAL_T_1.0.0.5.app"), ex)).toEqual([]);
   });
   test("the OLD pinned manifest (165b17dd) lacks exactly the six projects PR-483 added", () => {
@@ -390,7 +393,9 @@ describe("R670: symbolTarDrift", () => {
     const old = members.filter((m) => ![...added].some((d) => m.startsWith(`${d}/`)));
     expect(old.length).toBe(members.length - 9);
     expect(symbolTarDrift(old, repoApps()).sort()).toEqual(
-      [...added].map((d) => `${d}: in no fixture-symbol tar; compile:fixtures would SKIP it (R1128)`).sort(),
+      [...added]
+        .map((d) => `${d}: in no fixture-symbol tar; compile:fixtures would SKIP it (R1128)`)
+        .sort(),
     );
   });
 
