@@ -1,8 +1,39 @@
-# PR-463 (R1219): where the ~0.25 s of login wall per entry goes — pre-commitment r2 (measure only)
+# PR-463 (R1219): where the ~0.25 s of login wall per entry goes — pre-commitment r3 (measure only)
 
 lethal-code, 2026-11-27. Written before any run. Nothing is built.
 - **r1** was 970a40036.
-- **r2** answers its spec-adversary: B1-B3, S1-S5 and the NITs.
+- **r2** (3e11e166c) answered its spec-adversary: B1-B3, S1-S5 and the NITs.
+- **r3** answers the delta review. Where r3 and the text below disagree, **r3's section "r3 changes" wins**.
+
+## r3 changes (they override r2 below)
+
+1. **One test thread (delta B1).** Every daemon runs with `AL_TEST_THREADS=1`. Then one thread runs every codeunit,
+   so per-thread OFF means what it says, and `perf -t` sees every login.
+   - **The denominator** for every reading is W = Σ codeunit wall = `entryStartMs + resetMs + bodiesMs` of the
+     request (≈ `testsMs` at one thread), never `loginMs` alone.
+   - OFF = W − on-CPU − run-queue wait, all three for the codeunit thread.
+2. **Arm L at equal nice (delta B2).**
+   - The daemon and the spinners all run at nice 10; no CFS weight gap.
+   - N = 30 spinners on cores 12-16 → expected stretch ≈ (30 + 1) / 5 ≈ 6×, PR-439's level (load1 89 on 12 cores ≈
+     7×).
+   - **L is VALID** only if the codeunit thread's run-queue share of W lies between 60% and 95% (a stretch of about
+     2.5× to 20×). Outside that band in either direction, L is VOID.
+3. **VOID guards (delta S3, S4).** A request is VOID when any of these holds:
+   - exit 6 (nothing selected);
+   - any row is not PASS (each entry's test is the cheapest one that PASSES in the baseline);
+   - the change in `timings.loginStarts` differs from the number of entries;
+   - `loginReplays` grows (replay was not off);
+   - the rows are not exactly the chosen tests, one each.
+4. **Readings on W (delta S5, S6).**
+   - **Contention:** all three hold:
+     - L's run-queue wait ≥ 50% of (W_L − W_Q);
+     - Q's OFF < 10% of W_Q;
+     - `loginMs / W` is within ±25% between L and Q (an even stretch).
+   - **Waiting:** Q's OFF ≥ 30% of W_Q.
+   - **Mixed:** Q's OFF is 10-30% of W_Q. The login partly blocks; perf and the thread states name where.
+   - **L VOID with low Q OFF:** contention is NOT tested. Q gives the login's CPU floor only.
+5. **Proof of nice.** The nice LethAL's real daemons run at is read from `/proc/<pid>/stat` (field 19) of a live
+   daemon, if one exists, and reported. r2's "as LethAL runs it" was unchecked.
 
 ## The question, restated (B2)
 
