@@ -32,6 +32,10 @@ lethal-code, 2026-11-27. Written before any run. Nothing is built.
    - **Waiting:** Q's OFF ≥ 30% of W_Q.
    - **Mixed:** Q's OFF is 10-30% of W_Q. The login partly blocks; perf and the thread states name where.
    - **L VOID with low Q OFF:** contention is NOT tested. Q gives the login's CPU floor only.
+   - **r3a (before any run):** `timings.loginStarts` is the number of KEPT login images (`login_start.rs`:
+     `starts.kept()`), not sessions that logged in. With replay off it stays 0, so it cannot prove a login.
+     - The guard "the change in `loginStarts` equals the entries" is replaced by: `testsParts.codeunits` equals the
+       entries AND `loginMs` > 0 AND `loginReplays` and `loginStarts` do not grow.
 5. **Proof of nice.** The nice LethAL's real daemons run at is read from `/proc/<pid>/stat` (field 19) of a live
    daemon, if one exists, and reported. r2's "as LethAL runs it" was unchecked.
 
