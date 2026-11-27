@@ -27,6 +27,42 @@ lethal-code, 2026-11-26.
 - **(d) not yet measured.** No two stores share a batch hash with a stored baseline on both sides (email2 was paused
   before its snapshot). It runs on the next restart.
 
+## r4: the build pre-commitment (PR-468, 2026-11-27)
+
+- **The GO conditions now hold:**
+  - **(a) PASS** across three restarts.
+  - **(b) passes on master** since PR-457 (ed39f0203): System is hashed by CONTENT (`P content c1:`). On the
+    2026-11-27 restart, 21 of 22 packages were byte-equal and System was content-equal (486/486). The partner `X`
+    lines still hash bytes, and they were byte-equal.
+    - A prior run recorded by a client BEFORE PR-457 has the raw-bytes `P` line, so its `test_app_deps` differs and
+      the resume REFUSES as today, by name. That is fail-closed and stated, not migrated.
+  - **(d) PASS:** batch 16cdc30fedce, 667/667 tests equal on outcome, WorkDate and coverage across the restart
+    (`/coord/handoff/PR-456/probes/result-2026-11-27.md`, compare v2).
+  - **(c)** was measured in r2.
+- **Since r3:** R1228's slowdown STOP (PR-466, held) writes the SAME `degraded_windows` row. So "never carry from a
+  degraded window" covers a slowdown window with no extra code. A test pins it with a window whose note is a
+  slowdown's.
+- **Verdict evidence (bugs, Email scope):** 766 of 766 covered verdicts equal across restarts #1-#3. The one
+  difference was a confirm budget error that re-scored killed, by the same killer.
+- **The build is r3 exactly:** items 1-4, 6 and 7, with r3's D1-D7. Item 5 is deleted; strands stay skipped.
+- **The offline prediction (pre-committed) on PR-427-shaped data:** email3 run 1 (`/coord/handoff/PR-427/email3`):
+  one batch (16cdc30fedce) whose baseline probe (d) found equal.
+  - It has 300 survived, 302 killed (all with a killing test), 256 error, 1,015 no-coverage, 0 strands and 1
+    snapshot.
+  - **A resume across a lost database, with equal apps** (in a fixture, the apps check is satisfied), must carry
+    EXACTLY the survivors that pass R646 (a non-empty faced list covering every covering test). That is ≤ 300; the
+    exact count is the R646 predicate over the stored rows, computed by the test's oracle, not by the code under
+    test.
+  - It must re-run all 302 kills, each with its stored killer seeded first, plus all 256 errors and all 1,015
+    no-coverage.
+  - Any other split is a BLOCK.
+  - The fixture is built from the store's COUNTS and shapes (invented ids and names). No DO text enters the repo.
+- **The live end-to-end leg:** a scoped bcdev run on a leased bc server, then a restart, then
+  `bc-linux-setup.ts`, then `--resume-run`.
+  - The restart is the OWNER's (a kraken ask, `--kind bc-restart`).
+  - Its pre-commitment names at least one carried survivor and at least one re-run kill by mutant id, read from that
+    run's own store BEFORE the restart (D5).
+
 ## r3 changes (delta review)
 
 - **(D1, BLOCK) Item 5 is DELETED. Strand skipping stays exactly as it is today.**
