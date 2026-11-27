@@ -372,6 +372,9 @@ export interface TestNarrowing {
 /** R896: the `runner_build` suffix of an `isolation: "auto"` run (always last). */
 export const ISOLATION_AUTO_BUILD_TAG = " isolation-auto";
 
+/** PR-472: the `runner_build` of a bcdev `--no-kill-ledger` run (a default bcdev run records NULL). */
+export const NO_KILL_LEDGER_BUILD_TAG = "no-kill-ledger";
+
 /** PR-303 rule 4: the note on a mutant whose every covering codeunit was pruned. History never lends such a survivor. */
 export const PRUNED_NOTE = "pruned: no covering test reaches its site";
 
@@ -397,7 +400,18 @@ export function backendBuildRefusal(
 ): string | undefined {
   if (run.backend === RETIRED_V2_BACKEND) return v2RetiredRun(run.id);
   const v3 = "al-runner-v3";
-  if (run.backend !== v3 && session?.backend !== v3) return undefined;
+  if (run.backend !== v3 && session?.backend !== v3) {
+    // PR-472: a `--no-kill-ledger` run's survivor may be a kill under the default order, so the two
+    // modes never lend to each other, either way. A default run records no build (NULL), as before.
+    if (
+      session !== undefined &&
+      (run.runnerBuild === NO_KILL_LEDGER_BUILD_TAG) !==
+        (session.runnerBuild === NO_KILL_LEDGER_BUILD_TAG)
+    ) {
+      return `run ${run.id} ran ${run.runnerBuild === NO_KILL_LEDGER_BUILD_TAG ? "with" : "without"} --no-kill-ledger, and this session runs ${session.runnerBuild === NO_KILL_LEDGER_BUILD_TAG ? "with" : "without"} it; a verdict is lent only within one kill-ledger mode (PR-472)`;
+    }
+    return undefined;
+  }
   if (session === undefined) {
     return `run ${run.id} ran on al-runner-v3 and this caller named no session backend, so nothing of it is lent (R586)`;
   }

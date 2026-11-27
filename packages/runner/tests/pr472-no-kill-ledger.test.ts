@@ -266,6 +266,47 @@ describe("PR-472: --no-kill-ledger", () => {
     }
   });
 
+  // Red: drop the NO_KILL_LEDGER_BUILD_TAG comparison in backendBuildRefusal (store.ts).
+  test("(h) history: --skip-known-survivors lends within one kill-ledger mode, never across, either way", async () => {
+    const cases = [
+      { first: undefined, second: undefined, lent: true },
+      { first: false, second: false, lent: true },
+      { first: false, second: undefined, lent: false },
+      { first: undefined, second: false, lent: false },
+    ] as const;
+    for (const c of cases) {
+      const store = new ResultsStore(":memory:");
+      const project = await makeProject();
+      const extraOf = (k: false | undefined) => (k === false ? { killLedger: false as const } : {});
+      const one = await session(new StateStub(BCDEV, Z1_ONLY), extraOf(c.first), {
+        store,
+        project,
+        tag: "-1",
+      });
+      expect(one.row("M0002")?.verdict).toBe("survived");
+      const b2 = new StateStub(BCDEV, Z1_ONLY);
+      await session(
+        b2,
+        { ...extraOf(c.second), skipKnownSurvivors: true },
+        { store, project, tag: "-2" },
+      );
+      // Lent: M0002 is skipped (never executed). Refused: it is executed again.
+      expect(b2.runsOf("M0002").length > 0).toBe(!c.lent);
+      store.close();
+    }
+  });
+
+  test("(i) a default run stores a NULL runner_build; a --no-kill-ledger run stores the tag", async () => {
+    const d = await session(new StateStub(BCDEV, Z1_ONLY));
+    expect(d.store.db.query("SELECT runner_build AS b FROM runs").get()).toEqual({ b: null });
+    d.store.close();
+    const f = await session(new StateStub(BCDEV, Z1_ONLY), { killLedger: false });
+    expect(f.store.db.query("SELECT runner_build AS b FROM runs").get()).toEqual({
+      b: "no-kill-ledger",
+    });
+    f.store.close();
+  });
+
   test("(c) flag on with a non-bcdev backend is refused by name, before any run", async () => {
     const backend = new StateStub(V3, Z1_ONLY);
     const store = new ResultsStore(":memory:");

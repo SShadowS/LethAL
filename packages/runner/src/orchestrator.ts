@@ -363,6 +363,7 @@ import {
 import {
   ISOLATION_AUTO_BUILD_TAG,
   type LendingSession,
+  NO_KILL_LEDGER_BUILD_TAG,
   PRUNED_NOTE,
   sameHiddenFiles,
 } from "./store";
@@ -1958,7 +1959,10 @@ export interface SessionConfig {
   /**
    * PR-472 (R197, R1174), `--no-kill-ledger`, OPT-IN, bcdev only. `false` turns the kill ledger's
    * test order off for the run: every mutant's covering tests go in the no-ledger order, so R1174's
-   * re-walk is never asked for. Absent: today's ledger order. Any other backend refuses it by name.
+   * re-walk is never asked for. A verdict can move one way only: killed to survived, for a kill
+   * only the ledger's order reached (never survived to killed). Such a run neither lends to nor
+   * borrows from a default run (history, resume). Absent: today's ledger order. Any other backend
+   * refuses it by name.
    */
   readonly killLedger?: false;
   /**
@@ -5036,6 +5040,13 @@ function resolveResume(
     if (r === undefined) return;
     switch (r.step) {
       case "backend-build":
+        // PR-472: a run of the other kill-ledger mode keeps its own named refusal.
+        if (
+          ledgerFlag !== undefined &&
+          (row.runnerBuild === NO_KILL_LEDGER_BUILD_TAG) !== ledgerFlag.killLedgerOff
+        ) {
+          throw new KillLedgerResumeError(killLedgerResumeMessage(flag, ledgerFlag.killLedgerOff));
+        }
         throw new Error(
           `${flag}: ${r.why}; none of its verdicts is carried. Drop the resume flag to run from scratch.`,
         );
@@ -7886,7 +7897,12 @@ async function runSessionBody(
     backend: backendName,
     // R857: part of what lends, so a run under --isolate-tests lends nothing to a default run, and
     // the other way, by the one check every lend passes.
-    runnerBuild: v3Build !== undefined ? lendingRunnerBuild(cfg.backend, v3Build) : undefined,
+    runnerBuild:
+      v3Build !== undefined
+        ? lendingRunnerBuild(cfg.backend, v3Build)
+        : cfg.killLedger === false // PR-472: bcdev only (refused elsewhere); a default run stays undefined
+          ? NO_KILL_LEDGER_BUILD_TAG
+          : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
   const resumeInputs = await resumeInputsOf(cfg.backend);
@@ -8427,7 +8443,7 @@ async function runSessionBody(
       type: "warning",
       code: "kill-ledger-off" satisfies Caveat,
       message:
-        "--no-kill-ledger is on: covering tests run in the no-ledger order, so R1174's re-walk is not needed, but a kill can take more tests to reach (PR-472).",
+        "--no-kill-ledger is on: covering tests run in the no-ledger order, so R1174's re-walk is not needed, but a kill can take more tests to reach. A verdict can move one way only: killed to survived, for a kill only the ledger's order reached; never survived to killed. History, --resume and snapshots are not shared with a default run (PR-472).",
     });
   }
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
