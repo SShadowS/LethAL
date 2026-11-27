@@ -48,8 +48,9 @@ page 91015 "LC Client Bind"
                 trigger OnAction()
                 var
                     State: Codeunit "LC Control State";
+                    Reason: Text;
                 begin
-                    Bound := State.BindClientSession(AttemptId, OpSeq);
+                    Bound := State.BindClientSession(AttemptId, OpSeq, Reason);
                 end;
             }
         }

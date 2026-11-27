@@ -1501,13 +1501,14 @@ codeunit 91002 "LC Control State"
     /// `client-session-alive` and leaves the op in flight. A never-bound op (no session id) is refused as
     /// `no-session-id`: nothing proves its session is gone. The tuple clear is unconditional (ForceClearActive),
     /// as in TryRecoverOp: the call carries no tuple, and the marker match is the ownership proof.</summary>
-    procedure TryDeactivateForClient(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Deactivated: Boolean; var AlreadyCompleted: Boolean; var Reason: Text)
+    procedure TryDeactivateForClient(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Deactivated: Boolean; var AlreadyCompleted: Boolean; var Reason: Text; var AliveSessionId: Integer)
     var
         Lease: Record "LC Lease";
     begin
         Deactivated := false;
         AlreadyCompleted := false;
         Reason := '';
+        AliveSessionId := 0;
 
         ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
 
@@ -1539,6 +1540,7 @@ codeunit 91002 "LC Control State"
 
         if ActiveSessionHolds(Lease."Op Session Id") then begin
             Reason := 'client-session-alive';
+            AliveSessionId := Lease."Op Session Id";
             exit;
         end;
 
@@ -1557,7 +1559,9 @@ codeunit 91002 "LC Control State"
     var
         ActiveSession: Record "Active Session";
     begin
-        ActiveSession.SetRange("Session ID", BoundSessionId);
+        // Fails CLOSED (PR-478 amendment 1): R53 measured that a web-service session sees itself under a NEGATIVE
+        // id, so a row for either sign counts as alive.
+        ActiveSession.SetFilter("Session ID", '%1|%2', BoundSessionId, -BoundSessionId);
         exit(not ActiveSession.IsEmpty());
     end;
 
@@ -1565,21 +1569,30 @@ codeunit 91002 "LC Control State"
     /// "Op Session Id" := SessionId() only when the op is `client-run`, its attempt id and op seq match, and the
     /// field is blank, so a second bind (or a bind from another session) is refused. No other path sets the
     /// field for `client-run`: the writer gate and the stop key on this value, never on an id the client sent.</summary>
-    procedure BindClientSession(AttemptId: Text; OpSeq: BigInteger): Boolean
+    procedure BindClientSession(AttemptId: Text; OpSeq: BigInteger; var Reason: Text): Boolean
     var
         Lease: Record "LC Lease";
     begin
-        if AttemptId = '' then
+        Reason := '';
+        if AttemptId = '' then begin
+            Reason := 'blank-attempt-id';
             exit(false);
+        end;
         Lease.LockTable();
         if not Lease.Get('') then
             Error(LeaseRowMissingErr());
-        if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then
+        if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then begin
+            Reason := 'not-client-run';
             exit(false);
-        if (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then
+        end;
+        if (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then begin
+            Reason := 'op-mismatch';
             exit(false);
-        if Lease."Op Session Id" <> 0 then
+        end;
+        if Lease."Op Session Id" <> 0 then begin
+            Reason := 'already-bound';
             exit(false);
+        end;
         Lease."Op Session Id" := SessionId();
         Lease.Modify();
         Commit();
@@ -1643,6 +1656,50 @@ codeunit 91002 "LC Control State"
         Attestation."Server Generation" := Lease."Server Generation";
         Attestation."Database Id" := Lease."Database Id";
         Attestation.Modify();
+    end;
+
+    /// <summary>1.0.0.31 (PR-478, amendment 1): the fenced, READ-ONLY read of every attestation row of one op.
+    /// The same fence as the other actions (blank credentials fail loud; a tuple mismatch answers
+    /// `lease-invalid` and no rows). It writes nothing and takes no lock.</summary>
+    procedure TryReadClientAttestation(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Valid: Boolean; var Rows: JsonArray)
+    var
+        Lease: Record "LC Lease";
+        Attestation: Record "LC Client Attestation";
+        Row: JsonObject;
+    begin
+        Valid := false;
+        Clear(Rows);
+
+        ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then
+            exit;
+        Valid := true;
+
+        Attestation.SetRange("Attempt Id", AttemptId);
+        Attestation.SetRange("Op Seq", OpSeq);
+        if Attestation.FindSet() then
+            repeat
+                Clear(Row);
+                Row.Add('attemptId', Attestation."Attempt Id");
+                Row.Add('opSeq', Attestation."Op Seq");
+                Row.Add('codeunitId', Attestation."Codeunit Id");
+                Row.Add('method', Attestation.Method);
+                Row.Add('loaded', Attestation.Loaded);
+                Row.Add('loadedGeneration', Attestation."Loaded Generation");
+                Row.Add('loadedMutantId', Attestation."Loaded Mutant Id");
+                Row.Add('observedAny', Attestation."Observed Any");
+                Row.Add('observedIdentityMismatch', Attestation."Observed Identity Mismatch");
+                Row.Add('observedActive', Attestation."Observed Active");
+                Row.Add('success', Attestation.Success);
+                Row.Add('testMethodRuns', Attestation."Test Method Runs");
+                Row.Add('sessionId', Attestation."Session Id");
+                Row.Add('serverGeneration', Attestation."Server Generation");
+                Row.Add('databaseId', Attestation."Database Id");
+                Rows.Add(Row);
+            until Attestation.Next() = 0;
     end;
 
     local procedure RecordStoppedOp(var Lease: Record "LC Lease"; AttemptId: Text; OpSeq: BigInteger)

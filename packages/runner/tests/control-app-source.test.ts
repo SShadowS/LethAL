@@ -165,6 +165,17 @@ describe("the session-freshness predicate (R206 §2.1)", () => {
       1,
     );
     expect(many[0]).toBe("State.NoteTestMethodRun();");
+    // PR-478: the third site, in a client session only (gated on the bound client-run session)
+    const third = codeOnly(
+      procedureBody(read("ClientSubscribers.Codeunit.al"), "ResetObservationsBeforeMethod"),
+    );
+    expect(statementsBefore(third, "State.NoteTestMethodRun();", 2)).toEqual([
+      "exit;",
+      "if not State.IsBoundClientSession() then",
+    ]);
+    expect(
+      codeOnly(read("ClientSubscribers.Codeunit.al")).match(/NoteTestMethodRun\(\)/g),
+    ).toHaveLength(1);
   });
 
   test("no other AL file assigns it", () => {
@@ -645,6 +656,33 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     expect(gate).not.toContain("LC Mutation Active");
   });
 
+  test("the gate reads the lease ReadUncommitted, before the Get (no lock in a headless run)", () => {
+    const gate = codeOnly(procedureBody(state, "IsBoundClientSession"));
+    const iso = gate.indexOf("Lease.ReadIsolation := IsolationLevel::ReadUncommitted;");
+    expect(iso).toBeGreaterThan(-1);
+    expect(gate.indexOf("Lease.Get(")).toBeGreaterThan(iso);
+    expect(gate).not.toContain("LockTable");
+  });
+
+  test("LC Client Subscribers has exactly two subscribers, both gated", () => {
+    const code = codeOnly(subs);
+    expect(code.match(/\[EventSubscriber\(/g)).toHaveLength(2);
+    expect(code.match(/procedure /g)).toHaveLength(2);
+    expect(code.match(/if not State\.IsBoundClientSession\(\) then/g)).toHaveLength(2);
+    expect(code).toContain('Codeunit::"Test Runner - Mgt", OnBeforeTestMethodRun');
+    expect(code).toContain('Codeunit::"Test Runner - Mgt", OnAfterTestMethodRun');
+  });
+
+  test("the gated OnBefore is the third place a test method is counted", () => {
+    const body = codeOnly(procedureBody(subs, "ResetObservationsBeforeMethod"));
+    expect(statementsAfter(body.slice(body.indexOf("begin")), "begin", 4)).toEqual([
+      "if not State.IsBoundClientSession() then",
+      "exit;",
+      "State.NoteTestMethodRun();",
+      "State.ResetObservations();",
+    ]);
+  });
+
   test("the observation reset clears the three observations and never sets ResetSinceLoad", () => {
     const reset = codeOnly(procedureBody(state, "ResetObservations"));
     expect(reset.match(/:=/g)).toHaveLength(3);
@@ -657,7 +695,7 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     const before = codeOnly(procedureBody(subs, "ResetObservationsBeforeMethod"));
     expect(before).toContain("State.ResetObservations();");
     expect(before).not.toContain("ResetSinceLoad");
-    expect(before.match(/State\./g)).toHaveLength(2);
+    expect(before.match(/State\./g)).toHaveLength(3);
   });
 
   test("the attestation writer never reads the tuple table", () => {
@@ -704,18 +742,25 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     const deact = codeOnly(procedureBody(state, "TryDeactivateForClient")).replace(/\s+/g, " ");
     const alive = deact.indexOf('if ActiveSessionHolds(Lease."Op Session Id") then begin');
     expect(alive).toBeGreaterThan(-1);
-    expect(deact.slice(alive, alive + 120)).toContain(
-      "Reason := 'client-session-alive'; exit; end;",
+    expect(deact.slice(alive, alive + 200)).toContain(
+      "Reason := 'client-session-alive'; AliveSessionId := Lease.\"Op Session Id\"; exit; end;",
     );
     expect(deact.indexOf('Lease."Last Completed Op Seq" := OpSeq;')).toBeGreaterThan(alive);
     expect(deact).toContain(
       "if Lease.\"Op Session Id\" <= 0 then begin Reason := 'no-session-id';",
     );
-    expect(codeOnly(procedureBody(state, "ActiveSessionHolds"))).toContain(
-      'ActiveSession.SetRange("Session ID", BoundSessionId);',
+    expect(deact.slice(alive, alive + 160)).toContain('AliveSessionId := Lease."Op Session Id";');
+    const holds = codeOnly(procedureBody(state, "ActiveSessionHolds")).replace(/\s+/g, " ");
+    // fails closed: the id of either sign counts, and alive = NOT empty
+    expect(holds).toContain(
+      "ActiveSession.SetFilter(\"Session ID\", '%1|%2', BoundSessionId, -BoundSessionId);",
     );
+    expect(holds).toContain("exit(not ActiveSession.IsEmpty());");
     expect(codeOnly(procedureBody(api, "DeactivateForClient"))).toContain(
       "State.TryDeactivateForClient(",
+    );
+    expect(codeOnly(procedureBody(api, "DeactivateForClient"))).toContain(
+      "Obj.Add('sessionId', AliveSessionId);",
     );
   });
 
@@ -728,15 +773,16 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     const bind = codeOnly(procedureBody(state, "BindClientSession")).replace(/\s+/g, " ");
     const set = bind.indexOf('Lease."Op Session Id" := SessionId();');
     expect(set).toBeGreaterThan(-1);
-    expect(
-      bind.indexOf('if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then exit(false);'),
-    ).toBeGreaterThan(-1);
-    expect(
-      bind.indexOf('if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then exit(false);'),
-    ).toBeLessThan(set);
-    expect(bind.indexOf('if Lease."Op Session Id" <> 0 then exit(false);')).toBeGreaterThan(-1);
-    expect(bind.indexOf('if Lease."Op Session Id" <> 0 then exit(false);')).toBeLessThan(set);
-    expect(bind.indexOf("if AttemptId = '' then exit(false);")).toBeLessThan(set);
+    const checks = [
+      "if AttemptId = '' then begin Reason := 'blank-attempt-id'; exit(false); end;",
+      'if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then begin Reason := \'not-client-run\'; exit(false); end;',
+      'if (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then begin Reason := \'op-mismatch\'; exit(false); end;',
+      "if Lease.\"Op Session Id\" <> 0 then begin Reason := 'already-bound'; exit(false); end;",
+    ];
+    for (const check of checks) {
+      expect(bind.indexOf(check), check).toBeGreaterThan(-1);
+      expect(bind.indexOf(check), check).toBeLessThan(set);
+    }
     // exactly two places record SessionId(): TryBeginRun (headless run) and the bind
     expect(codeOnly(state).match(/"Op Session Id" := SessionId\(\)/g)).toHaveLength(2);
     expect(codeOnly(procedureBody(state, "TryBeginRun"))).toContain(
@@ -744,7 +790,7 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     );
     expect(codeOnly(procedureBody(state, "TryActivateForClient"))).not.toContain("SessionId()");
     const page = codeOnly(read("ClientBind.Page.al"));
-    expect(page).toContain("Bound := State.BindClientSession(AttemptId, OpSeq);");
+    expect(page).toContain("Bound := State.BindClientSession(AttemptId, OpSeq, Reason);");
     expect(page).not.toContain("Op Session Id");
     for (const file of ["ControlApi.Codeunit.al", "RunMany.Codeunit.al", "RunMethod.Codeunit.al"]) {
       expect(codeOnly(read(file)), file).not.toMatch(/"Op Session Id"\s*:=/);
@@ -769,6 +815,85 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     expect(codeOnly(procedureBody(api, "ActivateForClient"))).toContain(
       "State.TryActivateForClient(",
     );
+  });
+
+  test("ActivateForClient's checks run in TryBeginRun's order, under the lease lock", () => {
+    const order = [
+      "ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);",
+      "Lease.LockTable();",
+      'if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then begin',
+      "RegisteredArtifact(TargetAppId) <> ArtifactId",
+      'if OpSeq <= Lease."Last Completed Op Seq" then begin',
+      "Reason := 'op-in-flight';",
+      'if (OpSeq = Lease."Last Completed Op Seq" + 1) and (Lease."Op Kind" = Lease."Op Kind"::none) then begin',
+    ];
+    for (const name of ["TryBeginRun", "TryActivateForClient"]) {
+      const body = codeOnly(procedureBody(state, name));
+      let last = -1;
+      for (const marker of order) {
+        const at = body.indexOf(marker);
+        expect(at, `${name}: ${marker}`).toBeGreaterThan(last);
+        last = at;
+      }
+    }
+    const act = codeOnly(procedureBody(state, "TryActivateForClient"));
+    expect(act.indexOf("Lease.Modify();")).toBeLessThan(act.indexOf("WriteActive("));
+  });
+
+  test("BindCallerSession binds the CALLER's session through the page's own procedure", () => {
+    const body = codeOnly(procedureBody(api, "BindCallerSession"));
+    expect(body).toContain("Bound := State.BindClientSession(AttemptId, OpSeq, Reason);");
+    expect(body).toContain("Obj.Add('bound', Bound);");
+    // no session id comes from the wire, and the action writes nothing itself
+    expect(body).not.toMatch(/SessionId|Lease|Modify|Insert/);
+    expect(body.match(/State\./g)).toHaveLength(1);
+    // the one procedure takes the caller's own id, behind the same checks the page uses
+    expect(codeOnly(procedureBody(state, "BindClientSession"))).toContain(
+      'Lease."Op Session Id" := SessionId();',
+    );
+  });
+
+  test("ReadClientAttestation is fenced and read-only", () => {
+    const body = codeOnly(procedureBody(state, "TryReadClientAttestation"));
+    const fence = body.indexOf("ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);");
+    const tuple = body.indexOf(
+      'if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then',
+    );
+    const read = body.indexOf("Attestation.FindSet()");
+    expect(fence).toBeGreaterThan(-1);
+    expect(tuple).toBeGreaterThan(fence);
+    expect(read).toBeGreaterThan(tuple);
+    expect(body).toContain('Attestation.SetRange("Attempt Id", AttemptId);');
+    expect(body).toContain('Attestation.SetRange("Op Seq", OpSeq);');
+    for (const write of ["Modify", "Insert", "Delete", "Commit", "LockTable", ":= "]) {
+      if (write === ":= ") continue;
+      expect(body, write).not.toContain(write);
+    }
+    expect(codeOnly(procedureBody(api, "ReadClientAttestation"))).toContain(
+      "State.TryReadClientAttestation(",
+    );
+    expect(codeOnly(procedureBody(api, "ReadClientAttestation"))).not.toMatch(
+      /Modify|Insert|Delete|Commit/,
+    );
+    for (const field of [
+      "attemptId",
+      "opSeq",
+      "codeunitId",
+      "method",
+      "loaded",
+      "loadedGeneration",
+      "loadedMutantId",
+      "observedAny",
+      "observedIdentityMismatch",
+      "observedActive",
+      "success",
+      "testMethodRuns",
+      "sessionId",
+      "serverGeneration",
+      "databaseId",
+    ]) {
+      expect(body, field).toContain(`Row.Add('${field}',`);
+    }
   });
 
   test("outside an op, loading the tuple also loads the expected ids, before the identity compare", () => {

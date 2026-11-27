@@ -21,6 +21,9 @@ codeunit 91016 "LC Client Subscribers"
     begin
         if not State.IsBoundClientSession() then
             exit;
+        // The third place a test method is counted (the R206 session-freshness counter), GATED: a client session's
+        // attestation row then reads 1..N. Headless sites are in LC Run Method and LC Run Many.
+        State.NoteTestMethodRun();
         State.ResetObservations();
     end;
 

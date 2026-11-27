@@ -901,21 +901,62 @@ codeunit 91003 "LC Control API"
 
     /// <summary>OData action (1.0.0.31, PR-478): tombstone a `client-run` op, but only after "Active Session"
     /// shows its bound session gone; otherwise `client-session-alive` and the op stays in flight. Thin wrapper over
-    /// "LC Control State".TryDeactivateForClient. JSON: {deactivated, alreadyCompleted?, reason?}.</summary>
+    /// "LC Control State".TryDeactivateForClient. JSON: {deactivated, alreadyCompleted?, reason?, sessionId?}
+    /// (`sessionId` echoes the bound session on `client-session-alive`).</summary>
     procedure DeactivateForClient(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
     var
         State: Codeunit "LC Control State";
         Deactivated: Boolean;
         AlreadyCompleted: Boolean;
         Reason: Text;
+        AliveSessionId: Integer;
         Obj: JsonObject;
     begin
-        State.TryDeactivateForClient(Epoch, Token, Generation, AttemptId, OpSeq, Deactivated, AlreadyCompleted, Reason);
+        State.TryDeactivateForClient(Epoch, Token, Generation, AttemptId, OpSeq, Deactivated, AlreadyCompleted, Reason, AliveSessionId);
         Obj.Add('deactivated', Deactivated);
         if AlreadyCompleted then
             Obj.Add('alreadyCompleted', AlreadyCompleted);
         if Reason <> '' then
             Obj.Add('reason', Reason);
+        if AliveSessionId <> 0 then
+            Obj.Add('sessionId', AliveSessionId);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action (1.0.0.31, PR-478 amendment 1): binds the CALLER's own SessionId() to the in-flight
+    /// `client-run` op, under exactly the bind page's rules (the same "LC Control State".BindClientSession).
+    /// JSON: {bound, reason?}.</summary>
+    procedure BindCallerSession(AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Bound: Boolean;
+        Reason: Text;
+        Obj: JsonObject;
+    begin
+        Bound := State.BindClientSession(AttemptId, OpSeq, Reason);
+        Obj.Add('bound', Bound);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action (1.0.0.31, PR-478 amendment 1): fenced, read-only. Every "LC Client Attestation" row of
+    /// (attemptId, opSeq). JSON: {read, rows?, reason?}; rows is an array of objects with every field
+    /// (attemptId, opSeq, codeunitId, method, loaded, loadedGeneration, loadedMutantId, observedAny,
+    /// observedIdentityMismatch, observedActive, success, testMethodRuns, sessionId, serverGeneration, databaseId).</summary>
+    procedure ReadClientAttestation(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Valid: Boolean;
+        Rows: JsonArray;
+        Obj: JsonObject;
+    begin
+        State.TryReadClientAttestation(Epoch, Token, Generation, AttemptId, OpSeq, Valid, Rows);
+        Obj.Add('read', Valid);
+        if Valid then
+            Obj.Add('rows', Rows)
+        else
+            Obj.Add('reason', 'lease-invalid');
         Obj.WriteTo(ResultJson);
     end;
 
