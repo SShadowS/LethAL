@@ -845,6 +845,15 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     );
   });
 
+  test("the bind page shows the last refusal reason, read-only, from both Bind and End", () => {
+    const page = codeOnly(read("ClientBind.Page.al")).replace(/\s+/g, " ");
+    expect(page).toContain("field(ReasonField; Reason) { Caption = 'Reason'; Editable = false;");
+    // the field is the page's own variable: neither action may shadow it with a local Reason
+    expect(page.match(/Reason: Text;/g)).toHaveLength(1);
+    expect(page).toContain("Bound := State.BindClientSession(AttemptId, OpSeq, Reason);");
+    expect(page).toContain("Ended := State.EndClientSession(AttemptId, OpSeq, Reason);");
+  });
+
   test("TryRenew's fast path and no-shrink rule both cover client-run", () => {
     const body = codeOnly(procedureBody(state, "TryRenew"));
     expect(body.match(/::"client-run"/g)).toHaveLength(2);

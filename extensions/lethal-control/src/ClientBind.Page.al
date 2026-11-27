@@ -38,6 +38,12 @@ page 91015 "LC Client Bind"
                     Editable = false;
                     ToolTip = 'True when this session has marked its end.';
                 }
+                field(ReasonField; Reason)
+                {
+                    Caption = 'Reason';
+                    Editable = false;
+                    ToolTip = 'The reason of the last refusal from Bind or End. Empty on success.';
+                }
             }
         }
     }
@@ -54,7 +60,6 @@ page 91015 "LC Client Bind"
                 trigger OnAction()
                 var
                     State: Codeunit "LC Control State";
-                    Reason: Text;
                 begin
                     Bound := State.BindClientSession(AttemptId, OpSeq, Reason);
                 end;
@@ -67,7 +72,6 @@ page 91015 "LC Client Bind"
                 trigger OnAction()
                 var
                     State: Codeunit "LC Control State";
-                    Reason: Text;
                 begin
                     Ended := State.EndClientSession(AttemptId, OpSeq, Reason);
                 end;
@@ -80,4 +84,5 @@ page 91015 "LC Client Bind"
         OpSeq: BigInteger;
         Bound: Boolean;
         Ended: Boolean;
+        Reason: Text;
 }
