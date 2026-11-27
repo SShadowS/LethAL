@@ -2,28 +2,35 @@
  * PR-490: join BC's verdicts with al-runner v3's on the FULL site key (file, line, operator, startIndex, endIndex), and
  * sort every difference into a class, so real-project runs measure how far v3 can be trusted (R586's evidence).
  *
- *   bun scripts/bc-v3-join.ts --bc <report.json> [--bc <report.json> ...] --v3 <report.json> [--file <path>] --out <dir>
+ *   bun scripts/bc-v3-join.ts --bc <report.json> [--bc ...] --v3 <report.json> [--file <path>]
+ *                             [--bc-store <db> ...] [--v3-store <db>] --out <dir>
  *
- * Several --bc reports are one run in halves (lethal-bugs' split files): their keys must be disjoint, and mutant codes are
- * per half, so the join never uses mutantCode. --file keeps one source file. Writes `<out>/joined.tsv` (one row per key,
- * no source text) and `<out>/summary.json`, and prints the summary. Refuses (throws) when the two sides were built from
- * different source (sourceSha256), when a side repeats a key, or when either side has no mutant in scope: an empty
- * "agreement" proves nothing.
+ * Several --bc reports are one run in halves (lethal-bugs' split files): their keys must be disjoint and their baselines
+ * equal, and mutant codes are per half, so the join never uses mutantCode. --file keeps one source file. A store adds the
+ * tests that failed at that run's baseline but are missing from its report's `notRunAtBaseline` (its latest run only).
+ * Writes `<out>/joined.tsv` (one row per key that differs or is on one side only; its note column can quote values from
+ * error messages, so it stays in a private folder) and `<out>/summary.json`, and prints the summary.
  *
- * Classes, decided in this order for a key in both:
- * - `equal`: same verdict, and when both killed, the same killing test method;
- * - `killed-other-test`: both killed, by different tests;
- * - `coverage`: one side `no-coverage` and the covering sets differ (a coverage difference, not a verdict);
- * - `baseline`: the side that did not kill/survive names, in its note, a test that did not pass at its baseline, or the
- *   two baselines' failing sets differ on a covering test;
- * - `v3-refused` / `bc-error`: `error` on one side only;
- * - `killed-vs-survived` / `survived-vs-killed` (BC first): an answered verdict differs: the class to examine;
- * - `other`.
+ * Refuses (throws): a report without `sourceSha256`, different source, different test methods (name, file, line), a
+ * repeated key, halves with different baselines, an empty side ("agreement" over nothing proves nothing).
+ *
+ * Classes for a key in both, each decided by the test that DECIDES the difference, never by an unrelated covering test:
+ * - `equal`; `killed-other-test` (both killed, by different tests: the kill order);
+ * - one side killed, the other not:
+ *   - `baseline`: the killing test is red at the other side's baseline (so the other side never ran it);
+ *   - `v3-refused` / `bc-error`: the other side is `error` without a baseline note (a refusal of this one mutant);
+ *   - `coverage`: the other side is `no-coverage` though the killing test is green there;
+ *   - `killed-vs-survived` / `survived-vs-killed` (BC first): the killing test is green on both and the other side ran it:
+ *     the class to examine;
+ * - neither killed: `baseline` when an `error` side's note names baseline-red tests, or a `no-coverage` side has every
+ *   one of the other side's covering tests red; `v3-refused` / `bc-error` for another one-sided `error`; `coverage` for
+ *   another `no-coverage`; `other`.
  */
 
 import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseArgs } from "node:util";
 import type { SessionReport } from "../packages/runner/src/report";
 import { loadReport } from "./report-summary.ts";
 
@@ -34,10 +41,11 @@ export class BcV3JoinRefusal extends Error {
   }
 }
 
-interface Row {
+export interface Row {
   readonly code: string;
   readonly verdict: string;
-  readonly killingTest: string;
+  /** the killing test's full name `<codeunit>.<method>`, resolved from the covering tests; "" when not killed */
+  readonly killer: string;
   readonly covering: readonly string[];
   readonly note: string;
 }
@@ -50,17 +58,27 @@ export function siteKey(
   return [m.file, m.line, m.operatorName, m.startIndex, m.endIndex].join("|");
 }
 
+/**
+ * A report's `killingTest` is the method alone; the covering test that ends in `.<method>` names its codeunit. Codeunit
+ * names can hold dots, so the name is never split. No match keeps the bare method (it then matches no red set).
+ */
+export function resolveKiller(method: string, covering: readonly string[]): string {
+  if (method === "") return "";
+  return covering.find((t) => t.endsWith(`.${method}`)) ?? method;
+}
+
 function rowOf(m: Mutant): Row {
   const r = m as Mutant & {
     killingTest?: string;
     coveringTests?: readonly string[];
     failureNote?: string;
   };
+  const covering = r.coveringTests ?? [];
   return {
     code: m.mutantCode,
     verdict: m.verdict,
-    killingTest: r.killingTest ?? "",
-    covering: r.coveringTests ?? [],
+    killer: m.verdict === "killed" ? resolveKiller(r.killingTest ?? "", covering) : "",
+    covering,
     note: r.failureNote ?? "",
   };
 }
@@ -85,26 +103,42 @@ const ANSWERED = new Set(["killed", "survived"]);
 /** LethAL's note on a mutant whose only covering tests failed or were refused at the baseline. */
 const BASELINE_NOTE = /did not pass at baseline/;
 
+/** One side killed (`k`), the other (`o`) did not; `oRed` is the other side's baseline-red set. */
+function oneKilled(
+  k: Row,
+  o: Row,
+  oRed: ReadonlySet<string>,
+  oSide: "bc" | "v3",
+  kFirst: boolean,
+): string {
+  if (oRed.has(k.killer)) return "baseline";
+  if (o.verdict === "error")
+    return BASELINE_NOTE.test(o.note) ? "baseline" : oSide === "v3" ? "v3-refused" : "bc-error";
+  if (o.verdict === "no-coverage") return "coverage";
+  if (o.verdict === "survived") return kFirst ? "killed-vs-survived" : "survived-vs-killed";
+  return "other";
+}
+
 export function classify(
   bc: Row,
   v3: Row,
-  bcBaselineRed: ReadonlySet<string>,
-  v3BaselineRed: ReadonlySet<string>,
+  bcRed: ReadonlySet<string>,
+  v3Red: ReadonlySet<string>,
 ): string {
   if (bc.verdict === v3.verdict) {
-    if (bc.verdict !== "killed" || bc.killingTest === v3.killingTest) return "equal";
+    if (bc.verdict !== "killed" || bc.killer === v3.killer) return "equal";
     return "killed-other-test";
   }
-  const sameCover =
-    bc.covering.length === v3.covering.length && bc.covering.every((t) => v3.covering.includes(t));
-  if ((bc.verdict === "no-coverage" || v3.verdict === "no-coverage") && !sameCover)
-    return "coverage";
-  const cover = new Set([...bc.covering, ...v3.covering]);
-  const redOnOneSide = [...cover].some((t) => bcBaselineRed.has(t) !== v3BaselineRed.has(t));
-  if (redOnOneSide || BASELINE_NOTE.test(bc.note) || BASELINE_NOTE.test(v3.note)) return "baseline";
-  if (v3.verdict === "error" && bc.verdict !== "error") return "v3-refused";
-  if (bc.verdict === "error" && v3.verdict !== "error") return "bc-error";
-  if (ANSWERED.has(bc.verdict) && ANSWERED.has(v3.verdict)) return `${bc.verdict}-vs-${v3.verdict}`;
+  if (bc.verdict === "killed") return oneKilled(bc, v3, v3Red, "v3", true);
+  if (v3.verdict === "killed") return oneKilled(v3, bc, bcRed, "bc", false);
+  const errBaseline = (r: Row) => r.verdict === "error" && BASELINE_NOTE.test(r.note);
+  if (errBaseline(bc) || errBaseline(v3)) return "baseline";
+  const allRed = (tests: readonly string[], red: ReadonlySet<string>) =>
+    tests.length > 0 && tests.every((t) => red.has(t));
+  if (v3.verdict === "no-coverage") return allRed(bc.covering, v3Red) ? "baseline" : "coverage";
+  if (bc.verdict === "no-coverage") return allRed(v3.covering, bcRed) ? "baseline" : "coverage";
+  if (v3.verdict === "error") return "v3-refused";
+  if (bc.verdict === "error") return "bc-error";
   return "other";
 }
 
@@ -124,31 +158,49 @@ export interface JoinResult {
       readonly equal: number;
     };
     /**
-     * Over the keys none of whose covering tests (either side's) is red at either baseline: the comparison neither side's
-     * baseline refusals or failures can disturb. `verdict` counts the same verdict (a different killing test included).
+     * Over the keys with at least one covering test (either side), none of them red at either baseline, and no baseline
+     * note: the comparison neither baseline can disturb. `verdict` counts the same verdict (another killing test
+     * included). Keys no test reaches on either side are left out: they agree trivially (`noTestEitherSide`).
      */
     readonly greenBaseline: { readonly both: number; readonly verdict: number };
+    readonly noTestEitherSide: number;
   };
   readonly rows: readonly string[];
 }
 
 /**
- * The tests that did not pass at a run's baseline, as `<codeunit>.<method>`, from its results store: a report lists only
- * the tests it never ran (`notRunAtBaseline`), not the ones that ran and failed.
+ * The tests that did not pass at a run's baseline, as `<codeunit>.<method>`, from its results store (the LATEST run in
+ * it). A report's `notRunAtBaseline` can leave out a test that ran and failed; the store has every baseline row.
  */
 export function baselineRedFromStore(path: string): Set<string> {
   const db = new Database(path, { readonly: true });
   try {
     const rows = db
       .query(
-        "select coalesce(codeunit_name, cast(codeunit_id as text)) || '.' || method as t from test_results where mutant_row_id is null and outcome <> 'pass'",
+        "select codeunit_name as c, method as m from test_results where mutant_row_id is null and outcome <> 'pass' and run_id = (select max(run_id) from test_results where mutant_row_id is null)",
       )
-      .all() as { t: string }[];
-    return new Set(rows.map((r) => r.t));
+      .all() as { c: string | null; m: string }[];
+    return new Set(
+      rows.map((r) => {
+        if (r.c === null)
+          throw new BcV3JoinRefusal(`${path}: a baseline row for ${r.m} has no codeunit name`);
+        return `${r.c}.${r.m}`;
+      }),
+    );
   } finally {
     db.close();
   }
 }
+
+const testSet = (r: SessionReport): string =>
+  JSON.stringify(
+    (
+      (r as SessionReport & { testMethods?: { name: string; file: string; line: number }[] })
+        .testMethods ?? []
+    )
+      .map((t) => `${t.file}|${t.line}|${t.name}`)
+      .sort(),
+  );
 
 export function joinReports(
   bcReports: readonly SessionReport[],
@@ -156,33 +208,59 @@ export function joinReports(
   file?: string,
   extraRed: { readonly bc?: ReadonlySet<string>; readonly v3?: ReadonlySet<string> } = {},
 ): JoinResult {
-  const shas = new Set([...bcReports, v3].map((r) => r.sourceSha256));
+  const all = [...bcReports, v3];
+  if (all.some((r) => typeof r.sourceSha256 !== "string" || r.sourceSha256 === ""))
+    throw new BcV3JoinRefusal("a report has no sourceSha256: the source cannot be shown equal");
+  const shas = new Set(all.map((r) => r.sourceSha256));
   if (shas.size !== 1)
     throw new BcV3JoinRefusal(
       `the reports were built from different source: ${[...shas].join(", ")}`,
     );
+  if (new Set(all.map(testSet)).size !== 1)
+    throw new BcV3JoinRefusal("the reports ran different test methods (name, file, line)");
+  const red = (r: SessionReport) => JSON.stringify([...(r.notRunAtBaseline ?? [])].sort());
+  if (new Set(bcReports.map(red)).size > 1)
+    throw new BcV3JoinRefusal("the BC halves have different baselines (notRunAtBaseline)");
   const bc = index(bcReports, file, "bc");
   const v = index([v3], file, "v3");
   if (bc.size === 0 || v.size === 0)
     throw new BcV3JoinRefusal(
       `no mutant in scope on ${bc.size === 0 ? "the BC side" : "the v3 side"}`,
     );
-  const red = (reps: readonly SessionReport[]) =>
-    new Set(reps.flatMap((r) => r.notRunAtBaseline ?? []));
-  const bcRed = new Set([...red(bcReports), ...(extraRed.bc ?? [])]);
-  const v3Red = new Set([...red([v3]), ...(extraRed.v3 ?? [])]);
+  const bcRed = new Set([...(bcReports[0]?.notRunAtBaseline ?? []), ...(extraRed.bc ?? [])]);
+  const v3Red = new Set([...(v3.notRunAtBaseline ?? []), ...(extraRed.v3 ?? [])]);
   const classes: Record<string, number> = {};
   const rows = [
     "key\tbc code\tv3 code\tbc verdict\tv3 verdict\tbc killing test\tv3 killing test\tbc covering\tv3 covering\tclass\tv3 note",
   ];
+  const row = (k: string, b: Row | undefined, w: Row | undefined, c: string) =>
+    rows.push(
+      [
+        k,
+        b?.code ?? "",
+        w?.code ?? "",
+        b?.verdict ?? "",
+        w?.verdict ?? "",
+        b?.killer ?? "",
+        w?.killer ?? "",
+        b?.covering.length ?? "",
+        w?.covering.length ?? "",
+        c,
+        (w?.note ?? "").slice(0, 300).replace(/[\t\n\r]/g, " "),
+      ].join("\t"),
+    );
   let answered = 0;
   let answeredVerdict = 0;
   let answeredEqual = 0;
   let green = 0;
   let greenVerdict = 0;
+  let noTest = 0;
   for (const [k, b] of bc) {
     const w = v.get(k);
-    if (w === undefined) continue;
+    if (w === undefined) {
+      row(k, b, undefined, "only-bc");
+      continue;
+    }
     const c = classify(b, w, bcRed, v3Red);
     classes[c] = (classes[c] ?? 0) + 1;
     const sameVerdict = c === "equal" || c === "killed-other-test";
@@ -191,29 +269,16 @@ export function joinReports(
       if (sameVerdict) answeredVerdict++;
       if (c === "equal") answeredEqual++;
     }
-    // a side that names baseline-red tests in its note (its covering list then holds none) is baseline-affected too
+    const cover = [...b.covering, ...w.covering];
     const noteRed = BASELINE_NOTE.test(b.note) || BASELINE_NOTE.test(w.note);
-    if (!noteRed && ![...b.covering, ...w.covering].some((t) => bcRed.has(t) || v3Red.has(t))) {
+    if (cover.length === 0 && !noteRed) noTest++;
+    else if (!noteRed && !cover.some((t) => bcRed.has(t) || v3Red.has(t))) {
       green++;
       if (sameVerdict) greenVerdict++;
     }
-    if (c !== "equal")
-      rows.push(
-        [
-          k,
-          b.code,
-          w.code,
-          b.verdict,
-          w.verdict,
-          b.killingTest,
-          w.killingTest,
-          b.covering.length,
-          w.covering.length,
-          c,
-          w.note.slice(0, 300).replace(/[\t\n\r]/g, " "),
-        ].join("\t"),
-      );
+    if (c !== "equal") row(k, b, w, c);
   }
+  for (const [k, w] of v) if (!bc.has(k)) row(k, undefined, w, "only-v3");
   const both = Object.values(classes).reduce((a, n) => a + n, 0);
   return {
     summary: {
@@ -226,33 +291,38 @@ export function joinReports(
       classes,
       answeredAgreement: { both: answered, verdict: answeredVerdict, equal: answeredEqual },
       greenBaseline: { both: green, verdict: greenVerdict },
+      noTestEitherSide: noTest,
     },
     rows,
   };
 }
 
 if (import.meta.main) {
-  const args = process.argv.slice(2);
-  const all = (flag: string) =>
-    args.flatMap((a, i) =>
-      a === flag && args[i + 1] !== undefined ? [args[i + 1] as string] : [],
-    );
-  const one = (flag: string) => all(flag)[0];
-  const bcPaths = all("--bc");
-  const v3Path = one("--v3");
-  const out = one("--out");
-  if (bcPaths.length === 0 || v3Path === undefined || out === undefined)
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    strict: true,
+    options: {
+      bc: { type: "string", multiple: true },
+      v3: { type: "string" },
+      file: { type: "string" },
+      "bc-store": { type: "string", multiple: true },
+      "v3-store": { type: "string", multiple: true },
+      out: { type: "string" },
+    },
+  });
+  const bcPaths = values.bc ?? [];
+  if (bcPaths.length === 0 || values.v3 === undefined || values.out === undefined)
     throw new Error(
       "usage: bc-v3-join.ts --bc <report.json> [--bc ...] --v3 <report.json> [--file <path>] [--bc-store <db> ...] [--v3-store <db>] --out <dir>",
     );
-  const fromStores = (paths: string[]) =>
+  const fromStores = (paths: readonly string[]) =>
     new Set(paths.flatMap((p) => [...baselineRedFromStore(p)]));
-  const result = joinReports(bcPaths.map(loadReport), loadReport(v3Path), one("--file"), {
-    bc: fromStores(all("--bc-store")),
-    v3: fromStores(all("--v3-store")),
+  const result = joinReports(bcPaths.map(loadReport), loadReport(values.v3), values.file, {
+    bc: fromStores(values["bc-store"] ?? []),
+    v3: fromStores(values["v3-store"] ?? []),
   });
-  mkdirSync(out, { recursive: true });
-  writeFileSync(join(out, "joined.tsv"), `${result.rows.join("\n")}\n`);
-  writeFileSync(join(out, "summary.json"), `${JSON.stringify(result.summary, null, 2)}\n`);
+  mkdirSync(values.out, { recursive: true });
+  writeFileSync(join(values.out, "joined.tsv"), `${result.rows.join("\n")}\n`);
+  writeFileSync(join(values.out, "summary.json"), `${JSON.stringify(result.summary, null, 2)}\n`);
   console.log(JSON.stringify(result.summary, null, 2));
 }

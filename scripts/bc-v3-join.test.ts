@@ -1,6 +1,10 @@
+import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { SessionReport } from "../packages/runner/src/report";
-import { BcV3JoinRefusal, joinReports } from "./bc-v3-join";
+import { BcV3JoinRefusal, baselineRedFromStore, joinReports, resolveKiller } from "./bc-v3-join";
 
 // PR-490: synthetic reports, invented names. Each mutant is one site; key = file|line|operator|start|end.
 type M = {
@@ -23,23 +27,29 @@ const mutant = (m: M) => ({
   coveringTests: m.coveringTests ?? ["T.One"],
   ...(m.failureNote !== undefined ? { failureNote: m.failureNote } : {}),
 });
-const report = (ms: M[], red: string[] = [], sha = "s1") =>
+const report = (ms: M[], red: string[] = [], sha: string | null = "s1") =>
   ({
-    sourceSha256: sha,
+    ...(sha === null ? {} : { sourceSha256: sha }),
     notRunAtBaseline: red,
     mutants: ms.map(mutant),
   }) as unknown as SessionReport;
 
-// Red: compare killing tests on any verdict, or drop the killing-test check: the first two lines swap classes.
-test("equal, killed-other-test, and the answered and green-baseline agreement", () => {
+test("the killing method resolves to its full name from the covering tests, dotted codeunit names kept whole", () => {
+  expect(resolveKiller("Go", ["A. B. Tests.Go", "C.Other"])).toBe("A. B. Tests.Go");
+  expect(resolveKiller("Go", ["C.Other"])).toBe("Go");
+  expect(resolveKiller("", ["C.Other"])).toBe("");
+});
+
+// Red: drop the killing-test comparison: line 2 reads equal.
+test("equal, killed-other-test, and the answered agreement", () => {
   const bc = report([
-    { line: 1, verdict: "killed", killingTest: "a" },
-    { line: 2, verdict: "killed", killingTest: "a" },
+    { line: 1, verdict: "killed", killingTest: "One" },
+    { line: 2, verdict: "killed", killingTest: "One", coveringTests: ["T.One", "T.Two"] },
     { line: 3, verdict: "survived" },
   ]);
   const v3 = report([
-    { line: 1, verdict: "killed", killingTest: "a" },
-    { line: 2, verdict: "killed", killingTest: "b" },
+    { line: 1, verdict: "killed", killingTest: "One" },
+    { line: 2, verdict: "killed", killingTest: "Two", coveringTests: ["T.One", "T.Two"] },
     { line: 3, verdict: "survived" },
   ]);
   const r = joinReports([bc], v3);
@@ -48,9 +58,31 @@ test("equal, killed-other-test, and the answered and green-baseline agreement", 
   expect(r.summary.greenBaseline).toEqual({ both: 3, verdict: 3 });
 });
 
-// Red: classify a verdict flip before the baseline check: line 1 reads killed-vs-survived and green counts it.
-test("a covering test red on one side only is a baseline difference, outside the green-baseline count", () => {
-  const bc = report([{ line: 1, verdict: "killed", killingTest: "a" }]);
+// Red: decide `baseline` from any red covering test (the first build): line 1 hides a real flip.
+test("a flip whose KILLING test is green on both is examined, even when another covering test is red on one side", () => {
+  const cover = ["T.Kill", "T.Unrelated"];
+  const bc = report([{ line: 1, verdict: "survived", coveringTests: cover }]);
+  const v3 = report(
+    [{ line: 1, verdict: "killed", killingTest: "Kill", coveringTests: cover }],
+    ["T.Unrelated"],
+  );
+  expect(joinReports([bc], v3).summary.classes).toEqual({ "survived-vs-killed": 1 });
+});
+
+// Red: the same; the one-mutant refusal hides under baseline.
+test("a one-mutant v3 refusal is v3-refused, even when another covering test is red on v3", () => {
+  const cover = ["T.Kill", "T.Unrelated"];
+  const bc = report([{ line: 1, verdict: "killed", killingTest: "Kill", coveringTests: cover }]);
+  const v3 = report(
+    [{ line: 1, verdict: "error", coveringTests: cover, failureNote: "NotRun: out-of-scope: x" }],
+    ["T.Unrelated"],
+  );
+  expect(joinReports([bc], v3).summary.classes).toEqual({ "v3-refused": 1 });
+});
+
+// Red: ignore the killing test's red status: the flip reads killed-vs-survived.
+test("a killing test red at the other side's baseline is a baseline difference, outside the green count", () => {
+  const bc = report([{ line: 1, verdict: "killed", killingTest: "One" }]);
   const v3 = report([{ line: 1, verdict: "survived" }], ["T.One"]);
   const r = joinReports([bc], v3);
   expect(r.summary.classes).toEqual({ baseline: 1 });
@@ -59,7 +91,7 @@ test("a covering test red on one side only is a baseline difference, outside the
 
 // Red: ignore the extra red sets (from a store): line 1 becomes killed-vs-survived.
 test("a test that FAILED at baseline (from a store, not in notRunAtBaseline) counts as red", () => {
-  const bc = report([{ line: 1, verdict: "killed", killingTest: "a" }]);
+  const bc = report([{ line: 1, verdict: "killed", killingTest: "One" }]);
   const v3 = report([{ line: 1, verdict: "survived" }]);
   expect(joinReports([bc], v3).summary.classes).toEqual({ "killed-vs-survived": 1 });
   expect(joinReports([bc], v3, undefined, { v3: new Set(["T.One"]) }).summary.classes).toEqual({
@@ -67,8 +99,8 @@ test("a test that FAILED at baseline (from a store, not in notRunAtBaseline) cou
   });
 });
 
-// Red: drop the note check from the green count: the error/no-coverage pair counts as green with a differing verdict.
-test("a note naming baseline-red tests keeps the mutant out of the green-baseline count", () => {
+// Red: drop the note check: the error/no-coverage pair is not baseline, and it counts as a no-test key.
+test("an error whose note names baseline-red tests is baseline, and neither green nor no-test", () => {
   const bc = report([
     {
       line: 1,
@@ -81,15 +113,26 @@ test("a note naming baseline-red tests keeps the mutant out of the green-baselin
   const r = joinReports([bc], v3);
   expect(r.summary.classes).toEqual({ baseline: 1 });
   expect(r.summary.greenBaseline).toEqual({ both: 0, verdict: 0 });
+  expect(r.summary.noTestEitherSide).toBe(0);
 });
 
-test("no-coverage on one side with different covering sets is a coverage difference", () => {
-  const bc = report([{ line: 1, verdict: "killed", killingTest: "a", coveringTests: ["T.One"] }]);
+// Red: count no-test keys as green: greenBaseline reads 2.
+test("keys no test reaches on either side are counted apart, not as green agreement", () => {
+  const none = { line: 1, verdict: "no-coverage", coveringTests: [] };
+  const bc = report([none, { line: 2, verdict: "survived" }]);
+  const v3 = report([none, { line: 2, verdict: "survived" }]);
+  const r = joinReports([bc], v3);
+  expect(r.summary.noTestEitherSide).toBe(1);
+  expect(r.summary.greenBaseline).toEqual({ both: 1, verdict: 1 });
+});
+
+test("killed vs no-coverage with a green killing test is a coverage difference", () => {
+  const bc = report([{ line: 1, verdict: "killed", killingTest: "One" }]);
   const v3 = report([{ line: 1, verdict: "no-coverage", coveringTests: [] }]);
   expect(joinReports([bc], v3).summary.classes).toEqual({ coverage: 1 });
 });
 
-test("an error on one side only is named for that side", () => {
+test("an error on one side only, without a baseline note, is named for that side", () => {
   const bc = report([
     { line: 1, verdict: "survived" },
     { line: 2, verdict: "error" },
@@ -102,7 +145,7 @@ test("an error on one side only is named for that side", () => {
 });
 
 // Red: join on mutantCode: the halves both number from M1 and collide.
-test("BC halves join on the site key, never the per-half mutant code; keys only on one side are counted", () => {
+test("BC halves join on the site key, never the per-half mutant code; one-side keys are listed", () => {
   const a = report([{ line: 1, verdict: "survived", mutantCode: "M1" }]);
   const b = report([{ line: 2, verdict: "survived", mutantCode: "M1" }]);
   const v3 = report([
@@ -113,13 +156,51 @@ test("BC halves join on the site key, never the per-half mutant code; keys only 
   const r = joinReports([a, b], v3);
   expect(r.summary).toMatchObject({ bcMutants: 2, v3Mutants: 3, both: 2, onlyBc: 0, onlyV3: 1 });
   expect(r.summary.classes).toEqual({ equal: 2 });
+  expect(r.rows.filter((l) => l.endsWith("\tonly-v3\t"))).toHaveLength(1);
 });
 
-test("refuses different source, a repeated key, and an empty side", () => {
+test("refuses a missing or different source, a repeated key, halves with different baselines, an empty side", () => {
   const ok = report([{ line: 1, verdict: "survived" }]);
   expect(() => joinReports([ok], report([{ line: 1, verdict: "survived" }], [], "s2"))).toThrow(
     BcV3JoinRefusal,
   );
+  expect(() =>
+    joinReports([report([{ line: 1, verdict: "survived" }], [], null)], report([], [], null)),
+  ).toThrow(/no sourceSha256/);
   expect(() => joinReports([ok, ok], ok)).toThrow(/appears twice/);
+  const half = report([{ line: 2, verdict: "survived" }], ["T.X"]);
+  expect(() => joinReports([ok, half], ok)).toThrow(/different baselines/);
   expect(() => joinReports([ok], ok, "src/Other.al")).toThrow(/no mutant in scope/);
+  expect(() => joinReports([ok], report([]))).toThrow(/no mutant in scope on the v3 side/);
+});
+
+// Red: read every run (not the latest), or keep a row without a codeunit name.
+test("the store reader takes the latest run's non-pass baseline rows and refuses a nameless row", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bc-v3-join-"));
+  try {
+    const path = join(dir, "store.sqlite");
+    const db = new Database(path);
+    db.run(
+      "create table test_results (run_id integer, mutant_row_id integer, codeunit_name text, method text, outcome text)",
+    );
+    const add = (
+      run: number,
+      mutant: number | null,
+      cu: string | null,
+      m: string,
+      outcome: string,
+    ) => db.run("insert into test_results values (?, ?, ?, ?, ?)", [run, mutant, cu, m, outcome]);
+    add(1, null, "Old Tests", "Gone", "fail");
+    add(2, null, "A. B. Tests", "Red", "fail");
+    add(2, null, "A. B. Tests", "Green", "pass");
+    add(2, 7, "A. B. Tests", "UnderMutant", "fail");
+    db.close();
+    expect([...baselineRedFromStore(path)]).toEqual(["A. B. Tests.Red"]);
+    const db2 = new Database(path);
+    db2.run("insert into test_results values (2, null, null, 'Nameless', 'fail')");
+    db2.close();
+    expect(() => baselineRedFromStore(path)).toThrow(/no codeunit name/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
