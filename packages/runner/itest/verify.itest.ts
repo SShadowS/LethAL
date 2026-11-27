@@ -70,7 +70,7 @@ import {
   printObserved,
   settleThrown,
 } from "./gate-warnings";
-import { assertKillsReproduced } from "./kill-reproduction";
+import { assertKillsReproduced, latestRunId } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { LOG_THEN_GAP, OVER_BUDGET_GAP, PREDICTED_GAPS } from "./verify-gaps";
 import { assertReachFields } from "./verify-reach-fields";
@@ -283,7 +283,7 @@ async function main(): Promise<void> {
     });
     // R582: every kill of the full run was re-run under the mutant (verify's own kills in step 3
     // are not evidenced: `VerifyResult` carries no marker).
-    assertKillsReproduced("verify", report, store);
+    assertKillsReproduced("verify", report, store, latestRunId(store)); // a scratch store (R1241)
     checkGateWarnings("verify", "run", warnings);
     // Closed before verify opens the same file through the CLI path.
     store.close();

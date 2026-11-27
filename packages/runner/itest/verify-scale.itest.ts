@@ -66,7 +66,7 @@ import {
   readFixtureConfig,
 } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { assertKillsReproduced } from "./kill-reproduction";
+import { assertKillsReproduced, latestRunId } from "./kill-reproduction";
 import { keyOf } from "./mutant-equality";
 import { assertFreshFullRun } from "./verify-agreement";
 import {
@@ -340,7 +340,7 @@ async function main(): Promise<void> {
         quarantineDir,
       });
       // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
-      assertKillsReproduced(`verify-scale/${leg.toUpperCase()}`, report, store);
+      assertKillsReproduced(`verify-scale/${leg.toUpperCase()}`, report, store, latestRunId(store)); // scratch (R1241)
     } finally {
       store.close();
       await backend.close();
