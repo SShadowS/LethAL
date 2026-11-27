@@ -2309,7 +2309,7 @@ describe("PR-489: the io-streams family", () => {
   });
 
   // Red: drop `locale` from a code-page cell, or mark an ASCII or UTF cell `locale` (R1210 would read the wrong cells).
-  test("exactly the 6 code-page cells are locale cells", () => {
+  test("exactly the 7 code-page cells are locale cells", () => {
     expect(f.cells.filter((c) => c.depends === "locale").map((c) => c.method)).toEqual([
       "Windows ae letter",
       "MSDos ae letter",
@@ -2317,6 +2317,7 @@ describe("PR-489: the io-streams family", () => {
       "UTF8 ae read without encoding",
       "default ae bytes",
       "To ae Windows",
+      "Export Xml",
     ]);
   });
 
@@ -2325,10 +2326,11 @@ describe("PR-489: the io-streams family", () => {
     const keys: string[] = [];
     for (const c of f.cells) {
       expect(stmts(c)).not.toMatch(/\b(B|Item)\.DeleteAll/);
-      for (const m of stmts(c).matchAll(
-        /(?:InsertBlob\(|B\.Id := |InsertItems\('X|OutS\.WriteText\('<Items><Item><Code>X)(\d+)/g,
-      ))
-        keys.push(`${c.method}:${m[1]}`);
+      // every key from ioKey() is 4 digits; an item code is 'X' + key + a row digit, so take the 4-digit stem everywhere
+      const own = new Set<string>();
+      for (const m of stmts(c).matchAll(/(?:InsertBlob\(|B\.Id := |B\.Get\(|'X|<Code>X)(\d{4})/g))
+        own.add(m[1] ?? "");
+      for (const k of own) keys.push(`${c.method}:${k}`);
       for (const m of stmts(c).matchAll(/Format\(/g)) {
         let depth = 0;
         const s = stmts(c);
@@ -2350,7 +2352,8 @@ describe("PR-489: the io-streams family", () => {
       const [cell, key] = k.split(":") as [string, string];
       byKey.set(key, (byKey.get(key) ?? new Set()).add(cell));
     }
-    expect(byKey.size).toBeGreaterThan(8);
+    // 7 Blob-field cells and 5 XMLport cells take a key each (the malformed and empty imports write none)
+    expect(byKey.size).toBe(12);
     for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });
   });
 });

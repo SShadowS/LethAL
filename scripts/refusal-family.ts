@@ -8333,7 +8333,8 @@ const IO_CELLS: readonly Cell[] = (() => {
           "TB.Data.CreateInStream(InS);",
         ],
         "H.ReadAll(InS)",
-        XP("IO Items Xml"),
+        // the UTF-16 export read through the default encoding: its byte-order mark and NULs decode by the OS code page
+        { ...XP("IO Items Xml"), locale: true },
       ),
     );
   }
