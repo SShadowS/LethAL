@@ -4999,6 +4999,8 @@ function resolveResume(
     readonly otherRunnerBuild: string;
     readonly on: boolean;
   },
+  /** PR-472: the digest with `--no-kill-ledger` the other way, and this session's state of it; set only on bcdev. */
+  ledgerFlag?: { readonly otherFingerprint: string; readonly killLedgerOff: boolean },
 ):
   | {
       runId: number;
@@ -5093,6 +5095,22 @@ function resolveResume(
         if (other !== null)
           throw new CarryWalkError(
             carryWalkResumeMessage(`--resume found run ${other}`, carryFlag.carryWalk),
+          );
+      }
+      // PR-472: likewise for an unfinished run recorded with `--no-kill-ledger` the other way.
+      if (ledgerFlag !== undefined) {
+        const other = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: ledgerFlag.otherFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          ...(lendingSession?.runnerBuild !== undefined
+            ? { runnerBuild: lendingSession.runnerBuild }
+            : {}),
+        });
+        if (other !== null)
+          throw new KillLedgerResumeError(
+            killLedgerResumeMessage(`--resume found run ${other}`, ledgerFlag.killLedgerOff),
           );
       }
       // PR-347: likewise for an unfinished run recorded with `refusedCutTail` the other way (the default flipped).
@@ -5279,6 +5297,11 @@ function resolveResume(
       if (carryFlag !== undefined && row.configFingerprint === carryFlag.otherCarryFingerprint) {
         throw new CarryWalkError(carryWalkResumeMessage(`--resume-run ${id}`, carryFlag.carryWalk));
       }
+      if (ledgerFlag !== undefined && row.configFingerprint === ledgerFlag.otherFingerprint) {
+        throw new KillLedgerResumeError(
+          killLedgerResumeMessage(`--resume-run ${id}`, ledgerFlag.killLedgerOff),
+        );
+      }
       if (
         olderDefaultFingerprint !== undefined &&
         row.configFingerprint === olderDefaultFingerprint
@@ -5343,11 +5366,13 @@ function resolveResume(
     type: "warning",
     code: "resume-reusing-run",
     message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing.${
-      seeds > 0
-        ? ` ${seeds} carried kill(s) may seed R197's kill ledger, so the remaining mutants' tests are ordered as in a fresh run (R1179).`
-        : ""
+      cfg.killLedger === false
+        ? " The kill ledger is off for this run (--no-kill-ledger): carried kills seed nothing, and every mutant's tests run in the no-ledger order (PR-472)."
+        : seeds > 0
+          ? ` ${seeds} carried kill(s) may seed R197's kill ledger, so the remaining mutants' tests are ordered as in a fresh run (R1179).`
+          : ""
     }${
-      noSeed > 0
+      cfg.killLedger !== false && noSeed > 0
         ? ` ${noSeed} carried kill(s) will not seed it: their killing test names no single covering test of this session (R1179).`
         : ""
     } Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646).${
@@ -7959,13 +7984,17 @@ async function runSessionBody(
   // PR-347: `refusedCutTail` (PR-297) is on unless `false`; the key is in the digest only when on. A backend with no such
   // getter (every other backend) has `undefined` here and never gets the key or the cross-flag search.
   const cutTailOn = cfg.backend.refusedCutTail === true;
+  // PR-472: `--no-kill-ledger` (bcdev only, checked above); in the digest only when on.
+  const ledgerOffOn = cfg.killLedger === false;
   const fingerprintWith = (
     prune: boolean,
     carryOn: boolean = carryWalk,
     cutTail: boolean = cutTailOn,
+    ledgerOff: boolean = ledgerOffOn,
   ) =>
     sessionFingerprint({
       ...fingerprintBase,
+      ...(ledgerOff ? { killLedgerOff: true as const } : {}), // PR-472
       ...(cutTail ? { v3RefusedCutTail: true as const } : {}), // PR-297
       ...(prune ? { v3ReachPrune: true as const } : {}),
       ...(carryApplies && !carryOn ? { v3CarryWalkOff: true as const } : {}),
@@ -7983,6 +8012,7 @@ async function runSessionBody(
           ...(reachPrune ? { v3ReachPrune: true as const } : {}),
           ...(carryApplies && !carryWalk ? { v3CarryWalkOff: true as const } : {}),
           ...(carryApplies && !carrySkip ? { v3CarrySkipOff: true as const } : {}), // PR-410
+          ...(ledgerOffOn ? { killLedgerOff: true as const } : {}), // PR-472
         })
       : undefined;
   const resolvedResume = resolveResume(
@@ -8013,6 +8043,13 @@ async function runSessionBody(
           otherFingerprint: fingerprintWith(reachPrune, carryWalk, !cutTailOn),
           otherRunnerBuild: lendingRunnerBuild(cfg.backend, v3Build, !cutTailOn),
           on: cutTailOn,
+        }
+      : undefined,
+    // PR-472: bcdev only; the flag is refused elsewhere.
+    isBcdev(caps.kind)
+      ? {
+          otherFingerprint: fingerprintWith(reachPrune, carryWalk, cutTailOn, !ledgerOffOn),
+          killLedgerOff: ledgerOffOn,
         }
       : undefined,
   );
@@ -11597,6 +11634,18 @@ export function readCarryWalk(env: Record<string, string | undefined>): boolean 
 /** PR-340: why a resume across a change of `LETHAL_V3_CARRY_WALK` is refused (same shape as PR-303's). */
 function carryWalkResumeMessage(subject: string, nowOn: boolean): string {
   return `carry-walk-resume-refused: ${subject} was recorded with ${CARRY_WALK_ENV} ${nowOn ? "off" : "on, or before the knob existed"}, and this session has it ${nowOn ? "on" : "off"}. A survivor scored with the carry walk must never be carried into a run without it as an ordinary one (PR-340). Set the knob as that run had it, or drop the resume flag to run from scratch.`;
+}
+
+/** PR-472: a resume or lend across a change of `--no-kill-ledger`. Extends `Error` directly. */
+export class KillLedgerResumeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KillLedgerResumeError";
+  }
+}
+
+function killLedgerResumeMessage(subject: string, nowOff: boolean): string {
+  return `kill-ledger-resume-refused: ${subject} was recorded with --no-kill-ledger ${nowOff ? "off" : "on"}, and this session has it ${nowOff ? "on" : "off"}. A kill or survivor scored in one order must never be carried into a run with the other (PR-472). Pass the flag as that run had it, or drop the resume flag to run from scratch.`;
 }
 
 /** PR-303 rule 6: why a resume across a flag change is refused. */

@@ -8,9 +8,10 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { parseCliConfig } from "../src/cli";
+import { parseCliConfig, runFromCliWithAccept } from "../src/cli";
 import { KillLedgerFlagBackendError, runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
+import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
 import { scratchDirs } from "./helpers/scratch";
 
 /**
@@ -69,10 +70,7 @@ async function makeProject() {
   await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), TESTS_AL);
-  await Bun.write(
-    join(testDir, "app.json"),
-    '{"name":"Tests","publisher":"P","version":"1.0.0.0"}',
-  );
+  await Bun.write(join(testDir, "app.json"), testAppJson());
   return { projectDir, testDir, instrumentedDir: join(root, "instr") };
 }
 
@@ -83,6 +81,10 @@ class StateStub implements ExecutionBackend {
     version: "alrunner 3.0.0-alpha.2 (91253f2d6)",
     binarySha256: "b".repeat(64),
   });
+  // R495: a served, installed test app, so the run's identity is proven (as a real bcdev's is) and a resume can reach its fingerprint check.
+  private readonly testApp = servesTestApp();
+  fetchPublishedAppPackage = this.testApp.fetchPublishedAppPackage;
+  microsoftMode = this.testApp.microsoftMode;
   private active: string | null = null;
   private zRan = false;
   /** Every mutated run, in order: the call counter the tests read. */
@@ -136,12 +138,18 @@ class StateStub implements ExecutionBackend {
   }
 }
 
-async function session(backend: StateStub, extra: Partial<Parameters<typeof runSession>[0]> = {}) {
-  const store = new ResultsStore(":memory:");
+async function session(
+  backend: StateStub,
+  extra: Partial<Parameters<typeof runSession>[0]> = {},
+  o: { store?: ResultsStore; project?: Awaited<ReturnType<typeof makeProject>>; tag?: string } = {},
+) {
+  const store = o.store ?? new ResultsStore(":memory:");
+  const project = o.project ?? (await makeProject());
   const report = await runSession({
     backend,
     store,
-    ...(await makeProject()),
+    ...project,
+    instrumentedDir: `${project.instrumentedDir}${o.tag ?? ""}`,
     selectorIds,
     ...extra,
   });
@@ -162,6 +170,15 @@ const CARRY: Script = (mutant, method, zRan) =>
 // Only M0001's Z1 kills: every later mutant survives, so the ledger order (Z1 first) crosses codeunits.
 const Z1_ONLY: Script = (mutant, method) =>
   mutant === "M0001" && method === "Z1" ? "fail" : "pass";
+// M0001: Z1 kills (fills the ledger). Every other mutant: A1 fails ONLY if Z1 ran earlier in its session.
+const NEEDS_Z1: Script = (mutant, method, zRan) =>
+  mutant === "M0001"
+    ? method === "Z1"
+      ? "fail"
+      : "pass"
+    : method === "A1" && zRan
+      ? "fail"
+      : "pass";
 
 describe("PR-472: --no-kill-ledger", () => {
   test("(a) flag on: the no-ledger order, and no re-walk where the ledger would cross codeunits", async () => {
@@ -195,6 +212,58 @@ describe("PR-472: --no-kill-ledger", () => {
     expect(s2.row("M0002")?.failureNote).toContain(NOTE);
     expect(carry.runsOf("M0002")).toEqual(["Z1", "A1", "A1"]);
     s2.store.close();
+  });
+
+  // Amendment 1: the one verdict move. Red: make the flag a no-op (killLedger ignored) and M0002 turns killed.
+  test("(b2) a kill that rests on state an earlier test codeunit left: killed by default, survived with the flag", async () => {
+    const off = new StateStub(BCDEV, NEEDS_Z1);
+    const d = await session(off);
+    expect(d.row("M0002")?.verdict).toBe("killed");
+    expect(d.row("M0002")?.killingTest).toBe("A1");
+    expect(off.runsOf("M0002")).toEqual(["Z1", "A1"]); // ledger order, killed at once: no re-walk
+    expect(d.row("M0002")?.failureNote ?? "").not.toContain(NOTE);
+    d.store.close();
+    const on = new StateStub(BCDEV, NEEDS_Z1);
+    const f = await session(on, { killLedger: false });
+    expect(f.row("M0002")?.verdict).toBe("survived");
+    expect(on.runsOf("M0002")).toEqual(["A1", "Z1"]); // A1 first, before Z1 ran: passes
+    f.store.close();
+  });
+
+  // Red: drop `killLedgerOff` from sessionFingerprint (resume.ts), or the ledgerFlag checks in resolveResume.
+  test("(f) a --resume across the flag is refused by name, both ways, by id and as last; the same mode resumes", async () => {
+    for (const [first, second] of [
+      [undefined, false],
+      [false, undefined],
+    ] as const) {
+      const store = new ResultsStore(":memory:");
+      const project = await makeProject();
+      const extraOf = (k: false | undefined, resume?: number | "last") => ({
+        ...(k === false ? { killLedger: false as const } : {}),
+        ...(resume !== undefined ? { resume } : {}),
+      });
+      await session(new StateStub(BCDEV, Z1_ONLY), extraOf(first), { store, project, tag: "-1" });
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+      const byId = new StateStub(BCDEV, Z1_ONLY);
+      await expect(
+        session(byId, extraOf(second, 1), { store, project, tag: "-2" }),
+      ).rejects.toThrow(/kill-ledger-resume-refused/);
+      expect(byId.runs.length).toBe(0);
+      await expect(
+        session(new StateStub(BCDEV, Z1_ONLY), extraOf(second, "last"), {
+          store,
+          project,
+          tag: "-3",
+        }),
+      ).rejects.toThrow(/kill-ledger-resume-refused/);
+      const resumed = await session(new StateStub(BCDEV, Z1_ONLY), extraOf(first, 1), {
+        store,
+        project,
+        tag: "-4",
+      });
+      expect(resumed.report.resumedFrom?.runId).toBe(1);
+      store.close();
+    }
   });
 
   test("(c) flag on with a non-bcdev backend is refused by name, before any run", async () => {
@@ -234,5 +303,49 @@ describe("PR-472: --no-kill-ledger", () => {
     expect(on.mode === "run" ? on.killLedger : "wrong mode").toBe(false);
     const off = parseCliConfig(base);
     expect(off.mode === "run" ? "killLedger" in off : "wrong mode").toBe(false);
+  });
+
+  // Red: delete `...(parsed.killLedger === false ? { killLedger: false as const } : {})` in runFromCliWithAccept (cli.ts).
+  test("(g) runFromCliWithAccept hands killLedger: false to the session only when the flag is on", async () => {
+    const root = scratch("lethal-pr472-cli-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(testDir, "app.json"), "{}");
+    await Bun.write(join(root, "lethal.config.json"), "{}");
+    const seen = async (killLedger: false | undefined) => {
+      let got: Parameters<typeof runSession>[0] | undefined;
+      // A canned report, not a throw: a failed run keeps its scratch folder (R358).
+      const canned = { validity: { caveats: [] }, buildSymbols: [], mutants: [] } as never;
+      await runFromCliWithAccept(
+        {
+          mode: "run",
+          projectDir,
+          testDir,
+          // runSession is stubbed, so its bcdev-only refusal is not reached; this backend needs no config section.
+          backendKind: "al-runner-v3",
+          dbPath: ":memory:",
+          configPath: join(root, "lethal.config.json"),
+          skipKnownSurvivors: false,
+          workers: 1,
+          keepEnv: false,
+          allowExpiringEnv: false,
+          ...(killLedger === false ? { killLedger } : {}),
+        },
+        {
+          validateSelectorIdsForProject: async () => {},
+          buildBackend: async () => ({}) as never,
+          runSession: async (cfg) => {
+            got = cfg;
+            return canned;
+          },
+        },
+      );
+      return got;
+    };
+    const on = await seen(false);
+    expect(on?.killLedger).toBe(false);
+    const off = await seen(undefined);
+    expect(off !== undefined && "killLedger" in off).toBe(false);
   });
 });

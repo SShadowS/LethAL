@@ -1283,10 +1283,13 @@ RUN — cost and recovery
                              A baseline test, kill confirm or warm replay with NO mutant active
                              is stopped at its budget regardless of this flag (R658)
   --no-kill-ledger           bcdev only. Try each mutant's tests in the fixed order (narrowest
-                             first), not the order that puts earlier killers first. No second
-                             walk of survivors is needed (R1174), but a kill can take more tests
-                             to reach. Suits survivor-heavy files; worse where kills ride on long
-                             tests in other codeunits. Adds the kill-ledger-off caveat
+                             first, then by name), not the order that puts earlier killers first.
+                             No second walk of survivors is needed (R1174), but a kill can take
+                             more tests to reach. A verdict can move in one direction only: killed
+                             to survived, for a kill that only the ledger's order reached (it
+                             rests on state an earlier-run test codeunit left). Never survived to
+                             killed. killingTest and cost also move. Adds the kill-ledger-off
+                             caveat. A resume must use the same setting
   --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
                              backend, with serve-entries and a build whose pin retires the §6
                              Sleep rule (else refused by name). The first latch or stop ends the
@@ -5143,9 +5146,9 @@ export async function runFromCliWithAccept(
                     },
                   }
                 : {}),
+              ...(parsed.killLedger === false ? { killLedger: false as const } : {}),
               ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
               ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
-              ...(parsed.killLedger === false ? { killLedger: false as const } : {}),
               ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
               // R565: bcdev and envtool read dependency reports from the package cache alc compiles
               // against; al-runner's folders come from the backend and its provisioning.

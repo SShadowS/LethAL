@@ -786,6 +786,7 @@ Cost and recovery:
 | `--baseline-timeout-ms <n>` | `120000` | How long one baseline test may run before LethAL stops it. Raise it for a test that is slow rather than hung. Past the request ceiling minus 30 s, a run warns (`baseline-timeout-over-ceiling`): a hosting gateway can then cut a hung test's call before LethAL can stop it, and the run quarantines |
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
+| `--no-kill-ledger` | off | bcdev only. Try each mutant's tests in the fixed order (narrowest first), not killers-first. Saves the second walk of survivors, but a kill can take more tests. A verdict can move one way only, killed to survived, for a kill that depended on state an earlier test codeunit left; never survived to killed. A resume must use the same setting |
 | `--allow-large-run` | `false` | Run more than 1,000 mutation sites |
 | `--workers <n>` | `1` | Must be 1; above 1 is refused for every backend |
 | `--isolate-tests` | `false` | `al-runner-v3` only: run every test alone. Refused on `bcdev` and where serve-entries is not available. Slower, and a run with it shares nothing with a run without it. See [Limits](#limits) |
