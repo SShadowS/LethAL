@@ -138,6 +138,10 @@ function lethal(args: readonly string[], home: string) {
   return { exit: p.exitCode, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
 }
 
+// Each test below starts the real CLI two or three times; under container load (about 180 on 22 cores) that passed
+// the 5 s default. 60 s, as cli.test.ts's spawning tests use (orchestrator, after PR-495's merge VERIFY).
+const CLI_SPAWN_TIMEOUT_MS = 60_000;
+
 describe("R870: --json through the real CLI, on the issue's three failure classes", () => {
   // Named now, made in beforeAll: a filtered run that skips these tests leaves nothing behind.
   const dir = join(tmpdir(), `lethal-r870-${process.pid}-${Date.now()}`);
@@ -184,45 +188,53 @@ describe("R870: --json through the real CLI, on the issue's three failure classe
   ];
 
   for (const c of cases) {
-    test(`${c.name}: stdout is one envelope, stderr is unchanged, the exit code is unchanged`, () => {
-      const plain = lethal(c.args, dir);
-      const json = lethal([...c.args, "--json"], dir);
-      expect(json.exit).toBe(c.exit);
-      expect(plain.exit).toBe(c.exit);
-      const envelope = JSON.parse(json.stdout) as Record<string, unknown>;
-      expect(violations(SCHEMA, envelope)).toEqual([]);
-      expect(envelope.status).toBe(c.status);
-      if (c.code !== undefined) {
-        expect((envelope.error as { code: string }).code).toBe(c.code);
-        // Logs only on stderr, and the same ones: the envelope adds stdout, it takes nothing away.
-        expect(json.stderr).toBe(plain.stderr);
-      } else {
-        expect((envelope.data as { ok: boolean }).ok).toBe(false);
-      }
-    });
+    test(
+      `${c.name}: stdout is one envelope, stderr is unchanged, the exit code is unchanged`,
+      () => {
+        const plain = lethal(c.args, dir);
+        const json = lethal([...c.args, "--json"], dir);
+        expect(json.exit).toBe(c.exit);
+        expect(plain.exit).toBe(c.exit);
+        const envelope = JSON.parse(json.stdout) as Record<string, unknown>;
+        expect(violations(SCHEMA, envelope)).toEqual([]);
+        expect(envelope.status).toBe(c.status);
+        if (c.code !== undefined) {
+          expect((envelope.error as { code: string }).code).toBe(c.code);
+          // Logs only on stderr, and the same ones: the envelope adds stdout, it takes nothing away.
+          expect(json.stderr).toBe(plain.stderr);
+        } else {
+          expect((envelope.data as { ok: boolean }).ok).toBe(false);
+        }
+      },
+      CLI_SPAWN_TIMEOUT_MS,
+    );
   }
 
-  test("without --json nothing moves: the same lines, and no envelope anywhere", () => {
-    const bad = lethal(cases[0]?.args ?? [], dir);
-    expect(bad.stdout).toBe("");
-    expect(bad.stderr).toStartWith("TypeError: Unknown option '--bogus'.");
-    expect(bad.stderr).toEndWith("\n(set LETHAL_DEBUG=1 for the stack trace)\n");
-    const missing = lethal(cases[1]?.args ?? [], dir);
-    expect(missing.stdout).toBe("");
-    // Paths and line ends as Windows writes them too; the OS's own ENOENT wording is not pinned.
-    const said = missing.stderr
-      .split(dir)
-      .join("<dir>")
-      .replaceAll("\\", "/")
-      .replaceAll("\r\n", "\n");
-    expect(said).toStartWith("cannot read config file at <dir>/missing.json: ");
-    expect(said).toEndWith("\n(set LETHAL_DEBUG=1 for the stack trace)\n");
-    expect(said.split("\n")).toHaveLength(3);
-    const failing = lethal(cases[2]?.args ?? [], dir);
-    expect(failing.stdout.replaceAll("\r\n", "\n")).toStartWith(
-      "FAIL: at least one check failed\n",
-    );
-    for (const r of [bad, missing, failing])
-      expect(r.stdout + r.stderr).not.toContain('"schemaVersion"');
-  });
+  test(
+    "without --json nothing moves: the same lines, and no envelope anywhere",
+    () => {
+      const bad = lethal(cases[0]?.args ?? [], dir);
+      expect(bad.stdout).toBe("");
+      expect(bad.stderr).toStartWith("TypeError: Unknown option '--bogus'.");
+      expect(bad.stderr).toEndWith("\n(set LETHAL_DEBUG=1 for the stack trace)\n");
+      const missing = lethal(cases[1]?.args ?? [], dir);
+      expect(missing.stdout).toBe("");
+      // Paths and line ends as Windows writes them too; the OS's own ENOENT wording is not pinned.
+      const said = missing.stderr
+        .split(dir)
+        .join("<dir>")
+        .replaceAll("\\", "/")
+        .replaceAll("\r\n", "\n");
+      expect(said).toStartWith("cannot read config file at <dir>/missing.json: ");
+      expect(said).toEndWith("\n(set LETHAL_DEBUG=1 for the stack trace)\n");
+      expect(said.split("\n")).toHaveLength(3);
+      const failing = lethal(cases[2]?.args ?? [], dir);
+      expect(failing.stdout.replaceAll("\r\n", "\n")).toStartWith(
+        "FAIL: at least one check failed\n",
+      );
+      for (const r of [bad, missing, failing])
+        expect(r.stdout + r.stderr).not.toContain('"schemaVersion"');
+    },
+    CLI_SPAWN_TIMEOUT_MS,
+  );
 });
