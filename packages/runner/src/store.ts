@@ -209,6 +209,9 @@ export interface MutantVerdictRow {
   /** R193 — see `MutantRow.identityOrdinal`. A pre-R193 row reads back 0: its twins, if it had
    *  any, then still collide on resume and are re-run, which is the cheap direction. */
   readonly identityOrdinal: number;
+  /** PR-456: the batch (of the run that recorded it) this row belongs to. A survivor carried across a
+   *  restart carries only against the baseline of ITS batch. */
+  readonly batchIndex: number;
   /** R1227: recorded after the run's degraded window began, so a stranded note on it is not a stranded
    *  key and `--resume` re-runs it. */
   readonly inDegradedWindow?: true;
@@ -351,7 +354,10 @@ export interface RunRow {
   /** R969: `runs.database_id`, LethAL Control's `databaseId` read with `serverGeneration`. `null` on
    *  a run with no lease, or recorded before R969: a resume across a generation change refuses. */
   readonly databaseId: string | null;
-  /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run. */
+  /** PR-456: `runs.resumed_across_restart`: the run carried a survivor across a restart that lost the
+   *  database (or carried one that did), so a later resume of it keeps the caveat. `false` on an older row. */
+  readonly resumedAcrossRestart: boolean;
+  /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run, except a bcdev `--no-kill-ledger` run: `NO_KILL_LEDGER_BUILD_TAG` (PR-472). */
   readonly runnerBuild: string | null;
   /** R585: the sorted keys (`testKeyOf`) of the tests the run's baseline was given. `null` on a
    *  row recorded before the column: unknown, so it lends no history. */
@@ -378,7 +384,7 @@ export const NO_KILL_LEDGER_BUILD_TAG = "no-kill-ledger";
 /** PR-303 rule 4: the note on a mutant whose every covering codeunit was pruned. History never lends such a survivor. */
 export const PRUNED_NOTE = "pruned: no covering test reaches its site";
 
-/** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
+/** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build; on bcdev, `NO_KILL_LEDGER_BUILD_TAG` under `--no-kill-ledger` (PR-472), else `undefined`. */
 export interface LendingSession {
   readonly backend: string;
   readonly runnerBuild: string | undefined;
@@ -391,7 +397,9 @@ export interface LendingSession {
  * is evidence only for that build. R654: a run of the retired .NET al-runner lends nothing, by
  * name, FIRST, against any session or none. (R654 also removed R592's arm: once no session can be
  * v2, its only remaining pair was a stored v2 run against a bcdev session, which the R654 refusal
- * names first.) With no session named, only a v2 or v3 run is refused. Remove-only.
+ * names first.) With no session named, only a v2 or v3 run is refused. PR-472: when neither side
+ * is v3, a session and a run must agree on `NO_KILL_LEDGER_BUILD_TAG` (a `--no-kill-ledger` run's
+ * survivor may be a kill under the default order), refused either way. Remove-only.
  * `undefined` = lends.
  */
 export function backendBuildRefusal(
@@ -958,6 +966,8 @@ export class ResultsStore {
       ["runs", "server_generation TEXT", runCols],
       // R969: the database id read with the generation; NULL with no lease, or before R969.
       ["runs", "database_id TEXT", runCols],
+      // PR-456: 1 once the run carried a survivor across a restart that lost the database; NULL otherwise.
+      ["runs", "resumed_across_restart INTEGER", runCols],
       // R442: NULL on an older row, read as untrusted: no history or resume carries from it.
       ["runs", "carry_hidden TEXT", runCols],
       // R391: NULL on an older row, read as "not recorded": no rule-1 carry from it.
@@ -1045,7 +1055,7 @@ export class ResultsStore {
     /** R565: the run's dependency source digest. Absent or `null` writes NULL. `runSession` writes
      *  it after generation (`setDependencySourceSha256`); verify copies its source's here. */
     dependencySourceSha256?: string | null;
-    /** R586: the al-runner-v3 build (`runnerBuildOf`); absent writes NULL (every other backend). */
+    /** R586: the al-runner-v3 build (`runnerBuildOf`); absent writes NULL (every other backend); PR-472: a bcdev `--no-kill-ledger` run writes `NO_KILL_LEDGER_BUILD_TAG`. */
     runnerBuild?: string;
     /** R585: the keys (`testKeyOf`) of the tests this run's baseline is given. Required, so no run
      *  is recorded without saying; `null` writes NULL ("unknown", which lends no history): only a
@@ -1266,6 +1276,15 @@ export class ResultsStore {
       )
       .run(testAppHash, flag ? 1 : null, flag ? deps : null, runId).changes;
     if (changed !== 1) throw new Error(`store.ts: setRunTestAppHash: no run ${runId}`);
+  }
+
+  /** PR-456: records that this run carried a survivor across a restart that lost the database
+   *  (or one that did), so a later resume of it keeps the caveat. Idempotent. */
+  markResumedAcrossRestart(runId: number): void {
+    const changed = this.db
+      .query("UPDATE runs SET resumed_across_restart = 1 WHERE id = ?")
+      .run(runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: markResumedAcrossRestart: no run ${runId}`);
   }
 
   /** R896: the per-codeunit modes an `isolation: "auto"` run chose (its candidates only). */
@@ -1529,9 +1548,10 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, database_id, test_scope, test_narrowing, resume_inputs FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, database_id, resumed_across_restart, test_scope, test_narrowing, resume_inputs FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      resumed_across_restart: number | null;
       resume_inputs: string | null;
       test_scope: string | null;
       test_narrowing: string | null;
@@ -1578,6 +1598,7 @@ export class ResultsStore {
       resourceKey: row.resource_key,
       serverGeneration: row.server_generation,
       databaseId: row.database_id,
+      resumedAcrossRestart: row.resumed_across_restart === 1,
       testScope: parseTestScope(row.test_scope, row.id),
       testNarrowing: parseTestNarrowing(row.test_narrowing, row.id),
       resumeInputs: parseResumeInputs(row.resume_inputs, row.id),
@@ -1665,7 +1686,7 @@ export class ResultsStore {
            ${EFFECTIVE_VERDICT_SQL} AS verdict, m.verdict AS stored_verdict,
            COALESCE((SELECT l.note FROM lost_batches l WHERE l.run_id = m.run_id AND l.batch_index = m.batch_index),
              (SELECT w.note FROM degraded_windows w WHERE w.run_id = m.run_id)) AS lost_note,
-           ${IN_DEGRADED_WINDOW_SQL} AS in_window,
+           ${IN_DEGRADED_WINDOW_SQL} AS in_window, m.batch_index AS batch_index,
            killing_test, failure_note, killing_test_failure, kill_position, stop_evidence, kill_reproduced,
            reproduced_failure, duration_ms, runner, covering_tests, coverage_attribution, unplaceable, identity_ordinal, file, member_hash
          FROM mutants m WHERE m.run_id = ?`,
@@ -1674,6 +1695,7 @@ export class ResultsStore {
       stored_verdict: string;
       lost_note: string | null;
       in_window: number;
+      batch_index: number;
       file: string;
       member_hash: string | null;
       ast_hash: string;
@@ -1713,6 +1735,7 @@ export class ResultsStore {
       return {
         identityOrdinal: r.identity_ordinal ?? 0,
         file: r.file,
+        batchIndex: r.batch_index,
         memberHash: r.member_hash,
         ...(r.in_window !== 0 ? { inDegradedWindow: true as const } : {}),
         ...(r.covering_tests !== null
@@ -2369,6 +2392,64 @@ export class ResultsStore {
       )
       .get(runId, batchIndex) as { batch_hash: string; run_id: number } | null;
     return row === null ? null : { batchHash: row.batch_hash, runId: row.run_id };
+  }
+
+  /**
+   * PR-456 (r5 #5): the baseline the PRIOR run measured for the batch whose instrumented tree hashes to
+   * `batchHash`: the run's own snapshot of it, else the one it recorded reusing (PR-66), found by hash and
+   * never by index (R90 can re-plan batches). Same exclusions as `snapshotBatchHash`: suspect (R512), lost
+   * (R513) and degraded-window (`after_snapshot_id`) snapshots are never returned. `null` when none.
+   * It does not filter by server generation: a restart changes it by definition. It does filter by the test
+   * app: the snapshot's `test_app_hash` must equal `testAppHash`, the `|pending` suffix of a closed-world
+   * prior stripped on BOTH sides (the resume's own app checks decide whether a pending prior may be used).
+   */
+  priorRestartSnapshot(
+    runId: number,
+    batchHash: string,
+    testAppHash: string,
+  ): {
+    runId: number;
+    batchIndex: number;
+    batchHash: string;
+    baseline: BaselineObservation[];
+  } | null {
+    const row = this.db
+      .query(
+        `SELECT run_id, batch_index, batch_hash, payload FROM baseline_snapshots
+         WHERE batch_hash = ?2 AND payload_format = ?3
+           AND REPLACE(test_app_hash, '|pending', '') = ?4
+           AND (run_id = ?1
+             OR EXISTS (SELECT 1 FROM baseline_snapshot_reuses r WHERE r.run_id = ?1
+               AND r.from_run_id = baseline_snapshots.run_id AND r.from_batch_index = baseline_snapshots.batch_index))
+           AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
+           AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
+           AND NOT EXISTS (SELECT 1 FROM degraded_windows d WHERE d.run_id = baseline_snapshots.run_id AND baseline_snapshots.id > d.after_snapshot_id)
+         ORDER BY (run_id = ?1) DESC, id DESC LIMIT 1`,
+      )
+      .get(runId, batchHash, SNAPSHOT_PAYLOAD_FORMAT, testAppHash.replace("|pending", "")) as {
+      run_id: number;
+      batch_index: number;
+      batch_hash: string;
+      payload: string;
+    } | null;
+    if (row === null) return null;
+    let baseline: unknown;
+    try {
+      baseline = JSON.parse(row.payload);
+    } catch {
+      baseline = undefined;
+    }
+    if (!Array.isArray(baseline)) {
+      throw new Error(
+        `store.ts: baseline_snapshots row for run ${row.run_id} batch ${row.batch_index} has a corrupt payload — expected a JSON array of observations`,
+      );
+    }
+    return {
+      runId: row.run_id,
+      batchIndex: row.batch_index,
+      batchHash: row.batch_hash,
+      baseline: baseline as BaselineObservation[],
+    };
   }
 
   /** Returns the `mutants.id` row id SQLite assigned this insert (see I5: `mutant_code` alone

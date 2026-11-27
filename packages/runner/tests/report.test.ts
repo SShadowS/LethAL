@@ -248,9 +248,10 @@ describe("Caveat union", () => {
       "isolated-recheck-kills": true,
       "workdate-changed": true,
       "survivors-beside-unrun-tests": true,
+      "resumed-across-restart": true,
       "kill-ledger-off": true,
     };
-    expect(Object.keys(all).length).toBe(40);
+    expect(Object.keys(all).length).toBe(41);
   });
 });
 

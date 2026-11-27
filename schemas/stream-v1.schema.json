@@ -1876,6 +1876,9 @@
             "client-services"
           ]
         },
+        "acrossRestart": {
+          "const": true
+        },
         "seq": {
           "type": "number"
         },

@@ -151,7 +151,7 @@
               "isolated-recheck-kills",
               "workdate-changed",
               "survivors-beside-unrun-tests",
-              "kill-ledger-off"
+              "resumed-across-restart"
             ]
           },
           "interpretation": { "$ref": "#/$defs/interpretation" }

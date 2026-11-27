@@ -1285,10 +1285,10 @@ RUN — cost and recovery
   --no-kill-ledger           bcdev only. Try each mutant's tests in the fixed order (narrowest
                              first, then by name), not the order that puts earlier killers first.
                              No second walk of survivors is needed (R1174), but a kill can take
-                             more tests to reach. A verdict can move in one direction only: killed
-                             to survived, for a kill that only the ledger's order reached (it
-                             rests on state an earlier-run test codeunit left). Never survived to
-                             killed. killingTest and cost also move. Adds the kill-ledger-off
+                             more tests to reach. A verdict can move: mostly killed to survived,
+                             for a kill only the ledger's cross-codeunit order reached; either way
+                             when the methods of one test codeunit share state. killingTest and
+                             cost also move. Adds the kill-ledger-off
                              caveat. A resume must use the same setting
   --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
                              backend, with serve-entries and a build whose pin retires the §6
