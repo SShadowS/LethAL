@@ -244,9 +244,9 @@ export function o1CdoApps(
  * the fresh daemon included). A writer value still fails, and a pin naming a writer value is refused.
  * PR-233 (pre-commitment master d46eaa1ee): `partnerLogin` is the CDO set's only (absent: the own set, judged as before).
  * With `pinned` (a pin's `o1.partnerLoginRefusal.text`), exactly `O1_PARTNER_LOGIN_TESTS` must be refused with exactly that
- * text in every W and C entry; a pass or any other answer there is a gate-fail. Without it, those tests refused with exactly
- * `O1_PARTNER_LOGIN_TEXT` make the set `held` (a known coverage loss waiting for a pre-committed pin), never a pass; any
- * other deviation is a gate-fail as before.
+ * text in every W and C entry; a pass or any other answer there is a gate-fail. Without it (PR-477, R1149: #8239 is fixed
+ * on current), those tests are judged like every other W or C test: anything but a pass (or the commit refusal) is a
+ * gate-fail. There is no held path for the partner-login text.
  */
 export function judgeOrderProbe(
   requests: readonly O1Request[],
@@ -257,7 +257,6 @@ export function judgeOrderProbe(
 ): { readonly outcome: "pass" | "held" | "gate-fail"; readonly lines: string[] } {
   const bad: string[] = [];
   const held: string[] = [];
-  const partnerHeld: string[] = [];
   /** PR-233: one of the 4 row-insert tests in the CDO set; returns true when it judged the row (else: judge as before). */
   const partnerRow = (
     at: string,
@@ -271,10 +270,6 @@ export function judgeOrderProbe(
         bad.push(
           `${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed refused by the pin's partner-login text (PR-233, #8239)`,
         );
-      return true;
-    }
-    if (refused && l.message === O1_PARTNER_LOGIN_TEXT) {
-      partnerHeld.push(`${at}: ${t}`);
       return true;
     }
     return false;
@@ -357,18 +352,7 @@ export function judgeOrderProbe(
       }
     }
   }
-  // PR-233 (build review MED): held only for the WHOLE measured pattern, every row insert of every W and C entry refused;
-  // a part of it (an unstable or narrowed refusal) is a gate-fail, so a pin is never pre-committed for a pattern that moved.
-  const partnerAll = O1_PLAN.flat().filter((k) => k !== "R").length * 2;
-  if (partnerHeld.length > 0 && partnerHeld.length !== partnerAll)
-    bad.push(
-      `${partnerHeld.length} of the ${partnerAll} row-insert tests refused after the partner login, pre-committed all or none (PR-233; first: ${partnerHeld[0]})`,
-    );
   if (bad.length > 0) return { outcome: "gate-fail", lines: bad };
-  if (partnerHeld.length > 0)
-    held.push(
-      `held for PR-233's O1 pin: ${partnerHeld.length} row-insert tests refused after the partner login (al-runner f9116dc96, a known coverage loss on #8239; first: ${partnerHeld[0]}); re-pre-commit this build's pin with o1.partnerLoginRefusal`,
-    );
   return held.length > 0 ? { outcome: "held", lines: held } : { outcome: "pass", lines: [] };
 }
 

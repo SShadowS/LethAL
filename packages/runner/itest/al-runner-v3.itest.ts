@@ -1703,7 +1703,7 @@ async function legO1(scratch: string, version: string): Promise<void> {
     const partner = o1PartnerLogin(set.name, activePin);
     if (partner !== undefined)
       console.log(
-        `  O1: ${set.name} set: partner-login row inserts judged as ${partner.pinned !== undefined ? `refused (pin ${activePin?.id}, ${activePin?.o1?.partnerLoginRefusal?.issue})` : "pass, or held when refused by exactly the f9116dc96 text (no pin field)"}`,
+        `  O1: ${set.name} set: partner-login row inserts judged as ${partner.pinned !== undefined ? `refused (pin ${activePin?.id}, ${activePin?.o1?.partnerLoginRefusal?.issue})` : "pass (or refused by the pin's text; no pin field: anything but pass is a gate-fail)"}`,
       );
     const j = judgeOrderProbe(done, [...dates], login, runs, partner);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
