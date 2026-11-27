@@ -41,6 +41,8 @@ scripts/r289-probe/sidecar-creds.*.json
 .serena/
 lethal.sqlite-shm
 lethal.sqlite-wal
+# R1241: the gate holding a fixture's store (itest/fixture-store.ts)
+lethal.sqlite.itest-holder
 
 # Model-panel review artifacts — agent scratch, not project source
 .panel/
