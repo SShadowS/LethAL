@@ -35,9 +35,13 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
  * Where the symbol tar lives (gitignored, never committed). R670: named by its sha256's first 12
  * hex digits, so a rebuilt tar sits beside the one older worktrees still pin and never replaces it.
  */
-export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-165b17dd3aae.tar";
+export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-431354324c23.tar";
 
 /**
+ * PR-483 (R1128, 2026-11-27): 2,162,452,480 bytes: the PR-162 tar below, `165b17dd…`, every member byte for byte
+ * (appended with `tar -rf` to a copy), plus `.alpackages` for sandbox-carry, -reach and -tailcut with their tests
+ * (in no tar before, so compile:fixtures skipped them): Microsoft_System from the old tar, and for each tests project an
+ * alc build of its target (`/coord/handoff/PR-483/build-tar.sh`).
  * F5: the tar, pinned by sha256 (PR-162, 2026-11-18, 2,137,016,320 bytes: the R673 tar, `2279aee3…`,
  * every member byte for byte, plus `.alpackages` for sandbox-recheck and -recheck-tests (leg RC's
  * fixture) and for sandbox-dates, -optin and -order with their tests (R1128: in no tar before, so
@@ -55,7 +59,7 @@ export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-1
  * its `SYMBOLS_MARKER`, and the next run extracts them from the new tar.
  */
 export const FIXTURE_SYMBOLS_TAR_SHA256 =
-  "165b17dd3aae07fbe02f1e918e5d6d3bba97d5fa5e5e295b94772f33de65b662";
+  "431354324c2343532fd8e2f6f9e9ac721d63c9a17e8408632780e63b70a7c1b4";
 
 /**
  * R670: the pinned tar's files in archive order (`tar -tf`, directories left out), committed, with
@@ -85,7 +89,8 @@ const OTHER_SYMBOL = /^(Microsoft_[^/]+\.app|System\.app|lethal-control\.app)$/;
  * so a fixture bump without a tar refresh fails CI. Each such dependency needs exactly one copy.
  * Any other file must be `Microsoft_*.app`, `System.app` or an R552 `lethal-control.app` leftover
  * (never compiled against); anything else, a `target.app` included, hides its version and is
- * refused. A project the tar has no folder for is not checked (`compile:fixtures` skips it).
+ * refused. R1128 (PR-483): a `fixtures/*` project the tar has no folder for is drift too, by name, since
+ * `compile:fixtures` would skip it; a project outside `fixtures/` (an example) with no folder is not checked.
  */
 export function symbolTarDrift(members: readonly string[], apps: readonly FixtureApp[]): string[] {
   const byName = new Map(apps.map((a) => [a.name, a]));
@@ -93,7 +98,13 @@ export function symbolTarDrift(members: readonly string[], apps: readonly Fixtur
   for (const app of apps) {
     const prefix = `${app.dir}/.alpackages/`;
     const files = members.filter((m) => m.startsWith(prefix)).map((m) => m.slice(prefix.length));
-    if (files.length === 0) continue;
+    if (files.length === 0) {
+      // R1128 (PR-483): a fixtures/* project with no member is in no tar, so compile:fixtures would SKIP it on every
+      // fresh worktree (R56's trap). It was skipped silently here before.
+      if (app.dir.startsWith("fixtures/"))
+        out.push(`${app.dir}: in no fixture-symbol tar; compile:fixtures would SKIP it (R1128)`);
+      continue;
+    }
     const copies = new Map<string, number>();
     for (const file of files) {
       const [, name, version] = LETHAL_COPY.exec(file) ?? [];
