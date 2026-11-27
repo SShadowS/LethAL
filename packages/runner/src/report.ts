@@ -855,20 +855,20 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "`--no-kill-ledger` was on: every mutant's covering tests ran in the no-ledger order " +
       "(narrowest test first, then the name), not in the order that puts tests that already " +
       "killed first (R197). R1174's second walk of a survivor is not needed, because the two " +
-      "orders are the same. A verdict can move with the flag on. Mostly killed to survived, for a " +
-      "kill that only the ledger's cross-codeunit order reached. Either direction is possible " +
-      "when the methods of one test codeunit share state. `killingTest` and the cost also move. " +
+      "orders are the same. Verdicts may differ from the default in either direction: the flag " +
+      "uses one fixed order, the same for every mutant and free of earlier kills, while the " +
+      "default reorders by earlier kills. A test whose outcome depends on the tests run before it " +
+      "can therefore pass in one order and fail in the other. `killingTest` and the cost also move. " +
       "A kill can take more tests to reach. Measured upper " +
       "bounds, in seconds of test time on read-only copies of real runs: dropping the ledger adds " +
       "at most 901 (Email), 878 (Queue), 69 (Subs), 1,533 (narrow Tests-Misc) and 8,232 (E-Documents) " +
       "to kills, while the second walk it saves cost 2,911, 2,849, 1,761, 4,495 and 0. It suits " +
       "files with many survivors, and is worse where kills ride on long tests in other codeunits.",
     entailedNegative:
-      "Not a wrong verdict: the same tests are tried, in another order, and a mutant is `survived` " +
-      "only after every covering test passed in that order. A kill that needed the ledger's order " +
-      "(state left by an earlier test codeunit) is `survived` here; arguably the more honest " +
-      "verdict, since that kill depended on test order. Where the methods of one test codeunit " +
-      "share state, a survivor can also become a kill.",
+      "Neither order is the one the project's CI runs (a test codeunit's declared order; R1235). " +
+      "The same tests are tried in another order, and a mutant is `survived` only after every " +
+      "covering test passed in that order. A verdict that differs from a default run's rests on a " +
+      "test whose outcome depends on the tests run before it, not on the mutant alone.",
     basis: "R1174",
   },
   "resumed-across-restart": {

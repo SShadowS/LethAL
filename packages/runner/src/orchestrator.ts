@@ -1967,9 +1967,9 @@ export interface SessionConfig {
   /**
    * PR-472 (R197, R1174), `--no-kill-ledger`, OPT-IN, bcdev only. `false` turns the kill ledger's
    * test order off for the run: every mutant's covering tests go in the no-ledger order, so R1174's
-   * re-walk is never asked for. A verdict can move: mostly killed to survived, for a kill only
-   * the ledger's cross-codeunit order reached; either way when the methods of one test codeunit
-   * share state. `killingTest` and the cost also move. Such a run neither lends to nor
+   * re-walk is never asked for. Verdicts may differ from the default in either direction: the flag
+   * uses one fixed order (narrowest first, then name), the same for every mutant and free of earlier
+   * kills; the default reorders by earlier kills. `killingTest` and the cost also move. Such a run neither lends to nor
    * borrows from a default run (history, resume). Absent: today's ledger order. Any other backend
    * refuses it by name.
    */
@@ -8519,7 +8519,7 @@ async function runSessionBody(
       type: "warning",
       code: "kill-ledger-off" satisfies Caveat,
       message:
-        "--no-kill-ledger is on: covering tests run in the no-ledger order, so R1174's re-walk is not needed, but a kill can take more tests to reach. A verdict can move: mostly killed to survived, for a kill only the ledger's cross-codeunit order reached; either way when the methods of one test codeunit share state. killingTest and cost also move. History, --resume and snapshots are not shared with a default run (PR-472).",
+        "--no-kill-ledger is on: covering tests run in the no-ledger order, so R1174's re-walk is not needed, but a kill can take more tests to reach. Verdicts may differ from the default in either direction: this run uses one fixed order (narrowest first, then name), the same for every mutant and free of earlier kills; the default reorders by earlier kills. killingTest and cost also move. History, --resume and snapshots are not shared with a default run (PR-472).",
     });
   }
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
