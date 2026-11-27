@@ -925,7 +925,7 @@ codeunit 91003 "LC Control API"
 
     /// <summary>OData action (1.0.0.31, PR-478 amendment 1): binds the CALLER's own SessionId() to the in-flight
     /// `client-run` op, under exactly the bind page's rules (the same "LC Control State".BindClientSession).
-    /// JSON: {bound, reason?}.</summary>
+    /// JSON: {bound, sessionId, reason?}; `sessionId` is the caller's own SessionId(), on EVERY answer.</summary>
     procedure BindCallerSession(AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
     var
         State: Codeunit "LC Control State";
@@ -935,6 +935,7 @@ codeunit 91003 "LC Control API"
     begin
         Bound := State.BindClientSession(AttemptId, OpSeq, Reason);
         Obj.Add('bound', Bound);
+        Obj.Add('sessionId', SessionId());
         if Reason <> '' then
             Obj.Add('reason', Reason);
         Obj.WriteTo(ResultJson);
@@ -942,7 +943,8 @@ codeunit 91003 "LC Control API"
 
     /// <summary>OData action (1.0.0.31, PR-478 amendments 3 and 4): the CALLER, if it is the bound session of the
     /// in-flight `client-run` op, marks its own end (the same "LC Control State".EndClientSession the page's End
-    /// action uses). Self-only: nothing about the session id comes from the wire. JSON: {ended, reason?}.</summary>
+    /// action uses). Self-only: nothing about the session id comes from the wire. JSON: {ended, sessionId, reason?}; `sessionId` is the caller's own SessionId(), on EVERY answer
+    /// (it is output only: nothing from the wire decides who is bound).</summary>
     procedure EndCallerSession(AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
     var
         State: Codeunit "LC Control State";
@@ -952,6 +954,7 @@ codeunit 91003 "LC Control API"
     begin
         Ended := State.EndClientSession(AttemptId, OpSeq, Reason);
         Obj.Add('ended', Ended);
+        Obj.Add('sessionId', SessionId());
         if Reason <> '' then
             Obj.Add('reason', Reason);
         Obj.WriteTo(ResultJson);

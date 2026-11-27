@@ -811,7 +811,11 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     const wrapper = codeOnly(procedureBody(api, "EndCallerSession")).replace(/\s+/g, " ");
     expect(wrapper).toContain("Ended := State.EndClientSession(AttemptId, OpSeq, Reason);");
     expect(wrapper).toContain("Obj.Add('ended', Ended);");
-    expect(wrapper).not.toMatch(/SessionId|Lease|Modify|Insert/);
+    // the caller's own id is echoed on EVERY answer (before the conditional reason), and is output only
+    const echo = "Obj.Add('sessionId', SessionId());";
+    expect(wrapper).toContain(echo);
+    expect(wrapper.indexOf(echo)).toBeLessThan(wrapper.indexOf("if Reason <> ''"));
+    expect(wrapper.replace(echo, "")).not.toMatch(/SessionId|Lease|Modify|Insert/);
   });
 
   test("Activate clears the mark, and the force reset clears it and empties LC Ended Session", () => {
@@ -923,7 +927,10 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     expect(body).toContain("Bound := State.BindClientSession(AttemptId, OpSeq, Reason);");
     expect(body).toContain("Obj.Add('bound', Bound);");
     // no session id comes from the wire, and the action writes nothing itself
-    expect(body).not.toMatch(/SessionId|Lease|Modify|Insert/);
+    const echo = "Obj.Add('sessionId', SessionId());";
+    expect(body).toContain(echo);
+    expect(body.indexOf(echo)).toBeLessThan(body.indexOf("if Reason <> ''"));
+    expect(body.replace(echo, "")).not.toMatch(/SessionId|Lease|Modify|Insert/);
     expect(body.match(/State\./g)).toHaveLength(1);
     // the one procedure takes the caller's own id, behind the same checks the page uses
     expect(codeOnly(procedureBody(state, "BindClientSession"))).toContain(
