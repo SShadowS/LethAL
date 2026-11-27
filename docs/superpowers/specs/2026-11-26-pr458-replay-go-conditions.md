@@ -134,6 +134,34 @@ lethal-code, 2026-11-26. Written BEFORE any measurement.
   - The serial seconds of this run feed condition 2's value formula, in place of the CHECK run's.
   - This is a different design measured fresh, not a re-run of condition 4 toward a pass.
 
+## Amendment A2 (2026-11-26, before running): condition 2's value, settled by a concurrent pair with instruction counts
+
+- **Why.** Condition 2's correctness PASSED: 123 of 123 requests have identical rows in both pairs. Its value was
+  INCONCLUSIVE:
+  - the non-pair wall saving was +474 s in pair 1 and −621 s in pair 2 (B2 ran beside other load on the same cores);
+  - no instruction counts were collected.
+- **The orchestrator's ruling:** there is no quiet window to wait for, so A and B run CONCURRENTLY on disjoint cores,
+  with perf counts.
+- **The run:**
+  - one A daemon (today's selector, replay OFF, resources as captured) on cores 12-16;
+  - one B daemon (C, replay ON, cap 32, MAX_MB 512) on cores 17-21;
+  - both start together on life 1905189's captured requests;
+  - per request, `perf stat -e instructions:u,cycles:u -p <daemon pid>` (paranoid 2; the counters are summed over the
+    core and atom lines), started before the request and stopped after it by its own pid.
+- **The value rule, on INSTRUCTIONS (primary).** NP is the non-pair requests (no `#` entry); P is the pair requests.
+  - saving = Σ_NP instructions(A) − Σ_NP instructions(B);
+  - cost = 0.08 × Σ_P instructions(A). Under the design, the pairs run on the confirm lane at `=0`, as today's lanes
+    already run them, so the only added work is C's selector on that traffic (PR-447: +6-8% user instructions; the
+    upper bound is used);
+  - **value PASSES** when saving − cost > 0, and FAILS when it is ≤ 0.
+- **Concurrent wall (secondary):** Σ_NP wall(A) − Σ_NP wall(B), from the same concurrent run.
+  - If its sign differs from the instruction reading, value is INCONCLUSIVE, and the instruction reading is reported
+    as the stronger.
+- **Correctness again:** the rows must be equal per request, as before. Any difference is a BLOCK.
+- **The result is scaled** to c5 by NP entries, as a share of user instructions. A lane-time figure is NOT claimed
+  from instructions alone.
+- **Not measured, and stated:** the confirm lane's critical-path queueing (r3 N2).
+
 ## GO / NO-GO
 
 - **"GO for 1, 2 and 4"** only if:
