@@ -146,6 +146,8 @@
     "report-diff.test.ts",
     "bc-v3-join.ts",
     "bc-v3-join.test.ts",
+    "v3-refusal-cost.ts",
+    "v3-refusal-cost.test.ts",
     "store-query.ts",
     "store-query.test.ts",
     "refusal-ledger.ts",
