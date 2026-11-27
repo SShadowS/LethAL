@@ -367,8 +367,36 @@ describe("R670: symbolTarDrift", () => {
       "fixtures/t-tests/.alpackages/target.app: not a Microsoft symbol, and a LethAL app copy must be named LethAL_<name>_<version>.app",
     ]);
   });
-  test("a project the tar has no folder for is not checked", () => {
-    expect(symbolTarDrift(["fixtures/t/.alpackages/System.app"], apps)).toEqual([]);
+  // PR-483 (R1128): re-pinned. A fixtures/* project the tar has no folder for was "not checked", which let six projects
+  // fall out of the tar unnoticed; it is now drift, by name.
+  test("a fixtures/* project the tar has no folder for: drift, naming it (R1128)", () => {
+    expect(symbolTarDrift(["fixtures/t/.alpackages/System.app"], apps)).toEqual([
+      "fixtures/t-tests: in no fixture-symbol tar; compile:fixtures would SKIP it (R1128)",
+    ]);
+  });
+  test("a project outside fixtures/ with no folder is not this guard's (examples are optional)", () => {
+    const ex: FixtureApp[] = [
+      ...apps,
+      { dir: "examples/e", name: "E", version: "1.0.0.0", lethalDeps: [] },
+    ];
+    expect(symbolTarDrift(ms("LethAL_T_1.0.0.5.app"), ex)).toEqual([]);
+  });
+  test("the manifest minus PR-483's nine members names exactly the six projects R1128 found missing", () => {
+    const added = new Set([
+      "fixtures/sandbox-carry",
+      "fixtures/sandbox-carry-tests",
+      "fixtures/sandbox-reach",
+      "fixtures/sandbox-reach-tests",
+      "fixtures/sandbox-tailcut",
+      "fixtures/sandbox-tailcut-tests",
+    ]);
+    const old = members.filter((m) => ![...added].some((d) => m.startsWith(`${d}/`)));
+    expect(old.length).toBe(members.length - 9);
+    expect(symbolTarDrift(old, repoApps()).sort()).toEqual(
+      [...added]
+        .map((d) => `${d}: in no fixture-symbol tar; compile:fixtures would SKIP it (R1128)`)
+        .sort(),
+    );
   });
 
   const repo = join(import.meta.dir, "..", "..", "..");
