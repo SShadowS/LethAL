@@ -3,7 +3,12 @@
  * packages (tests 1, 2, 3, 8 and the shared-function half of 9 of the spec).
  */
 import { describe, expect, test } from "bun:test";
-import { appContentIdentity, hashPackage, testAppHashFor } from "../src/baseline-snapshot";
+import {
+  appContentIdentity,
+  hashPackage,
+  testAppHashFor,
+  testAppReadFor,
+} from "../src/baseline-snapshot";
 import {
   LONG_AL,
   type ManifestOptions,
@@ -96,6 +101,21 @@ describe("appContentIdentity: each change of content changes it (test 2)", () =>
   });
 });
 
+describe("appContentIdentity: N1 and N2", () => {
+  // N1: the size line is the HASHED (blanked) data's length, so Build Timestamp values of another
+  // length are still one identity. Revert: use the entry's original uncompressed size.
+  test("Build Timestamp values of different lengths give an equal c2", () => {
+    const x = appContentIdentity(build({ timestamp: "2026-01-01T00:00:00Z" }));
+    const y = appContentIdentity(build({ timestamp: "2026-01-01T00:00:00.1234567+00:00" }));
+    expect(x).toBe(y);
+  });
+  // N2: as `packageContentDigest` does, a control character in an entry name is refused.
+  test("a control character in an entry name throws", () => {
+    const p = navxPackage({ id: 1, entries: [...entriesOf(), ["src/a\tb.al", "x"]] });
+    expect(() => appContentIdentity(p)).toThrow("holds a control character");
+  });
+});
+
 describe("appContentIdentity: the Timestamp blanking is that one value only (test 3)", () => {
   const pair = (mk: (stamp: string) => ManifestOptions) => [
     appContentIdentity(build(mk("2026-01-01T00:00:00Z"))),
@@ -167,6 +187,27 @@ describe("appContentIdentity: the fallback (test 8)", () => {
     const broken = Buffer.from(build());
     broken.writeUInt32LE(0, broken.length - 22); // the end-of-central-directory signature
     expect(() => appContentIdentity(broken)).toThrow();
+  });
+});
+
+describe("S1: a NAVX-shaped package whose zip cannot be walked is unread by name, never a throw", () => {
+  const broken = () => {
+    const b = Buffer.from(build());
+    b.writeUInt32LE(0, b.length - 22); // the end-of-central-directory signature
+    return new Uint8Array(b);
+  };
+  // Revert: drop the catch in `testAppReadFor` (the raw zip error escapes).
+  test("testAppReadFor and testAppHashFor answer { unread } naming R1234", async () => {
+    for (const r of [
+      await testAppReadFor(async () => broken(), "/nonexistent"),
+      await testAppHashFor(async () => broken(), "/nonexistent"),
+    ]) {
+      expect(r).toEqual({
+        unread: expect.stringContaining(
+          "the served test-app package cannot be content-hashed (R1234)",
+        ),
+      });
+    }
   });
 });
 

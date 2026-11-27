@@ -4862,7 +4862,7 @@ function assertSameTestApp(
       row.testAppProven,
     )}, and this session's test app is ${describeTestApp(testAppHash)}${
       testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-    }.${revoked}${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}).${oldFormSentence(row.testAppHash)} Drop the resume flag to run from scratch.`,
+    }.${revoked}${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}).${oldFormSentence(row.testAppHash, testAppHash)} Drop the resume flag to run from scratch.`,
   );
 }
 
@@ -4952,14 +4952,20 @@ function oldFormClause(prior: string | null | undefined): string | undefined {
 }
 
 /** A refusal `reason` (a clause inside `TestAppRepublishedError`'s sentence) with the old-form clause. */
-function withOldFormClause(reason: string, prior: string | null | undefined): string {
-  const clause = oldFormClause(prior);
+function withOldFormClause(
+  reason: string,
+  prior: string | null | undefined,
+  /** This session's identity: when it equals the prior's, the identity is not why this refuses. */
+  current: string | undefined,
+): string {
+  // An unproven session (`current` undefined) refuses for lack of proof, not for its identity.
+  const clause = current === undefined || prior === current ? undefined : oldFormClause(prior);
   return clause === undefined ? reason : `${reason}; ${clause}`;
 }
 
 /** `oldFormClause` as a leading-space sentence for a refusal message, or "". */
-function oldFormSentence(prior: string | null | undefined): string {
-  const clause = oldFormClause(prior);
+function oldFormSentence(prior: string | null | undefined, current: string | undefined): string {
+  const clause = prior === current ? undefined : oldFormClause(prior);
   return clause === undefined ? "" : ` Note: ${clause}.`;
 }
 
@@ -8777,7 +8783,7 @@ async function runSessionBody(
           throw new TestAppRepublishedError(
             cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
             recorded,
-            withOldFormClause(reason, recorded),
+            withOldFormClause(reason, recorded, proven),
           );
         }
       }
@@ -8838,7 +8844,7 @@ async function runSessionBody(
             : pre !== undefined && pre !== got.deps
               ? `a dependency changed while this session waited for the lease (its digests were taken over dependencies ${pre}, and under the lease they are ${got.deps})`
               : undefined;
-        if (why === undefined && "deps" in got) {
+        if (why === undefined && "deps" in got && provenTestAppBytes !== undefined) {
           cfg.store.setRunTestAppHash(
             runId,
             recordedTestAppHash(provenTestAppHash),
@@ -8847,8 +8853,7 @@ async function runSessionBody(
           );
           historyTestApp = {
             hash: provenTestAppHash,
-            // PR-476: set together with `provenTestAppHash`; the fallback keeps the drift check armed.
-            bytesHash: provenTestAppBytes ?? provenTestAppHash,
+            bytesHash: provenTestAppBytes,
             deps: got.deps,
           };
         } else {
@@ -8891,7 +8896,7 @@ async function runSessionBody(
         throw new TestAppRepublishedError(
           cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
           prior?.testAppHash ?? null,
-          withOldFormClause(reason, prior?.testAppHash),
+          withOldFormClause(reason, prior?.testAppHash, historyTestApp?.hash),
         );
       }
     }
@@ -9293,7 +9298,7 @@ async function runSessionBody(
                 old.proven,
               )}, with dependencies ${old.deps ?? "not recorded"}, and this session's test app is ${describeTestApp(historyTestApp?.hash)}${
                 historyTestApp === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency, or LethAL changing how it fingerprints System (R1230).${oldFormSentence(old.testAppHash)} No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
+              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency, or LethAL changing how it fingerprints System (R1230).${oldFormSentence(old.testAppHash, historyTestApp?.hash)} No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
             });
           },
           carryUntrusted: (old) => {
@@ -12323,11 +12328,14 @@ async function reportPublishedTestApp(
   }
   const { bytes, version } = read;
   // PR-476: the SAME function as `testAppReadFor`, or every bcdev session would drift at batch 0.
-  const testAppHash = appContentIdentity(bytes);
-  const bytesHash = `package:${hashPackage(bytes)}`;
-
+  // S1: both values are computed inside the guard: a NAVX-shaped package whose zip cannot be walked
+  // takes the `unreadable` branch with neither value, never a raw zip error out of the session.
+  let testAppHash: string | undefined;
+  let bytesHash: string | undefined;
   let published: PublishedApp;
   try {
+    testAppHash = appContentIdentity(bytes);
+    bytesHash = `package:${hashPackage(bytes)}`;
     published = parsePublishedApp(
       Buffer.from(bytes),
       armSymbols !== undefined ? { buildSymbols: armSymbols } : {},

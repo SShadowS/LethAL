@@ -12708,6 +12708,26 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
         r.store.close();
       });
+      // PR-476 S1: a NAVX-shaped served package whose zip cannot be walked degrades BY NAME: the
+      // session finishes with the published-test-app-unreadable warning and records no identity.
+      // Revert: compute `appContentIdentity` outside `reportPublishedTestApp`'s guard (a raw zip
+      // error then ends the session).
+      test("PR-476 (S1): an unwalkable NAVX served package is an unreadable test app, not a crash", async () => {
+        const b = Buffer.from(W1);
+        b.writeUInt32LE(0, b.length - 22);
+        const broken = new Uint8Array(b);
+        const r = await envRun({
+          noHook: true,
+          pre: broken,
+          post: broken,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.unreadableWarning.length).toBeGreaterThan(0);
+        expect(r.unreadableWarning[0]).toContain("could not be read");
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        r.store.close();
+      });
       // PR-476 test 7 (r2a #4), the env-tool resume's TestAppRepublishedError: the prior recorded
       // `package:<hex>` (a run before R1234, or a package LethAL does not content-hash), this session
       // proves a c2 identity. The refusal names both causes. Red if the sentence is dropped there.

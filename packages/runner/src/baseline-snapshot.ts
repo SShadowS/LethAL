@@ -620,9 +620,15 @@ export function appContentIdentity(bytes: Uint8Array): string {
   let step = walk.next();
   while (step.done !== true) {
     const e = step.value;
+    // Same refusal as `packageContentDigest`: a control character would let a name forge a row.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
+    if (/[\u0000-\u001f]/.test(e.name)) {
+      throw new Error(`entry name ${JSON.stringify(e.name)} holds a control character`);
+    }
     const data = e.name === "NavxManifest.xml" ? blankBuildTimestamp(e.data) : e.data;
     const sha = createHash("sha256").update(data).digest("hex");
-    lines.push({ name: e.nameBytes, line: `E ${e.name}\t${e.uncompressedSize}\t${sha}\n` });
+    // The size is the hashed (blanked) data's length, so a Build Timestamp of another length is equal.
+    lines.push({ name: e.nameBytes, line: `E ${e.name}\t${data.length}\t${sha}\n` });
     step = walk.next();
   }
   const h = createHash("sha256")
@@ -669,7 +675,14 @@ export async function testAppReadFor(
   if (fetchPackage !== undefined) {
     const bytes = await fetchPackage();
     if (bytes instanceof Uint8Array) {
-      return { identity: appContentIdentity(bytes), bytesHash: `package:${hashPackage(bytes)}` };
+      try {
+        return { identity: appContentIdentity(bytes), bytesHash: `package:${hashPackage(bytes)}` };
+      } catch (err) {
+        // A NAVX-shaped package whose zip cannot be walked: unread by name, never a crash (R630).
+        return {
+          unread: `the served test-app package cannot be content-hashed (R1234): ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
     }
     // R630 review I1: explicit, before the fall-through below. The read failed, which is not the
     // same as "no package concept", and must never become the source tree's hash.
