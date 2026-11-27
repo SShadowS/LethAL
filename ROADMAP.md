@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**68 of 1200 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**69 of 1201 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1245,6 +1245,7 @@ that ordering is the priority.
 - **R1233** · LethAL SIGTERMs a serve daemon at once after its shutdown reply, so al-runner's pending workspace-cache write is lost (al-runner #9232): a recycled daemon compiles again instead of reading the cache · [R1233.md](docs/roadmap/R1233.md) · done (b1655a8ad, PR-470)
 - **R1236** · A generated BC differential for error handling, transactions and temporary records (PR-487, family errors-temp, 67 cells): al-runner edge-e5176a9fd equals BC 28.4 in 66 cells and refuses none; the 67th differs only in the test runner's text for an asserterror with no error; five cells stop before their target on both runtimes, and a follow-up cell set is listed · [R1236.md](docs/roadmap/R1236.md) · open — measured on bc1 (PR-487), nothing filed upstream; PR-488 measured follow-ups 1, 4…
 - **R1237** · A generated BC differential for numbers and text builtins (PR-488, family numbers-text, 120 cells): al-runner edge-e5176a9fd equals BC 28.4 in 119 cells; the one difference, a Decimal multiplication past the largest Decimal refused as 'decimal overflow', is filed as #9267 · [R1237.md](docs/roadmap/R1237.md) · closed 2026-11-27 — measured on bc1 and filed (#9267)
+- **R1239** · al-runner v3 vs BC 29 on real DO mutants, joined per site (PR-490, scripts/bc-v3-join.ts): DOTests file 1 (CDOEMailTemplateManagement, 1,703 mutants) agrees on 1,507 verdicts (88.5%), and on 424 of 424 where no covering test is red at either baseline; all 196 differences trace to the two baselines, none unexplained, nothing filed · [R1239.md](docs/roadmap/R1239.md) · open — file 1 measured; trigger: each further file lethal-bugs delivers…
 
 ---
 
