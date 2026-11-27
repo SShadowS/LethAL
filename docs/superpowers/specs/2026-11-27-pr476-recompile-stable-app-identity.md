@@ -1,99 +1,116 @@
-# PR-476 (R1234): a recompile-stable test-app identity — design and pre-commitment r1
+# PR-476 (R1234): a recompile-stable test-app identity — design and pre-commitment r2
 
 lethal-code, 2026-11-27. Written before any code.
+- **r1** was d7cc46ec9.
+- **r2** answers its spec-adversary (B1-B3, S1-S4, NITs) and replaces r1.
 
-## Why (PR-475's measurement)
+## Why (PR-475's measurement, corrected)
 
-- Three alc builds of UNCHANGED `fixtures/sandbox-tests` give three `hashPackage` values. So R247/R495, which
-  compare the served test app's `package:<hashPackage>`, refuse any resume after a setup that recompiles (PR-468's
-  live leg hit this).
+- Three alc builds of UNCHANGED `fixtures/sandbox-tests` give three `hashPackage` values. So R247/R495 refuse every
+  `--resume` after a setup that recompiles (PR-468's live leg).
 - **What moves:**
-  - the NAVX header id (bytes 12-27, already zeroed);
+  - the NAVX header id (bytes 12-27);
+  - **the header's zip length (bytes 28-35)**, which differs by 1 between builds (3073 / 3074 / 3073);
   - `NavxManifest.xml`'s `<Build … Timestamp="…">` VALUE;
   - the zip's entry times and deflate bytes.
-- Every entry's other content is byte-identical.
-- PR-457's content walk (`packageEntries`) with ONLY that value blanked gives equal digests on all 3 builds.
+  - PR-475's first compare missed the zip length (an empty slice; corrected in its findings).
+- A content walk that leaves out the id and the zip length, and blanks only the Build Timestamp value, is EQUAL on
+  all 3 builds (6beee117…, re-measured).
 
-## The new identity: `appContentIdentity(buf)` (the "c2" form)
+## The rule (B1, B2, S1): c2 ONLY for identities STORED and compared ACROSS sessions
 
-- **The header:** `H sha256(header bytes 0..12 ‖ 16 zero bytes ‖ header bytes 28..headerEnd)`, when the bytes carry
-  `hashPackage`'s known NAVX shape. Any other shape falls back to `hashPackage` (unchanged), and so does a signed
-  package; the fallback is named in the form, see below.
-- **Every entry, sorted by name bytes:** `E <name>\t<uncompressedSize>\t<sha256(data)>`, using PR-457's
-  `packageEntries`. That walker's refusals (duplicate name, encryption, unknown method, size mismatch) THROW, never a
-  partial digest.
-- **The one exception:** in the entry named exactly `NavxManifest.xml`, the value of the `Timestamp` attribute of the
-  `<Build>` element is replaced by the empty string BEFORE its sha.
-  - The match is exact: one `<Build` element, one `Timestamp="…"` attribute. Zero or several matches means NO
-    blanking, so the digest moves and the check fails closed.
-  - Every other byte of the manifest (app id, name, publisher, version, dependencies, `CompilerVersion`, runtime,
-    targets, every other attribute) is hashed.
-- **The form string:** `package:c2:<sha256 of the lines joined by \n>`.
-  - The old form `package:<64 hex>` and the new one cannot collide, so a stored value always names its scheme.
-  - The fallback (an unknown shape) stays `package:<hashPackage>`, the old form, so an unknown shape behaves exactly
-    as today.
+- **Across sessions,** where a recompile between the two reads is normal and expected, the identity is c2:
+  `runs.test_app_hash`, the baseline-snapshot key (R192), `--resume`'s R247/R495, history lending, and verify's
+  recorded `testAppHash`.
+- **Within one session,** nothing recompiles between two reads. A moved `hashPackage` is the ONLY signal that
+  something was PUBLISHED meanwhile (R495's drift, R462/R686's re-read, the publish read-back). Every within-session
+  comparison KEEPS `hashPackage`.
+  - Otherwise c2 would hide a republish of the same source: a wrong diagnosis, or a kill measured during a reinstall
+    kept (B1).
+- So a session carries BOTH values for the served test app: `{ identity: package:c2:…, bytesHash: hashPackage }`.
 
-## Every place LethAL fingerprints an .app, and what changes
+## `appContentIdentity(buf)` (the "c2" form)
 
-| # | site | what it identifies | change |
+- **Shape gate:** only for bytes with `hashPackage`'s known NAVX shape (NAVX at 0 and 36, header length 40, version 2,
+  the u64 at 28 = the bytes after the header). Any other shape, including a signed or wrapped package, gives the old
+  form `package:<hashPackage>`, unchanged.
+- **H (B3):** `sha256(bytes 0..12 ‖ bytes 36..headerEnd)`. The id (12..27) and the zip length (28..35) are left out;
+  the shape gate already checked the length.
+- **Every entry,** sorted by name bytes: `E <name>\t<uncompressedSize>\t<sha256(data)>`, via PR-457's
+  `packageEntries`, whose refusals THROW (never a partial digest).
+- **The ONE blanking:** in the entry named exactly `NavxManifest.xml`, the value of an attribute named exactly
+  `Timestamp` (preceded by whitespace; so NOT `XTimestamp`) on an element named exactly `Build` is replaced by the
+  empty string.
+  - Exactly one `<Build` element carrying exactly one such attribute; otherwise NO blanking (fail closed).
+  - Every other byte is hashed: the app id, name, publisher, version, dependencies, `CompilerVersion` (a different
+    alc version changes c2, the fail-closed direction), runtime, targets, and every other attribute and element.
+- **Form:** `package:c2:<hex>`.
+  - It cannot collide with the old `package:<64 hex>`.
+  - Suffixes (`|pending`, `|closed-world:…`, `|closed-world:revoked`) attach after it exactly as today.
+
+## Every site, and its decision
+
+| # | site | role | decision |
 |---|---|---|---|
-| 1 | `testAppHashFor` (baseline-snapshot.ts) | the served test app: the R247/R495 identity, `runs.test_app_hash`, the baseline-snapshot key (R192) | **c2** |
-| 2 | orchestrator.ts test-app read (`testAppHash = package:${hashPackage(bytes)}`) | the same identity on the read path | **c2** (the same function as #1) |
-| 3 | test-app-publish.ts `packageHash` (compiled) and the read-back compare | the test app LethAL publishes, and the key a session compares | **c2** for the key, so #1-#3 agree; the read-back compare uses the same function on both sides |
-| 4 | baseline-snapshot.ts `listOtherFiles` / `otherFilesDrift` (R608) | non-.al files in a tree (for example `.alpackages` symbol `.app`s) whose drift stops a snapshot reuse | **c2 for files that parse as a NAVX package**, raw `hashPackage` for others; a recompiled but unchanged symbol package no longer counts as drift |
-| 5 | orchestrator.ts R498 source-less compare (`served` vs `published` `hashPackage`) | that a SOURCE-LESS served package IS the publishApps file | **unchanged**: the same build is compared, nothing is recompiled in between, and R932 rejected content hashing for source-less packages |
-| 6 | digest-inputs.ts `X <dep> sha256(bytes)` (R496 partner dependencies) | partner apps served by BC | **unchanged**: measured byte-equal across restarts (21 of 22; System is PR-457's content line); never recompiled by LethAL's setup |
-| 7 | digest-inputs.ts `P content c1:` (PR-457) | System | **unchanged** |
-| 8 | artifact.ts content-addressed output and `artifact_sha256` | LethAL's own instrumented target, per run | **unchanged**: not compared across runs as an identity |
-| 9 | named-mutants.ts `appSha` and the al-runner-v3 built-app sha | a recorded file's integrity; a cache key | **unchanged** |
+| 1 | `baseline-snapshot.ts testAppHashFor` | the served test app's identity: `runs.test_app_hash`, snapshot key | **c2** |
+| 2 | `orchestrator.ts` test-app read (`testAppHash = package:${hashPackage(bytes)}`) | the same identity on the read path | **c2, by the SAME function as #1** (if the two ever differ, every bcdev session drifts at batch 0) |
+| 3 | `verify.ts` recorded `testAppHash` (`package:${compiled.packageHash}`) | verify's stored identity | **c2, by the shared function**, never `package:${hex}` built by hand |
+| 4 | `orchestrator.ts assertNoTestAppDrift` (R495, every batch) | within-session republish detection | **hashPackage**: the session's `bytesHash` from the proving read against each later read |
+| 5 | the baseline-refusal re-read: `stale-test-app.ts testAppRefusal` (R462), `baselineFoundNoneRefusal` (R686) | within-session: was something published? | **hashPackage** |
+| 6 | `test-app-publish.ts` `packageHash` and the read-back compare (≈ 287, ≈ 415) | publish confirmation | **hashPackage** (B2) |
+| 7 | `baseline-snapshot.ts listOtherFiles` / `otherFilesDrift` (al-runner-v3 in-run proof, R608/R790) | within-run drift; also cost (a symbol package is 373 MB uncompressed) | **unchanged** (S1) |
+| 8 | `orchestrator.ts` R498 source-less served-vs-file | the same build | **unchanged** |
+| 9 | `digest-inputs.ts` `X` lines (R496 partners), `P content c1:` (System) | dependencies | **unchanged** |
+| 10 | `artifact.ts` output and `artifact_sha256`; `named-mutants.ts` `appSha`; the al-runner-v3 built-app sha | per-run artifact, file integrity, cache key | **unchanged** |
+| 11 | `closed-world.ts pendingIdentitiesOf` and the store's revocation | exact string match on stored identities | **unchanged code**: after this change a new client stores c2 only, so a flip revokes pending rows of the c2 form. Old-form pending rows of earlier clients are not revoked by a new client. They can never resume anyway (the identity differs), so this is harmless; stated. |
 
-- The builder re-greps for any site this table misses: `hashPackage(`, `sha256(` over `.app` bytes, `test_app_hash`,
-  `testAppHash`, `packageHash`. Any new site is added here, with its decision, BEFORE code.
+- The builder re-greps for `hashPackage(`, `testAppHash`, `test_app_hash` and `packageHash`. A site missing from
+  this table STOPS the build: it is added here with a decision first.
 
-## Old-form values in existing stores
+## Old-form values in stores (S2)
 
-- `runs.test_app_hash` and the snapshot keys recorded before this change hold `package:<hex>`.
-- After it, the same server's test app identifies as `package:c2:<hex>`. They never compare equal.
-  - So the first `--resume` across this change REFUSES by name (R247/R495, fail-closed). The message adds: "the
-    prior run's test-app identity is the pre-R1234 form; re-run fresh".
-  - Snapshot reuse misses once (a cost, never a wrong verdict).
-- No migration: an old-form value cannot be recomputed without the old bytes.
-- Old-form values are never silently treated as equal.
+- An old `package:<64 hex>` (with any suffix: `^package:[0-9a-f]{64}(\||$)`) never equals a c2 value.
+- Every refusal path that compares a prior identity adds the sentence "the prior run's test-app identity is the
+  pre-R1234 form (package:<hex>); a run made after R1234 records package:c2:…; re-run fresh" when the prior is
+  old-form:
+  - `assertSameTestApp`'s plain path;
+  - the pending path (`pendingRefusal`) and the revoked path;
+  - `--skip-known-survivors`.
+- `TEST_APP_WHY` is reworded: a recompile that changes only the build timestamp no longer counts as a different test
+  app; a different identity means different content, or a pre-R1234 prior.
+- No migration. Mixed forms only ever refuse.
 
 ## Pre-committed tests (red both ways)
 
-1. **Recompile-stable:** the three builds of PR-475 (or, in the repo, a fixture pair built from one invented package
-   with ONLY the Build Timestamp value, the header id, the zip entry times and the deflate level different) → equal
-   c2.
-2. **Each of these changes c2**, one test each:
-   - (a) one character of AL source in an `.al` entry;
-   - (b) `SymbolReference.json` content;
-   - (c) an added, removed or renamed entry;
-   - (d) a different uncompressed size;
-   - (e) EACH other manifest attribute: app version, id, name, publisher, a dependency's version, `CompilerVersion`,
-     runtime, and a second attribute of `<Build>`;
-   - (f) a `Timestamp` attribute on an element other than `<Build>`;
-   - (g) two `<Build>` elements, or none (no blanking → it differs from the blanked one).
-3. **Red checks:**
-   - blanking every attribute instead of only `Timestamp` → (e) goes red;
-   - not blanking → test 1 goes red;
-   - the header id not zeroed → test 1 goes red.
-4. **Sites #1-#4 use c2; sites #5-#9 are byte-for-byte unchanged:** a call-site test per row, or a source guard.
-5. **Old form:** a store whose prior run has `package:<hex>` → the resume refuses with the R1234 sentence; snapshot
-   reuse finds no hit.
-6. **The fallback:** non-NAVX or signed bytes → `package:<hashPackage>`, as today.
+1. **Recompile-stable:** a repo fixture PAIR built from one invented package that differs ONLY in the header id, the
+   zip length, the Build Timestamp value, the entry times and the deflate level → equal c2. `hashPackage` differs.
+   - **Offline**, on PR-475's three real builds: c2 equal (one value); `hashPackage` three values.
+2. **Each changes c2,** one test each: one character of AL source; `SymbolReference.json`; an added, removed or
+   renamed entry; an uncompressed size; EACH other manifest attribute (app version, id, name, publisher, a
+   dependency's version, `CompilerVersion`, runtime, a second `<Build>` attribute).
+3. **Blanking scope (S3): PAIRS that differ ONLY in timestamp values must DIFFER in c2** for:
+   - a manifest with two `<Build>` elements;
+   - one with no `<Build>` but a `Timestamp` on `<App>`;
+   - `XTimestamp="…"` on `<Build>`.
+4. **Red checks:**
+   - hashing bytes 28..36 → test 1 red;
+   - not blanking → test 1 red;
+   - blanking every attribute → test 2 (`CompilerVersion`) red;
+   - a looser attribute regex → test 3 red.
+5. **Within-session sites keep hashPackage (B1), the end-to-end case:** one session, two reads with the SAME c2 and a
+   different `hashPackage`.
+   - `assertNoTestAppDrift` throws `TestAppDriftedError`;
+   - a baseline found-0 re-read gives `TestAppChangedError`, not R686's discovery refusal.
+   - Red if either site compares c2.
+6. **The publish read-back:** a read-back with the same c2 and a different `hashPackage` → not `accepted` (as today).
+7. **Old form:** a prior run with `package:<hex>|closed-world:…` → the resume refuses with the R1234 sentence; the same
+   for the pending and `--skip-known-survivors` paths.
+8. **The fallback:** non-NAVX or signed bytes → `package:<hashPackage>`, as today.
+9. **#2 and #1 agree:** a session's stored identity equals `testAppHashFor`'s for the same bytes.
 
-## The offline pre-commitment on PR-475's real builds
+## Gates
 
-- `appContentIdentity` of `/coord/handoff/PR-475/apps/tests-{1,2,3}.app` → **one value** (PR-475's C2 was c9338160…;
-  the build's form adds the size and name lines exactly as PR-457 does, so the value may differ, but all three must
-  be EQUAL).
-- `hashPackage` of the same three stays three values (the old form is unchanged).
-
-## Gates and the live leg
-
-- **Gates:** `legs.ts` for the touched files (bcdev and lease at least), plus CI.
-- **Gate baselines:** no committed itest baseline or test pins a literal `package:<hex>` (grep, 2026-11-27). The
-  gates compute the hash at runtime, so no figure should move. A moved figure is a BLOCK.
-- **PR-468's positive live leg** then becomes possible through setup's recompile. It stays R1229's follow-up and
-  needs no owner restart unless the orchestrator asks.
+- `legs.ts` for the touched files: bcdev and lease at least, plus CI. The itests that assert
+  `hashPackage(fresh) === compiled.packageHash` stay valid (#6 unchanged): test-app-publish, verify-agreement,
+  verify-scale, verify.
+- No committed baseline pins a `package:<hex>`, so no figure should move. A moved figure is a BLOCK.
