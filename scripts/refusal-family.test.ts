@@ -10,6 +10,7 @@ import {
   DOTNET_EXCEPTION_RSA,
   DOTNET_NO_OBJECT,
   EDGE_REFUSALS,
+  ERRORS_TEMP,
   FAMILIES,
   FIELDREF_CONVERT,
   FORMAT_EVALUATE,
@@ -1780,8 +1781,7 @@ describe("PR-375: the zip-blob family", () => {
 describe("PR-431: the edge-refusals family", () => {
   const f = EDGE_REFUSALS;
 
-  test("last of FAMILIES (place 27, BC-check number 28): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("edge-refusals");
+  test("place 27 of FAMILIES (BC-check number 28): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(26);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051028");
   });
@@ -2120,5 +2120,58 @@ describe("PR-417: BC answers measured on Linux BC", () => {
       "209 of 209 cells of format-region are culture data measured on Linux BC (bc4",
     );
     expect(note).toContain("file none upstream unless Windows BC gives the same answer");
+  });
+});
+
+describe("PR-487: the errors-temp family", () => {
+  const f = ERRORS_TEMP;
+  const al = (): string => emitApp(f)["src/Cells.al"] ?? "";
+
+  // Red: insert the family before edge-refusals, or drop it from FAMILIES.
+  test("last of FAMILIES (place 28, BC-check number 29): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("errors-temp");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(27);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051029");
+  });
+
+  // the 67 cells bc1 (BC 28.4) and edge-e5176a9fd ran (/coord/handoff/PR-487/joined.tsv)
+  test("67 cells with distinct names, 3 support codeunits right after the last cell", () => {
+    expect(f.cells).toHaveLength(67);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(67);
+    const last = BASE_ID + f.cells.length;
+    expect(al()).toContain(`codeunit ${last + 1} "ET Helper"`);
+    expect(al()).toContain(`codeunit ${last + 2} "ET Run Fail"`);
+    expect(al()).toContain(`codeunit ${last + 3} "ET Run Ok"`);
+    expect(f.extraIds).toBe(3);
+  });
+
+  // Red: a DeleteAll on a real table in any cell is a write before Codeunit.Run's return value is used (BC then refuses
+  // the Run); cells count their own key range instead, and every range is distinct.
+  test("no cell deletes from a real table, and every key range a cell writes is its own", () => {
+    for (const c of f.cells) {
+      const body = [...(c.setup ?? []), c.call].join("\n");
+      expect({
+        cell: `${c.type}/${c.method}`,
+        realDeleteAll: /\b(Row|Row2|RA|RT)\.DeleteAll/.test(body),
+      }).toEqual({
+        cell: `${c.type}/${c.method}`,
+        realDeleteAll: false,
+      });
+    }
+    const ranges = f.cells.flatMap((c) =>
+      (c.setup ?? []).flatMap((s) =>
+        [...s.matchAll(/Row2\.SetRange\("Key", (\d+), \d+\)/g)].map((m) => m[1]),
+      ),
+    );
+    expect(ranges.length).toBeGreaterThan(10);
+    expect(new Set(ranges).size).toBe(ranges.length);
+  });
+
+  // Red: drop `Format(..., 0, 9)` from a Boolean read: the answer would follow the session's language (Yes/No).
+  test("every Boolean read goes through Format(x, 0, 9), so no answer depends on the language", () => {
+    for (const c of f.cells) expect(c.depends).toBeUndefined();
+    expect(al()).not.toMatch(/Error\('V:\[[^']*', R[,)]/);
+    expect(al()).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
+    expect(al()).not.toMatch(/(?<!Format\()(Tmp|Row|T|TA|RA)\.IsTemporary\b/);
   });
 });
