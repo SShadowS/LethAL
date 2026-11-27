@@ -58,5 +58,18 @@ bcdev; the default stays today's (the ledger, plus R1174's re-walk). Measurement
   - a red test pins the one direction on the R1174 rig.
 - **Resume and lending cannot mix the two modes:** `killLedgerOff` joins the resume fingerprint only when on (as
   `v3CarryWalkOff` does), and a resume across a change of the flag is refused by name.
+- **Amendment 2 (2026-11-27, the second delta review): "never survived -> killed" overclaims.**
+  - Even in the default, the ledger reorders methods INSIDE one test codeunit, and R1174 does not re-walk that (only
+    crossings between codeunits trigger it). So when methods of one codeunit share state, the flag's no-ledger order can
+    kill a mutant that the default's in-codeunit order left surviving, or meet a hanging test first.
+  - The texts say: a verdict can move with the flag on; mostly killed -> survived (a kill only the ledger's cross-codeunit
+    order reached); either direction is possible when the methods of one test codeunit share state.
+  - **The proof rule becomes:** every verdict move on the fixtures is reported by site key, with both walks, and must be
+    explained by order dependence (a test whose outcome depends on which tests ran before it in the session). An
+    unexplained move is a BLOCK.
+  - Expected: 0 moves.
+- **Lending and snapshot reuse are separated too** (the first delta review): a `runner_build` tag `no-kill-ledger`,
+  matched exactly, so a ledger-off run's survivors are never lent to a default run, nor the reverse. A default run's
+  `runner_build` stays NULL.
 - **Also added:** a test of the CLI-to-session wiring (`runFromCliWithAccept`); the flag's row in README's run-flag table;
   and the resume message no longer claims a carried kill seeds the ledger when the flag is on.
