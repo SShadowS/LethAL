@@ -5,7 +5,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v36.schema.json`](explain-v36.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 36 |
+| [`explain-v37.schema.json`](explain-v37.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 37 |
+| [`explain-v36.schema.json`](explain-v36.schema.json) | the same, from builds before PR-472; kept so a stored v36 document stays checkable (v37 added the caveat `kill-ledger-off`) | `EXPLAIN_SCHEMA_VERSION` = 36 |
 | [`explain-v35.schema.json`](explain-v35.schema.json) | the same, from builds before PR-456; kept so a stored v35 document stays checkable (v36 added the caveat `resumed-across-restart`) | `EXPLAIN_SCHEMA_VERSION` = 35 |
 | [`explain-v34.schema.json`](explain-v34.schema.json) | the same, from builds before PR-381; kept so a stored v34 document stays checkable (v35 added the caveat `survivors-beside-unrun-tests` and the optional `score.survivorsBesideUnrunTests`) | `EXPLAIN_SCHEMA_VERSION` = 34 |
 | [`explain-v33.schema.json`](explain-v33.schema.json) | the same, from builds before PR-307; kept so a stored v33 document stays checkable (v34 added the caveat `session-kind-mismatch`) | `EXPLAIN_SCHEMA_VERSION` = 33 |
@@ -55,10 +56,10 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the forty-eight files, forty-three are hand-written and five were generated, and the split is about SIZE
-rather than principle.** `explain` (a few dozen leaves; v35 and the kept v34, v33, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v9 and the kept v8, v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v35, `doctor` and
-verify v9 are pinned against their declarations, and verify v8, explain v34, explain v33, explain v32, explain v31, explain v30, explain v29, explain v28, explain v27, explain v26, explain v25, explain v24, explain v23, explain v22, explain v21, explain v20, explain v19, explain v18, explain v17, explain v16, explain v15, explain v14, explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
+**Of the fifty files, forty-five are hand-written and five were generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v37 and the kept v36, v35, v34, v33, v32, v31, v30, v29, v28, v27, v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
+`verify` (small, like `doctor`; v9 and the kept v8, v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v37, `doctor` and
+verify v9 are pinned against their declarations, and verify v8, explain v36, explain v35, explain v34, explain v33, explain v32, explain v31, explain v30, explain v29, explain v28, explain v27, explain v26, explain v25, explain v24, explain v23, explain v22, explain v21, explain v20, explain v19, explain v18, explain v17, explain v16, explain v15, explain v14, explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
 verify v7, verify v6, verify v5, verify v4, verify v3, verify v2 and verify v1 are frozen as they were published.
 Verify v5 bumped for two ADDED fields, which this page's rule alone would not do: their absence
 means "not decided" only from v5 on, while in a v4 document it means the document predates the
@@ -93,7 +94,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v36.schema.json`, capped and uncapped.
+   `explain-v37.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must

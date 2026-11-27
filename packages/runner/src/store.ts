@@ -362,7 +362,7 @@ export interface RunRow {
   /** PR-456: `runs.resumed_across_restart`: the run carried a survivor across a restart that lost the
    *  database (or carried one that did), so a later resume of it keeps the caveat. `false` on an older row. */
   readonly resumedAcrossRestart: boolean;
-  /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run. */
+  /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run, except a bcdev `--no-kill-ledger` run: `NO_KILL_LEDGER_BUILD_TAG` (PR-472). */
   readonly runnerBuild: string | null;
   /** R585: the sorted keys (`testKeyOf`) of the tests the run's baseline was given. `null` on a
    *  row recorded before the column: unknown, so it lends no history. */
@@ -383,10 +383,13 @@ export interface TestNarrowing {
 /** R896: the `runner_build` suffix of an `isolation: "auto"` run (always last). */
 export const ISOLATION_AUTO_BUILD_TAG = " isolation-auto";
 
+/** PR-472: the `runner_build` of a bcdev `--no-kill-ledger` run (a default bcdev run records NULL). */
+export const NO_KILL_LEDGER_BUILD_TAG = "no-kill-ledger";
+
 /** PR-303 rule 4: the note on a mutant whose every covering codeunit was pruned. History never lends such a survivor. */
 export const PRUNED_NOTE = "pruned: no covering test reaches its site";
 
-/** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
+/** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build; on bcdev, `NO_KILL_LEDGER_BUILD_TAG` under `--no-kill-ledger` (PR-472), else `undefined`. */
 export interface LendingSession {
   readonly backend: string;
   readonly runnerBuild: string | undefined;
@@ -399,7 +402,9 @@ export interface LendingSession {
  * is evidence only for that build. R654: a run of the retired .NET al-runner lends nothing, by
  * name, FIRST, against any session or none. (R654 also removed R592's arm: once no session can be
  * v2, its only remaining pair was a stored v2 run against a bcdev session, which the R654 refusal
- * names first.) With no session named, only a v2 or v3 run is refused. Remove-only.
+ * names first.) With no session named, only a v2 or v3 run is refused. PR-472: when neither side
+ * is v3, a session and a run must agree on `NO_KILL_LEDGER_BUILD_TAG` (a `--no-kill-ledger` run's
+ * survivor may be a kill under the default order), refused either way. Remove-only.
  * `undefined` = lends.
  */
 export function backendBuildRefusal(
@@ -408,7 +413,18 @@ export function backendBuildRefusal(
 ): string | undefined {
   if (run.backend === RETIRED_V2_BACKEND) return v2RetiredRun(run.id);
   const v3 = "al-runner-v3";
-  if (run.backend !== v3 && session?.backend !== v3) return undefined;
+  if (run.backend !== v3 && session?.backend !== v3) {
+    // PR-472: a `--no-kill-ledger` run's survivor may be a kill under the default order, so the two
+    // modes never lend to each other, either way. A default run records no build (NULL), as before.
+    if (
+      session !== undefined &&
+      (run.runnerBuild === NO_KILL_LEDGER_BUILD_TAG) !==
+        (session.runnerBuild === NO_KILL_LEDGER_BUILD_TAG)
+    ) {
+      return `run ${run.id} ran ${run.runnerBuild === NO_KILL_LEDGER_BUILD_TAG ? "with" : "without"} --no-kill-ledger, and this session runs ${session.runnerBuild === NO_KILL_LEDGER_BUILD_TAG ? "with" : "without"} it; a verdict is lent only within one kill-ledger mode (PR-472)`;
+    }
+    return undefined;
+  }
   if (session === undefined) {
     return `run ${run.id} ran on al-runner-v3 and this caller named no session backend, so nothing of it is lent (R586)`;
   }
@@ -1044,7 +1060,7 @@ export class ResultsStore {
     /** R565: the run's dependency source digest. Absent or `null` writes NULL. `runSession` writes
      *  it after generation (`setDependencySourceSha256`); verify copies its source's here. */
     dependencySourceSha256?: string | null;
-    /** R586: the al-runner-v3 build (`runnerBuildOf`); absent writes NULL (every other backend). */
+    /** R586: the al-runner-v3 build (`runnerBuildOf`); absent writes NULL (every other backend); PR-472: a bcdev `--no-kill-ledger` run writes `NO_KILL_LEDGER_BUILD_TAG`. */
     runnerBuild?: string;
     /** R585: the keys (`testKeyOf`) of the tests this run's baseline is given. Required, so no run
      *  is recorded without saying; `null` writes NULL ("unknown", which lends no history): only a
