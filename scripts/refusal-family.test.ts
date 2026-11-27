@@ -17,6 +17,7 @@ import {
   FORMAT_REGION,
   type Family,
   GET_URL,
+  IO_STREAMS,
   JSON_TEXT,
   LANGUAGE_REGION,
   NO_CLIENT,
@@ -2092,6 +2093,7 @@ describe("PR-417: BC answers measured on Linux BC", () => {
         DATES_FORMULAS,
         FORMAT_EVALUATE,
         FORMAT_REGION,
+        IO_STREAMS,
         JSON_TEXT,
         LANGUAGE_REGION,
         NUMBERS_TEXT,
@@ -2214,8 +2216,7 @@ describe("PR-488: the numbers-text family", () => {
   const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
 
   // Red: insert the family before errors-temp, or drop it from FAMILIES.
-  test("last of FAMILIES (place 29, BC-check number 30): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("numbers-text");
+  test("place 29 of FAMILIES (BC-check number 30): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(28);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051030");
   });
@@ -2285,5 +2286,71 @@ describe("PR-488: the numbers-text family", () => {
       expect(stmts(c)).not.toContain("Evaluate(");
     }
     expect(n).toBeGreaterThan(40);
+  });
+});
+
+describe("PR-489: the io-streams family", () => {
+  const f = IO_STREAMS;
+  const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
+
+  // Red: insert the family before numbers-text, or drop it from FAMILIES.
+  test("last of FAMILIES (place 30, BC-check number 31): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("io-streams");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(29);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051031");
+  });
+
+  // the 65 cells bc1 (BC 28.4) and edge-e5176a9fd ran (/coord/handoff/PR-489/joined.tsv)
+  test("65 cells with distinct names, the helper right after the last cell", () => {
+    expect(f.cells).toHaveLength(65);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(65);
+    expect(emitApp(f)["src/Cells.al"] ?? "").toContain(`codeunit ${BASE_ID + 66} "IO Helper"`);
+    expect(f.extraIds).toBe(1);
+  });
+
+  // Red: drop `locale` from a code-page cell, or mark an ASCII or UTF cell `locale` (R1210 would read the wrong cells).
+  test("exactly the 6 code-page cells are locale cells", () => {
+    expect(f.cells.filter((c) => c.depends === "locale").map((c) => c.method)).toEqual([
+      "Windows ae letter",
+      "MSDos ae letter",
+      "UTF8 ae read as Windows",
+      "UTF8 ae read without encoding",
+      "default ae bytes",
+      "To ae Windows",
+    ]);
+  });
+
+  // Red: a real-table DeleteAll, a reused key, or a Format without `, 0, 9`.
+  test("no real-table DeleteAll, every real key its own, every Format is format 9", () => {
+    const keys: string[] = [];
+    for (const c of f.cells) {
+      expect(stmts(c)).not.toMatch(/\b(B|Item)\.DeleteAll/);
+      for (const m of stmts(c).matchAll(
+        /(?:InsertBlob\(|B\.Id := |InsertItems\('X|OutS\.WriteText\('<Items><Item><Code>X)(\d+)/g,
+      ))
+        keys.push(`${c.method}:${m[1]}`);
+      for (const m of stmts(c).matchAll(/Format\(/g)) {
+        let depth = 0;
+        const s = stmts(c);
+        const from = (m.index ?? 0) + "Format".length;
+        for (let j = from; j < s.length; j++) {
+          if (s[j] === "(") depth++;
+          if (s[j] === ")" && --depth === 0) {
+            expect({ cell: c.method, f9: s.slice(from, j + 1).endsWith(", 0, 9)") }).toEqual({
+              cell: c.method,
+              f9: true,
+            });
+            break;
+          }
+        }
+      }
+    }
+    const byKey = new Map<string, Set<string>>();
+    for (const k of keys) {
+      const [cell, key] = k.split(":") as [string, string];
+      byKey.set(key, (byKey.get(key) ?? new Set()).add(cell));
+    }
+    expect(byKey.size).toBeGreaterThan(8);
+    for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });
   });
 });
