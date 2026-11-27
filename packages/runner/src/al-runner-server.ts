@@ -305,6 +305,28 @@ const SHUTDOWN_REPLY_WAIT_MS = 500;
  */
 export const SHUTDOWN_EXIT_WAIT_MS = 5_000;
 
+/** Rows a running request streams: one read at `close()` belongs to that request, not to the shutdown. */
+const REQUEST_ROW_TYPES: ReadonlySet<string> = new Set(["test", "entrySummary", "summary"]);
+
+/**
+ * R1233 (build review): whether what `close()` read after writing `shutdown` is the daemon leaving: its
+ * stdout ended, or a JSON line that is not a running request's row (al-runner answers
+ * `{"status":"shutting down"}`). A late row of a request still running, or a line that is not JSON, is
+ * not: that daemon is busy, will not exit within the bound, and is signalled at once, as before.
+ */
+export function isShutdownAnswer(outcome: ReadLineOutcome): boolean {
+  if (outcome.kind === "eof") return true;
+  if (outcome.kind !== "line") return false;
+  try {
+    const msg = JSON.parse(outcome.line) as unknown;
+    if (typeof msg !== "object" || msg === null || Array.isArray(msg)) return false;
+    const type = (msg as { type?: unknown }).type;
+    return !(typeof type === "string" && REQUEST_ROW_TYPES.has(type));
+  } catch {
+    return false;
+  }
+}
+
 export class AlRunnerServer {
   private proc: ServerProcessHandle | undefined;
   /** R952: the running child's pid (undefined before `start` or in a fake without one). */
@@ -642,7 +664,7 @@ export class AlRunnerServer {
       // the teardown on an error path where the daemon is by definition not answering, on the way
       // to reporting the real failure.
       const outcome = await this.stdout?.next(SHUTDOWN_REPLY_WAIT_MS);
-      answered = outcome !== undefined && outcome.kind !== "timeout";
+      answered = outcome !== undefined && isShutdownAnswer(outcome);
     } catch {
       // Already gone. Killing below is still correct.
     }
@@ -658,10 +680,13 @@ export class AlRunnerServer {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        proc.wait().then(
-          () => true,
-          () => true,
-        ),
+        // a rejected wait leaves the process's state unknown: signal it, as before
+        proc
+          .wait()
+          .then(
+            () => true,
+            () => false,
+          ),
         new Promise<boolean>((r) => {
           timer = setTimeout(() => r(false), ms);
         }),

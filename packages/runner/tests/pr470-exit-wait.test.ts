@@ -3,6 +3,7 @@ import {
   AlRunnerServer,
   SHUTDOWN_EXIT_WAIT_MS,
   type ServerProcessHandle,
+  isShutdownAnswer,
 } from "../src/al-runner-server";
 
 /**
@@ -10,7 +11,12 @@ import {
  * shutdown reply a serve daemon writes its workspace cache, then exits. `close()` lets it exit by itself,
  * bounded, and signals only one still running past the bound. Event order is recorded, never timed.
  */
-type Shape = { readonly replies: boolean; readonly exitsAfterReply: boolean };
+type Shape = {
+  readonly replies: boolean;
+  readonly exitsAfterReply: boolean;
+  /** The line read after `shutdown`; default al-runner's acknowledgement. */
+  readonly answer?: string;
+};
 
 function fakeDaemon(shape: Shape) {
   const events: string[] = [];
@@ -37,7 +43,7 @@ function fakeDaemon(shape: Shape) {
       if (!line.includes('"shutdown"')) return;
       events.push("shutdown");
       if (!shape.replies) return;
-      push('{"type":"shutdown"}');
+      push(shape.answer ?? '{"status":"shutting down"}');
       events.push("replied");
       // the cache write, then the exit, a moment after the reply (never, for a daemon that hangs)
       if (shape.exitsAfterReply) setTimeout(exit, 5);
@@ -104,6 +110,31 @@ describe("R1233: close() lets a daemon that answered exit by itself", () => {
     expect(waitAt).toBeGreaterThan(d.events.indexOf("replied"));
     expect(killAt).toBeGreaterThan(waitAt);
     expect(d.events.indexOf("exited")).toBeGreaterThan(killAt);
+  });
+
+  test("a late row of a request still running is not the answer: signalled without the exit wait", async () => {
+    // Build review: a busy daemon reads `shutdown` only after its request, so it would not exit in the bound.
+    const d = await closeOf(
+      {
+        replies: true,
+        exitsAfterReply: false,
+        answer: '{"type":"test","name":"Codeunit1.A","status":"pass"}',
+      },
+      60_000,
+    );
+    expect(d.kills()).toBe(1);
+    expect(d.events.indexOf("kill")).toBeLessThan(d.events.indexOf("wait"));
+  });
+
+  test("isShutdownAnswer: EOF and a non-row JSON line are the answer; a request row, non-JSON or a timeout are not", () => {
+    expect(isShutdownAnswer({ kind: "eof" })).toBe(true);
+    expect(isShutdownAnswer({ kind: "line", line: '{"status":"shutting down"}' })).toBe(true);
+    for (const type of ["test", "entrySummary", "summary"]) {
+      expect(isShutdownAnswer({ kind: "line", line: JSON.stringify({ type }) })).toBe(false);
+    }
+    expect(isShutdownAnswer({ kind: "line", line: "not json" })).toBe(false);
+    expect(isShutdownAnswer({ kind: "line", line: "[1]" })).toBe(false);
+    expect(isShutdownAnswer({ kind: "timeout" })).toBe(false);
   });
 
   test("a daemon that never replies is signalled without the exit wait", async () => {
