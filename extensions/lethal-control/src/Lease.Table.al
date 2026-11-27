@@ -35,8 +35,8 @@ table 91006 "LC Lease"
         /// fresh claim and committed before phase 2 can hang.
         ///
         /// This exists because a watchdog cannot discover it any other way. MEASURED (Cronus281,
-        /// `scripts/r53-probe/`): a web-service session cannot see itself in `Active Session`
-        /// (2000000110), and the rows it can see carry ids of the opposite sign — so the session
+        /// `scripts/r53-probe/`): a web-service session cannot see itself in the session list
+        /// (Active Session was withdrawn: measured blind on bcwin), and the rows it can see carry ids of the opposite sign — so the session
         /// about to run a mutant has to write its own `SessionId()` down first, and that committed
         /// row survives the kill.
         ///

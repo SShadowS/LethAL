@@ -747,6 +747,8 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
       "Reason := 'client-session-alive'; AliveSessionId := Lease.\"Op Session Id\"; exit; end;",
     );
     expect(deact.indexOf('Lease."Last Completed Op Seq" := OpSeq;')).toBeGreaterThan(alive);
+    // the unconditional tuple clear follows the mark check directly
+    expect(deact.slice(alive, alive + 200)).toContain("exit; end; ForceClearActive();");
     expect(deact).toContain(
       "if Lease.\"Op Session Id\" <= 0 then begin Reason := 'no-session-id';",
     );
@@ -764,7 +766,17 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
       const code = codeOnly(read(file));
       expect(code, file).not.toMatch(/Active Session/i);
       expect(code, file).not.toContain("ActiveSessionHolds");
+      expect(code, file).not.toContain("2000000110");
     }
+  });
+
+  test("a session that has ended is no longer the bound session (the gate reads the mark, unlocked)", () => {
+    const gate = codeOnly(procedureBody(state, "IsBoundClientSession")).replace(/\s+/g, " ");
+    const ended = gate.indexOf('if Lease."Op Session Ended" then exit(false);');
+    expect(ended).toBeGreaterThan(gate.indexOf("Lease.Get("));
+    expect(ended).toBeLessThan(gate.indexOf("exit((SessionId() > 0)"));
+    expect(gate).toContain("Lease.ReadIsolation := IsolationLevel::ReadUncommitted;");
+    expect(gate).not.toContain("LockTable");
   });
 
   test("EndClientSession marks the end only for the bound caller, and records the caller's id with it", () => {

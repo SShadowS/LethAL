@@ -899,8 +899,8 @@ codeunit 91003 "LC Control API"
         Obj.WriteTo(ResultJson);
     end;
 
-    /// <summary>OData action (1.0.0.31, PR-478): tombstone a `client-run` op, but only after "Active Session"
-    /// shows its bound session gone; otherwise `client-session-alive` and the op stays in flight. Thin wrapper over
+    /// <summary>OData action (1.0.0.31, PR-478): tombstone a `client-run` op, but only after the bound session
+    /// marked its own end ("Op Session Ended", set by EndCallerSession); otherwise `client-session-alive` and the op stays in flight. Thin wrapper over
     /// "LC Control State".TryDeactivateForClient. JSON: {deactivated, alreadyCompleted?, reason?, sessionId?}
     /// (`sessionId` echoes the bound session on `client-session-alive`).</summary>
     procedure DeactivateForClient(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text

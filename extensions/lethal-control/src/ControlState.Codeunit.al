@@ -1494,8 +1494,8 @@ codeunit 91002 "LC Control State"
     end;
 
     /// <summary>1.0.0.31 (PR-478, B3 overrun ruling): the ONLY path that tombstones a `client-run` op. It does so
-    /// only when "Op Session Ended" is set (the bound session's own EndClientSession; "Active Session" cannot prove
-    /// a client session gone, measured on bcwin); otherwise it answers
+    /// only when "Op Session Ended" is set (the bound session's own EndClientSession; Active Session was withdrawn:
+    /// measured blind on bcwin); otherwise it answers
     /// `client-session-alive` and leaves the op in flight. A never-bound op (no session id) is refused as
     /// `no-session-id`: nothing proves its session is gone. The tuple clear is unconditional (ForceClearActive),
     /// as in TryRecoverOp: the call carries no tuple, and the marker match is the ownership proof.</summary>
@@ -1651,6 +1651,12 @@ codeunit 91002 "LC Control State"
         if not Lease.Get('') then
             exit(false);
         if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then
+            exit(false);
+        // Amendment 5: a session that has called End writes no rows, so tests run after End cannot add or
+        // overwrite rows of the op.
+        // Amendment 5: a session that has called End writes no rows, so tests run after End cannot add or
+        // overwrite rows of the op.
+        if Lease."Op Session Ended" then
             exit(false);
         exit((SessionId() > 0) and (Lease."Op Session Id" = SessionId()));
     end;
@@ -1829,7 +1835,9 @@ codeunit 91002 "LC Control State"
         Lease."Stopped Op Seq" := 0;
         Lease."Op Session Ended" := false;
         Lease.Modify();
-        // 1.0.0.31 (PR-478, amendment 4): the contract requires an NST restart first, and session ids restart with it.
+        // 1.0.0.31 (PR-478, amendments 4 and 5): emptying "LC Ended Session" rests on the contract's NST restart
+        // having ended every session and restarted their ids. That restart is NOT checked (the generation does not
+        // prove one). A reset WITHOUT a restart lets a still-open ended session bind again.
         EndedSession.DeleteAll();
         ForceClearActive();
         Commit();
