@@ -2167,11 +2167,36 @@ describe("PR-487: the errors-temp family", () => {
     expect(new Set(ranges).size).toBe(ranges.length);
   });
 
-  // Red: drop `Format(..., 0, 9)` from a Boolean read: the answer would follow the session's language (Yes/No).
-  test("every Boolean read goes through Format(x, 0, 9), so no answer depends on the language", () => {
+  /** Each `Format(...)` argument list in a cell's statements, with nested parentheses kept. */
+  const formatArgs = (s: string): string[] => {
+    const out: string[] = [];
+    for (let i = s.indexOf("Format("); i >= 0; i = s.indexOf("Format(", i + 1)) {
+      let depth = 0;
+      for (let j = i + "Format".length; j < s.length; j++) {
+        if (s[j] === "(") depth++;
+        if (s[j] === ")" && --depth === 0) {
+          out.push(s.slice(i + "Format(".length, j));
+          break;
+        }
+      }
+    }
+    return out;
+  };
+  // Red (each separately): `Format(R)` without `, 0, 9`; `R` itself as a V:[...] argument; a bare HasCollectedErrors() or
+  // IsTemporary: each would follow the session's language (Yes/No). The two enum captions of Info.Defaults are the one
+  // measured exception (R1236 says so).
+  test("every Format in a cell is Format(x, 0, 9) or a named enum caption, and no Boolean is printed bare", () => {
     for (const c of f.cells) expect(c.depends).toBeUndefined();
-    expect(al()).not.toMatch(/Error\('V:\[[^']*', R[,)]/);
-    expect(al()).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
-    expect(al()).not.toMatch(/(?<!Format\()(Tmp|Row|T|TA|RA)\.IsTemporary\b/);
+    const stmts = f.cells.map((c) => [...(c.setup ?? []), c.call].join("\n")).join("\n");
+    const args = formatArgs(stmts);
+    // every Format the 67 cells hold (a scan that finds none would make the check below vacuous)
+    expect(args.length).toBe(27);
+    const loose = args.filter(
+      (a) => !a.endsWith(", 0, 9") && a !== "EI.ErrorType" && a !== "EI.Verbosity",
+    );
+    expect(loose).toEqual([]);
+    expect(stmts).not.toMatch(/Error\('V:\[[^']*'(, [^,;]+)*, R[,)]/);
+    expect(stmts).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
+    expect(stmts).not.toMatch(/(?<!Format\()\b\w+\.(IsTemporary|Collectible)\b(?!\()/);
   });
 });

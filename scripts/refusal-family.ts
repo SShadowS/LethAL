@@ -6600,8 +6600,10 @@ table 51001 "ER Row B"
  * Cells that write a real table use their OWN key range (`etKey`), never DeleteAll: a DeleteAll is a write, and a write
  * before `Codeunit.Run`'s return value is used changes what BC does. So counts hold whether or not BC rolls back between
  * tests. Booleans are read through Format(x, 0, 9). Two cells Commit (asserterror after Commit, Codeunit.Run after Commit),
- * as Y2_XML's cells did on bc2. Cell i is codeunit BASE_ID + 1 + i; tables 51000-51002; the support codeunits follow the
- * last cell (`extraIds`: the helper, the failing Run target, the passing Run target).
+ * as Y2_XML's cells did on bc2. Their committed rows stay, so on BC those two cells answer only on a fresh install: run the
+ * app again only after uninstalling it WITH its data (they would answer "already exists"). Cell i is codeunit BASE_ID + 1 + i;
+ * tables 51000-51002; the support codeunits follow the last cell (`extraIds`: the helper, the failing Run target, the passing
+ * Run target). What the cells do NOT reach (both runtimes stop earlier) is listed in R1236.
  */
 let etNext = 0;
 /** A fresh key range of 10 for one cell. */
