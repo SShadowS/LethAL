@@ -27,6 +27,64 @@ lethal-code, 2026-11-26.
 - **(d) not yet measured.** No two stores share a batch hash with a stored baseline on both sides (email2 was paused
   before its snapshot). It runs on the next restart.
 
+## r5 (PR-468's spec review against today's code; overrides r4 and r3 where they differ)
+
+1. **(BLOCK) Strands stay skipped, exactly as today (D1).** "The new branch" item 5 and the red test "a prior strand
+   is re-run, not skipped" are VOID.
+   - The red test instead: a prior `quarantined:` row outside a degraded window, then a generation and id change →
+     still skipped at step 1b'.
+2. **The same server only.** The new branch also requires `prior.resourceKey !== null && prior.resourceKey ===
+   current.resourceKey`. Otherwise it refuses as today: a run on bc1 is never carried onto bc2 "across a restart".
+3. **`known-survivor` does not carry in restart mode.** Only `survived` does. History (`priorSurvivorKeys`) still
+   lends as today.
+4. **Rows carry their batch.**
+   - `batchIndex` is threaded into `MutantVerdictRow` and `CarriedVerdict`.
+   - A survivor carries only if `snapshotBatchHash(prior, row.batchIndex)` equals the hash of the snapshot that was
+     compared equal. Otherwise it fails loudly (a caller-contract violation), never carries.
+5. **The compare site:** inside `scoreBatch`, after `baseline-batch-finished`, the R955 `budget-in-baseline` return,
+   the R139 refusal and R738/R740, and BEFORE `input.select(...)`.
+   - In restart mode `allowReuse = false`, so every batch has a FRESH baseline to compare.
+   - A new store query finds the prior snapshot by (run, batch hash). It follows the PR-66 reuse row, returns the
+     payload, and applies the suspect, lost and degraded exclusions.
+   - `ScoreBatchInput.select` gets the decision (carry allowed for this batch, or the named reason).
+6. **Equal, made exact:**
+   - the batch-level `commonWorkDate` is present on both sides and equal;
+   - per test, a WorkDate missing on BOTH sides for a `skip` is equal, and a one-sided absence differs;
+   - coverage is compared as the whole stored `CoverageMap` (entries as a SET, plus granularity, `overloadIndex`
+     and `namingGaps`).
+   - **Before the live leg,** the build's OWN compare function is run over the two stores of probe (d) (email3 run 1
+     against bugs' after-restart run) and must say EQUAL.
+7. **The offline prediction, now from an INDEPENDENT oracle** (`/coord/handoff/PR-468/split.ts`, counts only):
+   - **The oracle's rules:** R646 as documented (a non-empty faced set containing every covering test, the
+     baseline's refused skips left out); identity by (ast_hash, codeunit, procedure, operator, identity_ordinal); a
+     kill is seedable when the killer METHOD matches exactly one covering test, it reproduced, and it has no
+     ledger-order note.
+   - **On email3 run 1: 300 of 300 survivors CARRY; 302 of 302 kills are SEEDABLE.** Re-run: 256 errors. The 1,015
+     no-coverage are recorded as no-coverage, 0 executed.
+   - **The build's check:** an offline harness runs the BUILT decision code (the resume index plus the restart
+     branch) over a read-only copy of email3's store, with the batch declared equal and the apps declared matching.
+     It must give carried = 300 and seeded = 302. Each difference is explained by name before merge, or it is a
+     BLOCK.
+   - The repo fixture tests use invented shapes, one case per filter: R646, refused tests, the batch gate,
+     `known-survivor`, degraded or lost rows, and a slowdown-note window.
+8. **The caveat `resumed-across-restart`, the full ripple:**
+   - a fold accumulator and a `buildReport` input, DERIVED from carried-across-restart rows, not from the warning code;
+   - `EXPLAIN_SCHEMA_VERSION` 35 → 36, keeping the frozen `schemas/explain-v35.schema.json`, adding v36, a row in
+     `schemas/README.md`, and the history in `explain.ts`;
+   - the pinned caveat enum in `schemas.test.ts`;
+   - `generate-schemas` (report-v3);
+   - `CAVEAT_INTERPRETATIONS`, with the counts in `interpretation.test.ts` (39 → 40) and `report.test.ts`;
+   - `docs/using-lethal-from-an-agent.md` (the caveat list, and R680/R969's "a different id refuses" paragraph).
+9. **The label survives a later resume.** A run that carried across a restart records a flag on its run row. A
+   resume of THAT run sets the caveat too.
+10. **The refusal side, updated:**
+    - R680's tests in `orchestrator.test.ts`, the `ServerGenerationChangedError` text and `resume-reusing-run`'s
+      restart-mode wording;
+    - a superseded note in R1012 and R959;
+    - CHANGELOG.
+    - A re-run kill that is seeded and then killed live counts once in R197's ledger: the seed is skipped when the
+      same kill is recorded live.
+
 ## r4: the build pre-commitment (PR-468, 2026-11-27)
 
 - **The GO conditions now hold:**
