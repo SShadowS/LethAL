@@ -9,6 +9,27 @@ lethal-code, 2026-11-27. Written before code.
   `npm run build` failed tsc (TS2322 in `src/mcp/error-envelope.ts`).
 - Every agent's refresh failed in setup until the orchestrator ran `npm install` by hand (2026-11-27).
 
+## r2 (the build review; overrides "The rule" below)
+
+- **(BLOCK) Measured:** bc-dev-mcp and pi-mcp TRACK `bun.lock`. Their `package-lock.json` is UNTRACKED, left by an
+  earlier `npm install`. A dependency bump never changes it, so a stamp keyed on it never moves.
+- **The stamp** = sha256 of the TRACKED dependency files: `git ls-files -z package.json package-lock.json bun.lock`,
+  concatenated. It is kept in `node_modules/.kraken-deps.sha256`.
+- **The install,** when the stamp differs or is missing:
+  - `npm ci` when `package-lock.json` is TRACKED;
+  - else `npm install`, which updates an untracked lockfile.
+- **No tracked dependency file at all:** as before (`npm install` only when node_modules is missing).
+- **(SHOULD) Fail closed, readably:**
+  - a hash that fails or is not 64 hex fails setup (never an empty-equals-empty match);
+  - npm runs with `--loglevel=error`, and a failure prints "kraken-setup: npm ci|install failed in <dir>" and fails
+    setup with no stamp written.
+- **(SHOULD, stated):** `npm ci` deletes `node_modules` under MCP servers that other sessions run from these
+  folders. The build already deletes `dist` today. It is accepted, not engineered around.
+- **Tests add:**
+  - an untracked `package-lock.json` with a changed `package.json` → `npm install` (not ci), and a new stamp;
+  - a failing hash → setup fails, no install;
+  - test 4 also asserts that the failing repo's build did not run and the next repo was not reached.
+
 ## The rule
 
 - **A repo WITH `package-lock.json`:**
