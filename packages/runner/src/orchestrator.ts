@@ -1956,6 +1956,12 @@ export interface SessionConfig {
    */
   readonly stopHungSessions?: boolean;
   /**
+   * PR-472 (R197, R1174), `--no-kill-ledger`, OPT-IN, bcdev only. `false` turns the kill ledger's
+   * test order off for the run: every mutant's covering tests go in the no-ledger order, so R1174's
+   * re-walk is never asked for. Absent: today's ledger order. Any other backend refuses it by name.
+   */
+  readonly killLedger?: false;
+  /**
    * R198: how a mutant's covering tests are dispatched on a backend that has `runMany`.
    * `maxMethodsPerCall` caps one call (default unbounded; the gates force chunking with 2);
    * `requestCeilingMs` bounds one call (default `REQUEST_CEILING_MS`). `enabled: false` keeps
@@ -5514,6 +5520,8 @@ interface BatchScope {
   /** PR-301: `--stop-hung-sessions` for this session, so an overrun's quarantine note can name it when
    *  off. Absent where the caller has no such setting (named mutants): unknown, and the note is silent. */
   readonly stopHungSessions?: boolean;
+  /** PR-472: `--no-kill-ledger` for this session; see `SessionConfig.killLedger`. */
+  readonly killLedgerOff?: boolean;
   readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
@@ -6022,6 +6030,16 @@ function lostBatchNote(safety: SessionSafety): string {
  * request that changes no mutable line. Extends `Error` directly, like every typed error here.
  */
 export class NoMutableLinesError extends Error {}
+
+/** PR-472: `--no-kill-ledger` on a backend that is not bcdev. Extends `Error` directly. */
+export class KillLedgerFlagBackendError extends Error {
+  constructor(backendKind: string) {
+    super(
+      `kill-ledger-flag-backend: --no-kill-ledger is for the bcdev backend only (R1174's re-walk exists only there); this run's backend is ${backendKind}. Drop the flag.`,
+    );
+    this.name = "KillLedgerFlagBackendError";
+  }
+}
 
 /**
  * R508: the lease was lost, and writing the lost batch's correction to the store failed, so its
@@ -7101,6 +7119,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     groupRuns,
     sessionReuse,
     ...(scope.stopHungSessions !== undefined ? { stopHungSessions: scope.stopHungSessions } : {}),
+    ...(scope.killLedgerOff === true ? { killLedgerOff: true } : {}),
     baselineReused,
     baselineReach,
     ...(scope.reachTrace !== undefined ? { reachTrace: scope.reachTrace } : {}),
@@ -7248,6 +7267,9 @@ async function runSessionBody(
   const carrySkip = readCarrySkip(process.env);
   reachTrace?.start();
   const caps = cfg.backend.capabilities();
+  // PR-472: refused by name before any run on a backend that never re-walks.
+  if (cfg.killLedger === false && !isBcdev(caps.kind))
+    throw new KillLedgerFlagBackendError(caps.kind);
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   if (
     cfg.timeBudgetSeconds !== undefined &&
@@ -8362,6 +8384,15 @@ async function runSessionBody(
       message: `--stop-hung-sessions is off: ${STOP_HUNG_SESSIONS_OFF_TEXT}`,
     });
   }
+  // PR-472: the warning code is the caveat `buildReport` raises from it.
+  if (cfg.killLedger === false) {
+    emit({
+      type: "warning",
+      code: "kill-ledger-off" satisfies Caveat,
+      message:
+        "--no-kill-ledger is on: covering tests run in the no-ledger order, so R1174's re-walk is not needed, but a kill can take more tests to reach (PR-472).",
+    });
+  }
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
   // PR-461 (R826): a BC call bears only so many guard checks; refused by name before any publish. On
   // the deployed set (after --confirm narrows it), and before R48's refusal: it is the more specific.
@@ -8784,6 +8815,7 @@ async function runSessionBody(
     const lane0 = v3Lanes?.[0];
     const scope: BatchScope = {
       stopHungSessions: cfg.stopHungSessions === true,
+      killLedgerOff: cfg.killLedger === false,
       // R766 (b): under lanes the baseline runs on lane 0 (its N = 1 baseline), the rest on the owner.
       backend: lane0 !== undefined ? splitBackend(cfg.backend, lane0) : cfg.backend,
       ...(v3Lanes !== undefined
@@ -13573,6 +13605,8 @@ interface RunMutantsArgs {
   readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   /** PR-301: see `BatchScope.stopHungSessions`. Absent: unknown, and the note does not name the stop. */
   readonly stopHungSessions?: boolean;
+  /** PR-472: see `BatchScope.killLedgerOff`. Orders by the no-ledger order, so no re-walk is asked for. */
+  readonly killLedgerOff?: boolean;
   /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
    *  budget derived from them, are from another day. Since R516 every position-1 `timeout` is
    *  confirmed unmutated with R53's 2x margin on every batch; this field only names the cause of
@@ -13920,7 +13954,13 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered =
-      rw.cur?.order ?? orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
+      rw.cur?.order ??
+      orderCoveringTests(
+        covering,
+        m,
+        args.killLedgerOff === true ? newKillLedger() : args.killLedger, // PR-472
+        args.memberCountsByTest,
+      );
     // R586 (F5): a backend that runs a whole test codeunit per call learns every covering ref's
     // budget up front, so one call can be sent the largest of them.
     args.backend.useCoveringBudgets?.(

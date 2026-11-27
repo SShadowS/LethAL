@@ -295,7 +295,9 @@ export type Caveat =
   // R1131: at least one row was not scored because its start WorkDate moved from the batch's baseline.
   | "workdate-changed"
   // PR-381 (R1197), PR-387: survivors in an al-runner-v3 or bcdev run with tests not run at baseline.
-  | "survivors-beside-unrun-tests";
+  | "survivors-beside-unrun-tests"
+  // PR-472 (R197, R1174): `--no-kill-ledger` was on (bcdev only).
+  | "kill-ledger-off";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -845,6 +847,21 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "no score changed. A test that ran and failed on its own is not counted here: it is red on BC " +
       "too.",
     basis: "R1197",
+  },
+  "kill-ledger-off": {
+    meaning:
+      "`--no-kill-ledger` was on: every mutant's covering tests ran in the no-ledger order " +
+      "(narrowest test first, then the name), not in the order that puts tests that already " +
+      "killed first (R197). R1174's second walk of a survivor is not needed, because the two " +
+      "orders are the same. The trade: a kill can take more tests to reach. Measured upper " +
+      "bounds, in seconds of test time on read-only copies of real runs: dropping the ledger adds " +
+      "at most 901 (Email), 878 (Queue), 69 (Subs), 1,533 (narrow Tests-Misc) and 8,232 (E-Documents) " +
+      "to kills, while the second walk it saves cost 2,911, 2,849, 1,761, 4,495 and 0. It suits " +
+      "files with many survivors, and is worse where kills ride on long tests in other codeunits.",
+    entailedNegative:
+      "Not a wrong verdict: the same tests are tried, in another order, and a mutant is `survived` " +
+      "only after every covering test passed. Only `killingTest` and the run's cost can move.",
+    basis: "R1174",
   },
 };
 
@@ -3540,6 +3557,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // R631 - see CAVEAT_INTERPRETATIONS["project-symlink-skipped"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "project-symlink-skipped"))
     caveats.push("project-symlink-skipped");
+  // PR-472 - see CAVEAT_INTERPRETATIONS["kill-ledger-off"]. From the warning itself: no field.
+  if (events.some((e) => e.type === "warning" && e.code === "kill-ledger-off"))
+    caveats.push("kill-ledger-off");
   // R922 (4) - see CAVEAT_INTERPRETATIONS["al-runner-v3-serve-default-fallback"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "al-runner-v3-serve-default-fallback"))
     caveats.push("al-runner-v3-serve-default-fallback");
