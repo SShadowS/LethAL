@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**70 of 1198 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**69 of 1198 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1181,7 +1181,7 @@ that ordering is the priority.
 - **R1146** · Adopt al-runner's stopAfterFirstFailure (upstream #8484) for mutant requests: the fork's version cut DO test time 20-23% with 0 moved verdicts (PR-223); re-measure upstream's before use · [R1146.md](docs/roadmap/R1146.md) · open — built behind `alRunnerV3.stopGroups` (default OFF) by PR-256…
 - **R1147** · Keep the serve daemon after a timeout cut? DO restarts after every one (y3: 23, 1,107.6 s of warm-up, about 4.6% of the mutant phase); PERF-15 found the kept daemon answers as a fresh one · [R1147.md](docs/roadmap/R1147.md) · open — parked (orchestrator, 2026-11-20, coord PR-228): measured and built, the ON path is unsafe as…
 - **R1148** · Survived mutants run every covering test, but on DO only 52% of those tests reach the mutated statement: pruning covering tests to the reaching ones (statement grain, codeunit-order safe) is the largest LethAL-owned speed lever left · [R1148.md](docs/roadmap/R1148.md) · open — pruning is BUILT, behind LETHAL_V3_REACH_PRUNE (default OFF; PR-303). Full DO (PR-330, 2026-11-22) is…
-- **R1149** · Restore leg O1's full corpus-set expectation (every write test passes) when al-runner's P2 lets a partner login's memo reads run with BC's value; until then O1 names the f9116dc96 row-insert refusal as a known coverage loss (PR-233) · [R1149.md](docs/roadmap/R1149.md) · open — trigger: the first gated `current` carrying upstream's P2 (the partner-OnAfterLogin memo probe, #8239)
+- **R1149** · Restore leg O1's full corpus-set expectation (every write test passes) when al-runner's P2 lets a partner login's memo reads run with BC's value; until then O1 names the f9116dc96 row-insert refusal as a known coverage loss (PR-233) · [R1149.md](docs/roadmap/R1149.md) · done (PR-477) — on current edge-e5176a9fd (#8239 fixed) O1's CDO set passes every write test in all 8 W and C…
 - **R1150** · The update gate's default pass path accepts a receipt whose applied pin this checkout does not know: no digest check, no ledger row, and `current` can still move to a build every v3 session then refuses · [R1150.md](docs/roadmap/R1150.md) · done (9177f68a8)
 - **R1151** · Merge the kill-pair batches of one packed prefetch call into one batch (PR-242's L2'): PR-241 packs units into one prefetchMutants call, but batchKillPairs still runs per unit, so each unit's few kills pay their own live request · [R1151.md](docs/roadmap/R1151.md) · done (3f0bac764)
 - **R1152** · Leg C's serve-keep-reasons checks only some keep-list entries: a reworded refusal text (the Company-table one, upstream since edge-4ebfe7913) passed every gate and turned into a DO restart storm (PERF-10, 2026-11-19) · [R1152.md](docs/roadmap/R1152.md) · done (ea4a58dda) — PR-363: leg C's serve-keep-reasons judges 47 more entries, each from a refusal-family cell…
