@@ -227,8 +227,23 @@ Evidence: `/coord/handoff/PR-478/spec-recheck.md`. Ruling (lethal-orchestrator):
   quarantined by name.
 
 ### A6. Environment and asks
-- **`Microsoft.Dynamics.Framework.UI.Client.dll`:** not in /coord/cache. The orchestrator filed the resource ask. No build on
-  a stand-in; whether it loads on Linux .NET 8/10 is the first thing 478b measures.
+- **The client library** (`Microsoft.Dynamics.Framework.UI.Client.dll` and 22 companions) was provided by kraken:
+  `/coord/cache/bc-client/28.4.53241.56646/`, sha-checked, from bc2's artifacts (BC 28.4.53241.56646).
+  - It targets .NETStandard 2.0 / win-x64, and it references Windows APIs (`Cng`, `Principal.Windows`).
+  - No build on a stand-in.
+- **A library probe comes first, in 478a's plan, before any driver work:**
+  - **On Linux .NET 8 and 10, in the container:** load the assemblies, build a `ClientContext` for a URL, and record which
+    calls fail and how (a missing native API, PlatformNotSupported, auth).
+  - bc1-bc5 have NO `/cs` (BC on Linux, no web server), so opening a session and running a test can only be measured against
+    the Windows BC.
+  - **On the Windows BC:**
+    - open a client session from Linux to its `/cs`, open page 130455, and run one test;
+    - record every call that fails.
+- **What the probe decides:**
+  - **If the library runs on Linux,** 478b's sidecar runs in the container, as §4 says.
+  - **If not,** the driver runs on the Windows BC's host, and LethAL drives it over a small remote protocol. That changes
+    478b's shape (a remote sidecar, its own transport, failure and stop handling, and security). 478b's pre-commitment then
+    says so and is reviewed again.
 - **The throwaway Windows BC:** asked of kraken when 478a's AL is built, not before (ruling).
 - **Stale wording fixed by this amendment:** §1's "1.0.0.30 present" is now 1.0.0.31 (A1); §3 is completed by A3; §6's
   TestPage line also names R1170 (6) (a known-green test that uses a page part must pass first).
