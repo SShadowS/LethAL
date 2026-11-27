@@ -54,6 +54,14 @@ lethal-code, 2026-11-27. Written before any run. Nothing is built; changing a de
 - The daemons share one `ALRUNNER_CACHE`, pre-filled by staging.
 - Each run starts its daemons and warms them up ONE AFTER ANOTHER (one NONE request each), before the timed start.
 - The cache directory's listing (names, sizes) is hashed at the timed start and end. A change flags the run.
+  - **r2a (from the smoke, before the real runs):** the only change measured was `assumption-hits.tsv`, an append-only
+    log of runtime assumption hits, so the hash leaves out that one file.
+- **The smoke** (W2, 2 requests) passed its checks:
+  - perf 100% running, cpu_atom not counted, 3.14 G instructions per lane;
+  - one busy thread per daemon;
+  - rows equal.
+  - Outside load was high: the other P-cores 0.90-0.98 busy, and OTHER processes used 0.17-0.19 of CPUs 1-2 even
+    with the arms pinned there.
 
 ## Measured per run (S4, S5)
 
