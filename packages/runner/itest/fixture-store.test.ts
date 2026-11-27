@@ -30,6 +30,8 @@ test("a second gate on a held store is refused, naming the holder; after close i
     const a = openFixtureStore(path);
     expect(() => openFixtureStore(path)).toThrow(FixtureStoreHeldError);
     expect(() => openFixtureStore(path)).toThrow(new RegExp(`pid ${process.pid}`));
+    // on Linux the refusal also names the holder's command line (this test's own: bun)
+    if (process.platform === "linux") expect(() => openFixtureStore(path)).toThrow(/\): \S*bun/);
     a.close();
     expect(existsSync(`${path}.itest-holder`)).toBe(false);
     openFixtureStore(path).close();

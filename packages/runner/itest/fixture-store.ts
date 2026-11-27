@@ -23,8 +23,16 @@ export class FixtureStoreHeldError extends Error {
 
 interface Holder {
   readonly pid: number;
-  readonly cmd: string;
   readonly since: string;
+}
+
+/** The holder's command line, read when it is refused (Linux `/proc`); elsewhere only the pid names it. */
+function commandOf(pid: number): string {
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim();
+  } catch {
+    return "(command line not readable)";
+  }
 }
 
 /** `true` when a process with this pid exists (EPERM: it exists, owned by someone else). */
@@ -40,20 +48,14 @@ export function processAlive(pid: number): boolean {
 function readHolder(path: string): Holder | null {
   try {
     const h = JSON.parse(readFileSync(path, "utf8")) as Partial<Holder>;
-    return typeof h.pid === "number"
-      ? { pid: h.pid, cmd: String(h.cmd ?? ""), since: String(h.since ?? "") }
-      : null;
+    return typeof h.pid === "number" ? { pid: h.pid, since: String(h.since ?? "") } : null;
   } catch {
     return null;
   }
 }
 
 function claim(holderPath: string, storePath: string, alive: (pid: number) => boolean): void {
-  const me: Holder = {
-    pid: process.pid,
-    cmd: process.argv.join(" "),
-    since: new Date().toISOString(),
-  };
+  const me: Holder = { pid: process.pid, since: new Date().toISOString() };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(holderPath, JSON.stringify(me), { flag: "wx" });
@@ -66,7 +68,7 @@ function claim(holderPath: string, storePath: string, alive: (pid: number) => bo
       const advice =
         "Two gates in one store read each other's runs; run the other server's gate from its own worktree, or wait for it to finish.";
       throw new FixtureStoreHeldError(
-        `R1241: the fixture store ${storePath} is held by another live gate, pid ${other.pid} (since ${other.since}): ${other.cmd}. ${advice}`,
+        `R1241: the fixture store ${storePath} is held by another live gate, pid ${other.pid} (since ${other.since}): ${commandOf(other.pid)}. ${advice}`,
       );
     }
     // the holder is gone (or the file is unreadable): take it over
