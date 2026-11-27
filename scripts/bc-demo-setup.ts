@@ -20,7 +20,7 @@
  *       FROM bc-demo itself, so nothing is fetched from the internet (the talk runs network-off);
  *   (e) write the gitignored `examples/gift-card/lethal.config.demo.json`;
  *   (f) compile gift-card and gift-card-tests, decide every app by content (`bc-app-content.ts`),
- *       and only if nothing is refused publish LethAL Control (`CONTROL_APP`, sha256-pinned), then
+ *       and only if nothing is refused publish LethAL Control (`DEMO_CONTROL`, sha256-pinned), then
  *       gift-card, then its tests, in Dev scope over the dev endpoint;
  *   (g) run `lethal doctor` on the config.
  *
@@ -61,8 +61,7 @@ import {
 } from "./bc-app-content.ts";
 import {
   type BcLogin,
-  CONTROL_APP,
-  CONTROL_SHA256,
+  DEMO_CONTROL,
   type PublishStep,
   SECRET_PATH,
   bcDevMcpCommand,
@@ -168,7 +167,7 @@ export const REAL_DEPS: DemoDeps = {
         download: (name) => residentPackage(c, "Microsoft", name),
       })
     ).dir,
-  controlBytes: pinnedControl,
+  controlBytes: () => pinnedControl(DEMO_CONTROL.path, undefined, DEMO_CONTROL.sha256),
   compile: (c, symbols, log) => realCompile(c, STEP, symbols, log, EXAMPLES),
   serverOps: realOps,
   doctor: (configPath) =>
@@ -185,7 +184,7 @@ export const DEFAULT_LAPTOP_HOST = "http://localhost";
 export const LOCAL_LOGIN = join(REPO, ".lethal-demo.env");
 export const LOCAL_CACHE = join(REPO, ".lethal-cache");
 export const LAPTOP_SYMBOLS = join(LOCAL_CACHE, "bc-symbols");
-export const LAPTOP_CONTROL = join(LOCAL_CACHE, "control", basename(CONTROL_APP));
+export const LAPTOP_CONTROL = join(LOCAL_CACHE, "control", basename(DEMO_CONTROL.path));
 export const LAPTOP_BC_DEV_MCP = join(LOCAL_CACHE, "bc-dev-mcp");
 /** The bc-dev-mcp commit the gates run (the container's checkout, v0.4.0-2). */
 export const BC_DEV_MCP_COMMIT = "8371d0b";
@@ -242,7 +241,7 @@ const refuse = (what: string, fix: string) =>
 /** Resolves every tool `setup`, `lethal run` and `lethal doctor` need, or refuses by name. */
 export async function laptopTools(
   io: LaptopIo,
-  controlSha: string = CONTROL_SHA256,
+  controlSha: string = DEMO_CONTROL.sha256,
 ): Promise<LaptopTools> {
   const host = io.env.LETHAL_DEMO_HOST ?? DEFAULT_LAPTOP_HOST;
   if (!/^https?:\/\/[^/:]+$/.test(host))
@@ -285,7 +284,7 @@ export async function laptopTools(
   if (!io.exists(LAPTOP_CONTROL))
     throw refuse(
       `LethAL Control is missing: no ${LAPTOP_CONTROL}`,
-      `Copy the pinned build (sha256 ${controlSha}) there from ${CONTROL_APP} on the coord machine`,
+      `Copy the pinned build (sha256 ${controlSha}) there from ${DEMO_CONTROL.path} on the coord machine`,
     );
   const controlGot = sha256Of(io.readBytes(LAPTOP_CONTROL));
   if (controlGot !== controlSha)
@@ -344,7 +343,7 @@ export function laptopDeps(io: LaptopIo, t: LaptopTools, login: BcLogin): DemoDe
           download: (name) => residentPackage(c, "Microsoft", name),
         })
       ).dir,
-    controlBytes: () => pinnedControl(t.controlPath, io.readBytes),
+    controlBytes: () => pinnedControl(t.controlPath, io.readBytes, DEMO_CONTROL.sha256),
     compile: (c, symbols, log) => realCompile(c, STEP, symbols, log, EXAMPLES, t.alcPath),
     serverOps: realOps,
     doctor: REAL_DEPS.doctor,
@@ -399,7 +398,7 @@ async function setup(deps: DemoDeps, dryRun: boolean, summary: string[]): Promis
     login,
     {
       mcpCommand: deps.mcpCommand(),
-      controlSymbolPath: lap?.controlPath ?? CONTROL_APP,
+      controlSymbolPath: lap?.controlPath ?? DEMO_CONTROL.path,
       packageCachePath: symbols,
     },
     lap?.host,

@@ -119,10 +119,32 @@ export {
 const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
 export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
-// PR-309 (R1138): the 1.0.0.29 build (a lease renew that does not lock during a run), compiled clean
-// with alc 18.1.43 (errors 0, warnings 0).
-export const CONTROL_APP = "/coord/handoff/PR-309/control/LethAL_LethAL Control_1.0.0.29.app";
-export const CONTROL_SHA256 = "545efbeaad6d050ea768a257d20a7612c22cd17c3d25567b0b7ab4d5726df578";
+// PR-462 (R1170): the 1.0.0.30 build (the Generation counter; headless unchanged), compiled clean with
+// alc 18.1.43 (errors 0, warnings 0).
+export const CONTROL_APP = "/coord/handoff/PR-462/control/LethAL_LethAL Control_1.0.0.30.app";
+export const CONTROL_SHA256 = "eb830ade2fd1c2207f38f58f42bcbac41edc737285256c799b30ea5c83bc39c3";
+/**
+ * PR-462: servers kept on another build. bc4 stays on PR-309's 1.0.0.29 (R1138) while lethal-bugs'
+ * DOTests pinned series (PR-427) runs there: it records "LethAL Control: 1.0.0.29" as a pin. Remove
+ * the entry when that series ends, in the change that publishes 1.0.0.30 to bc4 (R1170's trigger).
+ */
+export const CONTROL_PINS: Partial<
+  Record<ServerName, { readonly path: string; readonly sha256: string }>
+> = {
+  bc4: {
+    path: "/coord/handoff/PR-309/control/LethAL_LethAL Control_1.0.0.29.app",
+    sha256: "545efbeaad6d050ea768a257d20a7612c22cd17c3d25567b0b7ab4d5726df578",
+  },
+};
+/**
+ * PR-462: bc-demo (the owner's demo server, `bc-demo-setup.ts`, kraken and laptop mode) stays on
+ * PR-309's 1.0.0.29 too: 1.0.0.30 adds nothing without a client session, and moving it would make the
+ * owner's laptop mode refuse until a new build is copied there. Move it with bc4.
+ */
+export const DEMO_CONTROL: { readonly path: string; readonly sha256: string } = {
+  path: "/coord/handoff/PR-309/control/LethAL_LethAL Control_1.0.0.29.app",
+  sha256: "545efbeaad6d050ea768a257d20a7612c22cd17c3d25567b0b7ab4d5726df578",
+};
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";
@@ -1156,8 +1178,8 @@ export interface RunDeps {
   readonly serverOps: (c: Conn) => ServerOps;
   readonly continiaOps: (c: Conn) => ContiniaOps;
   readonly continiaFiles: () => { readonly bytes: Buffer }[];
-  /** The pinned LethAL Control build, sha256-checked. */
-  readonly controlBytes: () => Buffer;
+  /** The pinned LethAL Control build for this server (`controlFor`), sha256-checked. */
+  readonly controlBytes: (server: ServerName) => Buffer;
   /** Compiles one `PUBLISH_PLAN` step; publishes nothing. */
   readonly compile: (
     c: Conn,
@@ -1179,13 +1201,28 @@ export interface RunDeps {
 export function pinnedControl(
   path: string = CONTROL_APP,
   read: (p: string) => Buffer = (p) => readFileSync(p),
+  expected: string = CONTROL_SHA256,
 ): Buffer {
   const control = read(path);
   const sha = sha256Of(control);
-  if (sha !== CONTROL_SHA256) {
-    throw new Error(`${path}: sha256 ${sha}, expected ${CONTROL_SHA256}; refusing to publish it`);
+  if (sha !== expected) {
+    throw new Error(`${path}: sha256 ${sha}, expected ${expected}; refusing to publish it`);
   }
   return control;
+}
+
+/** PR-462: the control build a server gets: its entry in `CONTROL_PINS`, else `CONTROL_APP`. */
+export function controlFor(server: ServerName): { readonly path: string; readonly sha256: string } {
+  return CONTROL_PINS[server] ?? { path: CONTROL_APP, sha256: CONTROL_SHA256 };
+}
+
+/** PR-462: this server's pinned control bytes, sha256-checked (setup and `bc-republish control`). */
+export function controlBytesFor(
+  server: ServerName,
+  read: (p: string) => Buffer = (p) => readFileSync(p),
+): Buffer {
+  const pin = controlFor(server);
+  return pinnedControl(pin.path, read, pin.sha256);
 }
 
 /** `root` holds the step's app dirs: `fixtures/` for the gates, `examples/` for R663's demo. */
@@ -1222,7 +1259,7 @@ export const REAL_DEPS: RunDeps = {
   serverOps: realOps,
   continiaOps: realContiniaOps,
   continiaFiles: () => CONTINIA_APPS.map((app) => ({ bytes: readContinia(app) })),
-  controlBytes: pinnedControl,
+  controlBytes: controlBytesFor,
   compile: realCompile,
   checkResident: async (c, target, pkg) => {
     const tools = await defaultAlToolPaths();
@@ -1265,7 +1302,7 @@ function writeServerConfigs(
 ): void {
   const paths: ConfigPaths = {
     mcpCommand: deps.mcpCommand(),
-    controlSymbolPath: CONTROL_APP,
+    controlSymbolPath: controlFor(server).path,
     packageCachePath,
   };
   for (const { fixture, path, launch } of configTargets(deps.repo, server)) {
@@ -1337,7 +1374,7 @@ async function setupServer(
     return true;
   }
 
-  const control = deps.controlBytes();
+  const control = deps.controlBytes(server);
   const conn = deps.connect(server, login);
   const log = (s: string) => summary.push(s);
   return await withLease(server, deps.lease(lane, args.heldLease), async () => {

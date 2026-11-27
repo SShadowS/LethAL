@@ -27,6 +27,14 @@ codeunit 91002 "LC Control State"
         CachedArtifactId: Text;
         CachedMutantId: Text;
         Loaded: Boolean;
+        // 1.0.0.30 (R1170, PR-462): the row's Generation when the tuple was cached.
+        CachedGeneration: BigInteger;
+        // 1.0.0.30: true from a phase 1 in THIS session (WriteActive) until its phase 3 or a recovery
+        // (ResetAttestationState). Inside an op the cache stays exactly as phase 1 wrote it.
+        InOdataOp: Boolean;
+        // 1.0.0.30: true after ResetAttestationState until the next WriteActive: the blank cache a phase 3
+        // leaves must stay fail-closed, never refreshed from a row another attempt may now hold.
+        ResetSinceLoad: Boolean;
         SuiteCounter: Integer;
         // R206 §2.1: THE SESSION-FRESHNESS PREDICATE. Incremented by NoteTestMethodRun, immediately
         // before each of the two places a test method runs (LC Run Method's RunAllTests, LC Run
@@ -80,8 +88,36 @@ codeunit 91002 "LC Control State"
             CachedTargetAppId := Active."Target App Id";
             CachedArtifactId := Active."Artifact Id";
             CachedMutantId := Active."Mutant Id";
+            CachedGeneration := Active.Generation;
         end;
         Loaded := true;
+    end;
+
+    /// <summary>1.0.0.30 (R1170, PR-462; PR-314's measured probe): reload the cached tuple when the row's
+    /// Generation moved, so a long-lived session that never runs an op itself (a client session) sees the
+    /// next activation. Never inside an op of this session (InOdataOp: the cache stays as phase 1 wrote it)
+    /// and never after a phase 3 or recovery here (ResetSinceLoad: the blank cache stays fail-closed). The
+    /// headless path always runs its tests inside its own op, so it never refreshes. One read of one field
+    /// per call outside an op: about 4 us per guard call (PR-314).</summary>
+    local procedure RefreshIfMoved()
+    var
+        Active: Record "LC Mutation Active";
+    begin
+        if not Loaded then begin
+            EnsureLoaded();
+            exit;
+        end;
+        if InOdataOp or ResetSinceLoad then
+            exit;
+        Active.SetLoadFields(Generation);
+        if Active.Get('') then
+            if Active.Generation <> CachedGeneration then begin
+                Loaded := false;
+                CachedTargetAppId := '';
+                CachedArtifactId := '';
+                CachedMutantId := '';
+                EnsureLoaded();
+            end;
     end;
 
     /// <summary>Writes the active tuple (table + the in-memory attestation expectations this run is
@@ -107,10 +143,14 @@ codeunit 91002 "LC Control State"
         Active."Target App Id" := CopyStr(TargetAppId, 1, MaxStrLen(Active."Target App Id"));
         Active."Artifact Id" := CopyStr(ArtifactId, 1, MaxStrLen(Active."Artifact Id"));
         Active."Mutant Id" := CopyStr(MutantId, 1, MaxStrLen(Active."Mutant Id"));
+        Active.Generation += 1;
         Active.Modify();
         CachedTargetAppId := TargetAppId;
         CachedArtifactId := ArtifactId;
         CachedMutantId := MutantId;
+        CachedGeneration := Active.Generation;
+        InOdataOp := true;
+        ResetSinceLoad := false;
         Loaded := true;
     end;
 
@@ -150,6 +190,7 @@ codeunit 91002 "LC Control State"
                 Active."Target App Id" := '';
                 Active."Artifact Id" := '';
                 Active."Mutant Id" := '';
+                Active.Generation += 1;
                 Active.Modify();
             end;
         ResetAttestationState();
@@ -171,6 +212,7 @@ codeunit 91002 "LC Control State"
             Active."Target App Id" := '';
             Active."Artifact Id" := '';
             Active."Mutant Id" := '';
+            Active.Generation += 1;
             Active.Modify();
         end;
         ResetAttestationState();
@@ -191,6 +233,8 @@ codeunit 91002 "LC Control State"
         CachedArtifactId := '';
         CachedMutantId := '';
         Loaded := true;
+        InOdataOp := false;
+        ResetSinceLoad := true;
         ObservedAny := false;
         ObservedIdentityMismatch := false;
         ObservedActive := false;
@@ -206,7 +250,7 @@ codeunit 91002 "LC Control State"
         ObservedAny := true;
         if (TargetAppId <> ExpectedTargetAppId) or (ArtifactId <> ExpectedArtifactId) then
             ObservedIdentityMismatch := true;
-        EnsureLoaded();
+        RefreshIfMoved();
         if CachedMutantId = '' then
             exit(false);
         exit((CachedTargetAppId = TargetAppId) and (CachedArtifactId = ArtifactId) and (CachedMutantId = MutantId));
@@ -258,7 +302,7 @@ codeunit 91002 "LC Control State"
     begin
         if ObservedActive then
             exit;
-        EnsureLoaded();
+        RefreshIfMoved();
         if (CachedMutantId <> '') and (CachedTargetAppId = TargetAppId) and (CachedArtifactId = ArtifactId) and (CachedMutantId = MutantId) then
             ObservedActive := true
         else
