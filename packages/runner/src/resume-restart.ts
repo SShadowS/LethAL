@@ -193,6 +193,15 @@ export function decideRestartBatch(input: RestartBatchInput): RestartBatchDecisi
   };
 }
 
+/** r5 #4: a prior survivor's own batch does not hash to the baseline that compared equal. Extends `Error` directly. */
+export class RestartBatchGateError extends Error {
+  readonly code = "restart-batch-gate" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "RestartBatchGateError";
+  }
+}
+
 /**
  * r5 #4: a survivor carries across a restart only when the tree hash of ITS batch in the prior run is the
  * hash of the snapshot that compared equal. Anything else is a caller-contract violation: throw, never
@@ -205,12 +214,12 @@ export function assertRestartRowBatch(
   rowBatchHash: string | null | undefined,
 ): void {
   if (row.batchIndex === undefined || rowBatchHash === undefined || rowBatchHash === null) {
-    throw new Error(
+    throw new RestartBatchGateError(
       `resume across a restart: a prior survivor of run ${priorRunId} has no batch snapshot to check it against (batch ${row.batchIndex ?? "unknown"}); it is not carried — caller-contract violation (PR-456)`,
     );
   }
   if (rowBatchHash !== decision.batchHash) {
-    throw new Error(
+    throw new RestartBatchGateError(
       `resume across a restart: a prior survivor of run ${priorRunId} belongs to batch ${row.batchIndex}, whose tree hash is not the hash of the baseline that was compared equal; it is not carried — caller-contract violation (PR-456)`,
     );
   }

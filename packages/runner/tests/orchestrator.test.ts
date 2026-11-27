@@ -156,6 +156,7 @@ import {
 import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { CARRYABLE_VERDICTS, STRANDED_SKIP_NOTE, isStrandedNote } from "../src/resume";
+import { RestartBatchGateError } from "../src/resume-restart";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import {
@@ -11629,6 +11630,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             },
             run: async (ref, opts) => {
               const killed = active !== null && active === victim;
+              // an unmutated call (the baseline, or a confirm): no mutant is active
+              if (active === null) o.log?.push("baseline:test");
               return {
                 ref,
                 outcome: killed ? "fail" : "pass",
@@ -11678,6 +11681,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             extra?: Partial<SessionConfig>;
             generation?: string;
             databaseId?: string;
+            /** Backend members laid over the dated fake (an isolation knob). */
+            backend?: Partial<ExecutionBackend>;
           } = {},
         ) =>
           envRun({
@@ -11687,11 +11692,14 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             dirs: p.first.dirs,
             store: p.first.store,
             extra: { resume: p.first.runId, ...o.extra },
-            backendOver: datedBackend({
-              ...(o.date !== undefined ? { date: o.date } : { date: DATE }),
-              victim: p.killed,
-              ...(o.log !== undefined ? { log: o.log } : {}),
-            }).over,
+            backendOver: {
+              ...datedBackend({
+                ...(o.date !== undefined ? { date: o.date } : { date: DATE }),
+                victim: p.killed,
+                ...(o.log !== undefined ? { log: o.log } : {}),
+              }).over,
+              ...o.backend,
+            },
           });
 
         test("survivors carry, the kill is re-run with its killer tried first, the caveat and the run flag are set", async () => {
@@ -11857,22 +11865,101 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
             p.first.runId,
           ]);
           const r = await restart(p);
-          expect(r.outcome).toBeInstanceOf(Error);
-          expect((r.outcome as Error).message).toContain("caller-contract violation");
+          expect(r.outcome).toBeInstanceOf(RestartBatchGateError);
+          expect((r.outcome as Error).message).toContain("no batch snapshot");
           expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
           r.store.close();
+        });
+
+        test("the batch gate on ANOTHER hash: the row's batch has a snapshot of a different tree (SHOULD 6)", async () => {
+          const p = await priorRestart();
+          p.first.store.db.run(
+            "UPDATE mutants SET batch_index = 5 WHERE run_id = ? AND verdict = 'survived'",
+            [p.first.runId],
+          );
+          // the row's batch 5 now has a snapshot, of another tree
+          p.first.store.db.run(
+            `INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload, backend_state, payload_format)
+             SELECT run_id, 5, 'another-tree-hash', test_app_hash, payload, backend_state, payload_format
+             FROM baseline_snapshots WHERE run_id = ? LIMIT 1`,
+            [p.first.runId],
+          );
+          const r = await restart(p);
+          expect(r.outcome).toBeInstanceOf(RestartBatchGateError);
+          expect((r.outcome as Error).message).toContain("whose tree hash is not");
+          expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
+          r.store.close();
+        });
+
+        test("a time budget that ends the restart session's baseline carries nothing and decides nothing (SHOULD 3a)", async () => {
+          const p = await priorRestart();
+          let stop = () => {};
+          const base = datedBackend({ date: DATE, victim: p.killed }).over;
+          const r = await envRun({
+            ...proven,
+            generation: G2,
+            databaseId: D2,
+            dirs: p.first.dirs,
+            store: p.first.store,
+            extra: {
+              resume: p.first.runId,
+              registerStopSignal: (s) => {
+                stop = s;
+                return () => {};
+              },
+            },
+            backendOver: {
+              ...base,
+              run: async (ref, opts) => {
+                stop(); // the budget is spent during the first baseline call
+                const run = base.run;
+                if (run === undefined) throw new Error("no run");
+                return run(ref, opts);
+              },
+            },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect((r.outcome as SessionReport).validity.caveats).toContain("time-budget-reached");
+          expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
+          expect(r.warningsOf("resume-across-restart")).toEqual([]);
+          expect(r.store.getRun(r.runId)?.resumedAcrossRestart).toBe(false);
+          r.store.close();
+        });
+
+        test("an isolation mode on the restart session re-runs the batch, by name, against a prior that HAS a snapshot (SHOULD 3b)", async () => {
+          const p = await priorRestart();
+          const stored = p.first.store.db
+            .query("SELECT COUNT(*) AS n FROM baseline_snapshots WHERE run_id = ?")
+            .get(p.first.runId) as { n: number };
+          expect(stored.n).toBeGreaterThan(0);
+          // (`isolatesTests` itself is in the run fingerprint, so a restart session with it is refused as
+          // "scoped differently" before any batch: its isolation reason is covered by the unit test.)
+          for (const knob of ["baselineBatchingKnobOff"] as const) {
+            const r = await restart(p, { backend: { [knob]: true } });
+            expect(r.outcome).not.toBeInstanceOf(Error);
+            const said = r.warningsOf("resume-across-restart");
+            expect(said).toHaveLength(1);
+            expect(said[0]).toContain("re-run, nothing carried");
+            expect(said[0]).toContain("isolation");
+            expect(rowsOf(r.store, r.runId).filter((x) => x.carried === 1)).toEqual([]);
+          }
+          p.first.store.close();
         });
 
         test("ordering: the batch's decision is said before any of its mutants is scheduled (call log)", async () => {
           const p = await priorRestart();
           const log: string[] = [];
+          let said = "";
           const r = await restart(p, {
             log,
             extra: {
               emit: [
                 createEmitter([
                   (e) => {
-                    if (e.type === "warning" && e.code === "resume-across-restart") log.push("decision");
+                    if (e.type === "warning" && e.code === "resume-across-restart") {
+                      log.push("decision");
+                      said = e.message;
+                    }
                   },
                 ]),
               ],
@@ -11883,7 +11970,16 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           const decided = log.indexOf("decision");
           const firstScheduled = log.findIndex((x) => x.startsWith("activate:"));
           // the baseline's own activate(null) is not logged; the first logged activation is a mutant's
-          if (firstScheduled !== -1) expect(decided).toBeLessThan(firstScheduled);
+          expect(firstScheduled).toBeGreaterThan(-1);
+          // every baseline call precedes the decision, and the decision precedes the first mutant
+          const baselineCalls = log.flatMap((x, i) =>
+            x === "baseline:test" && i < firstScheduled ? [i] : [],
+          );
+          expect(baselineCalls.length).toBeGreaterThan(0);
+          expect(Math.max(...baselineCalls)).toBeLessThan(decided);
+          expect(decided).toBeLessThan(firstScheduled);
+          // and it was decided on the COMPLETE fresh baseline (one made before the baseline loop would say it did not complete)
+          expect(said).toMatch(/batch \d+: carried \d+ survivor/);
           r.store.close();
         });
 
@@ -11899,7 +11995,9 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           const again = await restart(p);
           expect(again.outcome).not.toBeInstanceOf(Error);
           expect(again.reuseWarning).toEqual([]);
-          expect(again.warningsOf("resume-across-restart")[0]).toContain("carried");
+          const n = p.rows.filter((x) => x.verdict === "survived").length;
+          expect(again.warningsOf("resume-across-restart")[0]).toContain(`carried ${n} survivor`);
+          expect(again.warningsOf("resume-across-restart")[0]).not.toContain("nothing carried");
           again.store.close();
         });
 

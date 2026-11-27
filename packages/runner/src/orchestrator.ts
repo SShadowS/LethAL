@@ -5374,11 +5374,12 @@ function resolveResume(
           `[lethal] --resume: reusing run ${priorRunId} across a server restart that lost the database (generation ${restart.priorGeneration} -> ${restart.generation}, database ${restart.priorDatabaseId} -> ${restart.databaseId}) — at most ${[...index.carryable.values()].filter((v) => v.verdict === "survived").length} survivor(s) may be carried, each only when its batch's fresh baseline equals the baseline run ${priorRunId} measured for the same instrumented source. ${[...index.carryable.values()].filter((v) => v.verdict === "killed" || v.verdict === "timeout-killed").length} prior kill(s) are NOT carried: they are re-run, and the prior killer is tried first (an ordering hint only; R197). Every batch is deployed and baselined fresh, and no baseline is reused (PR-456).`
         : `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing.`
     }${
-      seeds > 0
+      // PR-456: in restart mode no kill is carried (the head above already says they are re-run and seeded).
+      restart === undefined && seeds > 0
         ? ` ${seeds} carried kill(s) may seed R197's kill ledger, so the remaining mutants' tests are ordered as in a fresh run (R1179).`
         : ""
     }${
-      noSeed > 0
+      restart === undefined && noSeed > 0
         ? ` ${noSeed} carried kill(s) will not seed it: their killing test names no single covering test of this session (R1179).`
         : ""
     }${
@@ -7033,9 +7034,13 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     scope.restart !== undefined
       ? decideRestartBatch({
           prior:
-            snapshotKey === undefined
+            snapshotKey === undefined || snapshotKey.testAppHash === undefined
               ? null
-              : store.priorRestartSnapshot(scope.restart.priorRunId, snapshotKey.batchHash),
+              : store.priorRestartSnapshot(
+                  scope.restart.priorRunId,
+                  snapshotKey.batchHash,
+                  snapshotKey.testAppHash,
+                ),
           fresh: baseline,
           freshComplete: baseline.length === tests.length,
           reused: reused !== undefined,

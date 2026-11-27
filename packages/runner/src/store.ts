@@ -2383,11 +2383,14 @@ export class ResultsStore {
    * `batchHash`: the run's own snapshot of it, else the one it recorded reusing (PR-66), found by hash and
    * never by index (R90 can re-plan batches). Same exclusions as `snapshotBatchHash`: suspect (R512), lost
    * (R513) and degraded-window (`after_snapshot_id`) snapshots are never returned. `null` when none.
-   * It does not filter by server generation or test app: the restart resume's own checks decide those.
+   * It does not filter by server generation: a restart changes it by definition. It does filter by the test
+   * app: the snapshot's `test_app_hash` must equal `testAppHash`, the `|pending` suffix of a closed-world
+   * prior stripped on BOTH sides (the resume's own app checks decide whether a pending prior may be used).
    */
   priorRestartSnapshot(
     runId: number,
     batchHash: string,
+    testAppHash: string,
   ): {
     runId: number;
     batchIndex: number;
@@ -2398,6 +2401,7 @@ export class ResultsStore {
       .query(
         `SELECT run_id, batch_index, batch_hash, payload FROM baseline_snapshots
          WHERE batch_hash = ?2 AND payload_format = ?3
+           AND REPLACE(test_app_hash, '|pending', '') = ?4
            AND (run_id = ?1
              OR EXISTS (SELECT 1 FROM baseline_snapshot_reuses r WHERE r.run_id = ?1
                AND r.from_run_id = baseline_snapshots.run_id AND r.from_batch_index = baseline_snapshots.batch_index))
@@ -2406,7 +2410,7 @@ export class ResultsStore {
            AND NOT EXISTS (SELECT 1 FROM degraded_windows d WHERE d.run_id = baseline_snapshots.run_id AND baseline_snapshots.id > d.after_snapshot_id)
          ORDER BY (run_id = ?1) DESC, id DESC LIMIT 1`,
       )
-      .get(runId, batchHash, SNAPSHOT_PAYLOAD_FORMAT) as {
+      .get(runId, batchHash, SNAPSHOT_PAYLOAD_FORMAT, testAppHash.replace("|pending", "")) as {
       run_id: number;
       batch_index: number;
       batch_hash: string;

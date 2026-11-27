@@ -593,6 +593,10 @@ export type RunEventInput =
        * PR-456: this survivor was measured on a database the server has since lost (carried across a
        * restart), or on a run that carried one. The fold derives the caveat `resumed-across-restart`
        * from rows with this flag, never from the `resume-across-restart` warning's code.
+       *
+       * The flag is set on EVERY carried row of a resume whose prior run carried across a restart (a later
+       * resume of it), not only on the rows that themselves crossed the restart. So per row it OVERSTATES
+       * (a survivor the prior run measured itself is flagged too); the run-level caveat is true.
        */
       readonly acrossRestart?: true;
     }

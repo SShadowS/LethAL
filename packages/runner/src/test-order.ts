@@ -39,7 +39,7 @@ export interface KillLedger {
    * test key. When the SAME kill is then recorded live (`recordKill`), the seed already counted it, so
    * the live record is skipped: a kill counts once in R197's ledger, never twice.
    */
-  readonly seeded?: Map<MutantManifestEntry, string>;
+  readonly seeded: Map<MutantManifestEntry, string>;
 }
 
 export function newKillLedger(): KillLedger {
@@ -65,9 +65,9 @@ function countKill(ledger: KillLedger, m: MutantManifestEntry, key: string): voi
 export function recordKill(ledger: KillLedger, m: MutantManifestEntry, ref: TestMethodRef): void {
   const key = testKeyOf(ref);
   // PR-456: this mutant's kill by this test was seeded: it is already counted, so it counts once.
-  const seededKey = ledger.seeded?.get(m);
+  const seededKey = ledger.seeded.get(m);
   if (seededKey !== undefined) {
-    ledger.seeded?.delete(m);
+    ledger.seeded.delete(m);
     if (seededKey === key) return;
   }
   countKill(ledger, m, key);
@@ -77,7 +77,7 @@ export function recordKill(ledger: KillLedger, m: MutantManifestEntry, ref: Test
 export function seedKill(ledger: KillLedger, m: MutantManifestEntry, ref: TestMethodRef): void {
   const key = testKeyOf(ref);
   countKill(ledger, m, key);
-  ledger.seeded?.set(m, key);
+  ledger.seeded.set(m, key);
 }
 
 /**

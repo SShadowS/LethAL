@@ -5,6 +5,7 @@ import type { BaselineObservation } from "../src/baseline-snapshot";
 import { restartRowAction } from "../src/orchestrator";
 import { type CarriedVerdict, buildResumeIndex } from "../src/resume";
 import {
+  RestartBatchGateError,
   assertRestartRowBatch,
   compareRestartBaseline,
   decideRestartBatch,
@@ -236,8 +237,13 @@ describe("assertRestartRowBatch (r5 #4: a survivor carries only against ITS batc
   });
   test("another hash, no snapshot, or no batch index fails loudly", () => {
     expect(() => assertRestartRowBatch(decision, 7, { batchIndex: 3 }, "zzz")).toThrow(
+      RestartBatchGateError,
+    );
+    expect(() => assertRestartRowBatch(decision, 7, { batchIndex: 3 }, "zzz")).toThrow(
       "caller-contract violation",
     );
+    // typed, and extends Error directly (CLAUDE.md)
+    expect(Object.getPrototypeOf(RestartBatchGateError)).toBe(Error);
     expect(() => assertRestartRowBatch(decision, 7, { batchIndex: 3 }, null)).toThrow(
       "no batch snapshot",
     );
@@ -426,12 +432,31 @@ describe("store: priorRestartSnapshot, batchIndex, the run flag", () => {
     const r = newRun(s);
     snap(s, r, 0, "hash-a");
     snap(s, r, 1, "hash-b");
-    expect(s.priorRestartSnapshot(r, "hash-b")).toMatchObject({
+    expect(s.priorRestartSnapshot(r, "hash-b", "t")).toMatchObject({
       runId: r,
       batchIndex: 1,
       batchHash: "hash-b",
     });
-    expect(s.priorRestartSnapshot(r, "hash-none")).toBeNull();
+    expect(s.priorRestartSnapshot(r, "hash-none", "t")).toBeNull();
+    s.close();
+  });
+  test("only a snapshot of THIS test app, the |pending suffix stripped on both sides (SHOULD 4)", () => {
+    const s = new ResultsStore(":memory:");
+    const r = newRun(s);
+    snap(s, r, 0, "hash-a");
+    expect(s.priorRestartSnapshot(r, "hash-a", "t")).not.toBeNull();
+    expect(s.priorRestartSnapshot(r, "hash-a", "another-test-app")).toBeNull();
+    // a closed-world prior stores `<hash>|pending`: it still matches the plain hash, and the other way round
+    s.recordBaselineSnapshot({
+      runId: r,
+      batchIndex: 1,
+      batchHash: "hash-p",
+      testAppHash: "tp|pending",
+      baseline: base(),
+    });
+    expect(s.priorRestartSnapshot(r, "hash-p", "tp")).not.toBeNull();
+    expect(s.priorRestartSnapshot(r, "hash-p", "tp|pending")).not.toBeNull();
+    expect(s.priorRestartSnapshot(r, "hash-p", "other")).toBeNull();
     s.close();
   });
   test("follows the PR-66 reuse row when the run stored none of its own", () => {
@@ -440,9 +465,9 @@ describe("store: priorRestartSnapshot, batchIndex, the run flag", () => {
     const b = newRun(s);
     snap(s, a, 3, "hash-a");
     s.recordSnapshotReuse(b, 0, a, 3);
-    expect(s.priorRestartSnapshot(b, "hash-a")).toMatchObject({ runId: a, batchIndex: 3 });
+    expect(s.priorRestartSnapshot(b, "hash-a", "t")).toMatchObject({ runId: a, batchIndex: 3 });
     // another run with no reuse row finds nothing
-    expect(s.priorRestartSnapshot(newRun(s), "hash-a")).toBeNull();
+    expect(s.priorRestartSnapshot(newRun(s), "hash-a", "t")).toBeNull();
     s.close();
   });
   test("a suspect, a lost and a degraded-window snapshot are never returned", () => {
@@ -460,10 +485,10 @@ describe("store: priorRestartSnapshot, batchIndex, the run flag", () => {
       }
     ).id;
     s.markDegradedWindow(r, 0, afterOk, "the tier slowed down (invented)");
-    expect(s.priorRestartSnapshot(r, "suspect")).toBeNull();
-    expect(s.priorRestartSnapshot(r, "lost")).toBeNull();
-    expect(s.priorRestartSnapshot(r, "degraded")).toBeNull();
-    expect(s.priorRestartSnapshot(r, "ok")).not.toBeNull();
+    expect(s.priorRestartSnapshot(r, "suspect", "t")).toBeNull();
+    expect(s.priorRestartSnapshot(r, "lost", "t")).toBeNull();
+    expect(s.priorRestartSnapshot(r, "degraded", "t")).toBeNull();
+    expect(s.priorRestartSnapshot(r, "ok", "t")).not.toBeNull();
     s.close();
   });
   test("markResumedAcrossRestart sets the run flag; the others stay false", () => {
