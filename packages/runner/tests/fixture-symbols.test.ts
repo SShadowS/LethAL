@@ -381,7 +381,7 @@ describe("R670: symbolTarDrift", () => {
     ];
     expect(symbolTarDrift(ms("LethAL_T_1.0.0.5.app"), ex)).toEqual([]);
   });
-  test("the OLD pinned manifest (165b17dd) lacks exactly the six projects PR-483 added", () => {
+  test("the manifest minus PR-483's nine members names exactly the six projects R1128 found missing", () => {
     const added = new Set([
       "fixtures/sandbox-carry",
       "fixtures/sandbox-carry-tests",
