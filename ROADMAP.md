@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**70 of 1194 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**71 of 1194 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -416,7 +416,7 @@ that ordering is the priority.
 - **R1215** · R949 marks every serve-daemon row `flaggedUnknown`, but both builds in use write `flagged` on serve rows: an unflagged daemon pass may be refused as unknown although the build reported it sound · [R1215.md](docs/roadmap/R1215.md) · closed 2026-11-25 — by ruling (PR-433): current's serve daemon omits `flagged` on an unflagged pass…
 - **R1223** · Login replay can split a mutant from its NONE confirm (NONE replays its warm-up image, a mutant's first entry logs in for real), so a kill could stand on replay evidence alone: run the kill pairs on a replay-OFF daemon before `alRunnerV3.loginReplay` may turn on · [R1223.md](docs/roadmap/R1223.md) · open — designed (PR-453 r3, 2026-11-26): Form A kept as ONE shared =0 + CHECK confirm lane carrying every D5…
 - **R1226** · Login replay can lose a mutant's login-time effect when a login's read set changes inside one daemon life (the date crosses midnight, or data the login reads changes): a mutant not on the login path by the image's read set replays it and may be scored survived; kill pairs confirm kills only · [R1226.md](docs/roadmap/R1226.md) · open — measured and designed (PR-453 r3, 2026-11-26): the date part is closed by al-runner's key (clock day)…
-- **R1228** · A BC tier that degrades while its lease renews stay ANSWERED goes undetected: PR-427 scored 44 kills, 16 survivors and 8 errors at 8.95-11.03 h with renews answered; its late kills disagree with al-runner far more often than its earlier ones (R1227: 22 of 72 late verdicts vs 7 of 60 before; al-runner is not authoritative) · [R1228.md](docs/roadmap/R1228.md) · closed 2026-11-26 — measured by PR-455: NOT DEGRADED in all three areas…
+- **R1228** · A BC tier that degrades while its lease renews stay ANSWERED goes undetected: PR-427 scored 44 kills, 16 survivors and 8 errors at 8.95-11.03 h with renews answered; its late kills disagree with al-runner far more often than its earlier ones (R1227: 22 of 72 late verdicts vs 7 of 60 before; al-runner is not authoritative) · [R1228.md](docs/roadmap/R1228.md) · open — REOPENED 2026-11-27 on its second trigger (a named reason): in PR-427's email3 run the SAME passing…
 
 ## Product gaps a real project hits
 
