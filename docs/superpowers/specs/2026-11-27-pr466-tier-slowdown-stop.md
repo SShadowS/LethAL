@@ -97,6 +97,41 @@ lethal-code, 2026-11-27.
 - **Arming (S5):** at session end, one console line (not an event: no warning set moves):
   `[lethal] tier-slowdown monitor: fed N passing rows, skipped K (no reference R, under 50 ms S); armed|not armed (< 150 fed)`.
 
+## r2a (the delta review of r2; these override anything above)
+
+1. **A slowdown stop never finishes the run (BLOCK).**
+   - The `finishRun` guard (orchestrator.ts ≈ 10376, `timeBudget?.reached === undefined`) also requires that there
+     was no slowdown stop.
+   - At the PR-277 emit (≈ 10422-10439), a slowdown with `reached` unset emits `time-budget-reached` with
+     `stoppedByTierSlowdown`, `unscheduledCount: 0`, and NO `afterMainPass`. So the "STOPPED BY SIGNAL … nothing to
+     resume" text never appears.
+   - **Test:** the stop fires on the final row of the last batch → the run stays unfinished, `findResumableRun`
+     returns it, and the exit code is `TIME_BUDGET_EXIT_CODE`.
+2. **Ripple, added:**
+   - `progress-renderer.ts` (≈ 168-187);
+   - report.ts's generic "TIME BUDGET REACHED" line (≈ 4744): its condition excludes the slowdown, as it does churn;
+   - report.ts's `afterMainPass` `by` chain (≈ 4686);
+   - `CAVEAT_INTERPRETATIONS["time-budget-reached"]` (≈ 750) gains ONE sentence for the slowdown stop: the window's
+     rows ARE in the report, as `error`, and are re-run by `--resume`. No new Caveat, so no count moves.
+   - **Test:** the slowdown's banner and its progress render contain neither "TIME BUDGET" nor "--time-budget".
+3. **The clock cut:**
+   - The new field joins `remainingMs` (`TimeBudget.slowdown`, set by `stopForTierSlowdown`, NOT `signalled`). That
+     one place makes `exhausted` stop every scheduler.
+   - `clockSpent` (≈ 13975, R1014) EXCLUDES it, as it does churn, so an in-flight lane's walk finishes and its rows
+     land inside the window.
+   - `stopNameOf` (withheld-recheck.ts ≈ 364) names it ("tier slowdown").
+4. **The snapshot bound per column:**
+   - `markDegradedWindow` keeps `after_mutant_id = MIN(old, new)` and `after_snapshot_id = MIN(old, new)`
+     independently.
+   - On a tie of `after_mutant_id` the RENEW note wins; otherwise the note goes with the smaller mutant id.
+   - The fold, on an equal `afterSeq`, picks the same note.
+   - The doc comment's "first wins" is reworded.
+   - **Test:** the tie case (renew (M0, S0) against slowdown (M0, S0+1), the slowdown written first) → the stored
+     window is (M0, S0).
+5. **NIT 5:** a resume whose every scored row lands in the window exits `NOTHING_SCORED_EXIT_CODE` (all-errors).
+   Pinned by a test, and the banner says so.
+6. **NIT 6:** the banner gives the window's row count apart from the left-out count.
+
 ## Constants (exported)
 
 - `TIER_SLOWDOWN_BLOCK = 50`, `TIER_SLOWDOWN_STOP = 4.0`, `TIER_SLOWDOWN_HOLD = 3`, `TIER_SLOWDOWN_MIN_REF_MS = 50`.
