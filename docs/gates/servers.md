@@ -310,8 +310,8 @@ counter; headless unchanged)** (the table right below).
 - **Driver:** `/coord/handoff/PR-462/prove.sh` (PR-309's, lane preproc), one server at a time in one worktree (bc2, then bc3,
   then bc1), each under its own coord lease. Head f605cbb2 (branch lethal/pr-462).
 - **Setup:** `bc-linux-setup.ts --held-lease` upgraded each server from 1.0.0.29 and read the build back by sha256 (eb830ade…
-  = local). The build was read back AGAIN after the last gate (`--predict`'s `already-pinned LethAL Control 1.0.0.30`, and
-  doctor's `control-version`), so the figures are tied to 1.0.0.30 at both ends.
+  = local). The build was read back AGAIN after the last gate (`--predict`'s `already-pinned` line for the pinned build, and
+  doctor's `control-version`), so the figures are tied to that build at both ends.
 - **Gates:** every gate's first line named its server, and each passed its own comparison with its baseline. `lethal doctor`
   was clean, and each lease was released healthy.
 - **An older client against 1.0.0.30 (bc2):** lethal-bugs' pinned DOTests client `ac413797d` ran its own `itest:bcdev` and
