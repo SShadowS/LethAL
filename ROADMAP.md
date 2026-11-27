@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**67 of 1198 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 1199 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1243,6 +1243,7 @@ that ordering is the priority.
 - **R1229** · --resume cannot carry decided verdicts across a BC restart that lost the database, even when the re-setup republished the same apps and the fresh baseline equals the stored one: three bc4 restarts on 2026-11-26 voided about 2,800 verdicts (R680's refusal) · [R1229.md](docs/roadmap/R1229.md) · done (PR-468) — survivors-only --resume across a lost-database restart; live leg…
 - **R1230** · R496's dependency fingerprint hashes the RAW served System package, which BC re-zips with fresh DOS timestamps on every download, so `test_app_deps` changes across restarts (and across days) with identical content: hash System by zip content (entry name, CRC-32, size) · [R1230.md](docs/roadmap/R1230.md) · done (0442db0c2)
 - **R1233** · LethAL SIGTERMs a serve daemon at once after its shutdown reply, so al-runner's pending workspace-cache write is lost (al-runner #9232): a recycled daemon compiles again instead of reading the cache · [R1233.md](docs/roadmap/R1233.md) · done (b1655a8ad, PR-470)
+- **R1236** · A generated BC differential for error handling, transactions and temporary records (PR-487, family errors-temp, 67 cells): al-runner edge-e5176a9fd equals BC 28.4 in 66 cells and refuses none; the 67th differs only in the test runner's text for an asserterror with no error; five cells stop before their target on both runtimes, and a follow-up cell set is listed · [R1236.md](docs/roadmap/R1236.md) · open — measured on bc1 (PR-487), nothing filed upstream; trigger: the follow-up cells below…
 
 ---
 

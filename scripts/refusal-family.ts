@@ -6594,6 +6594,923 @@ table 51001 "ER Row B"
   ],
 };
 
+/**
+ * PR-487: error handling, transactions and temporary records, for a per-cell BC differential (a family no earlier one covered).
+ * Each cell makes its calls, then reports through `Error('V:[...]')`, or fails with the runtime's own error (the answer).
+ * Cells that write a real table use their OWN key range (`etKey`), never DeleteAll: a DeleteAll is a write, and a write
+ * before `Codeunit.Run`'s return value is used changes what BC does. So counts hold whether or not BC rolls back between
+ * tests. Booleans are read through Format(x, 0, 9). Two cells Commit (asserterror after Commit, Codeunit.Run after Commit),
+ * as Y2_XML's cells did on bc2. Their committed rows stay, so on BC those two cells answer only on a fresh install: run the
+ * app again only after uninstalling it WITH its data (they would answer "already exists"). Cell i is codeunit BASE_ID + 1 + i;
+ * tables 51000-51002; the support codeunits follow the last cell (`extraIds`: the helper, the failing Run target, the passing
+ * Run target). What the cells do NOT reach (both runtimes stop earlier) is listed in R1236.
+ */
+let etNext = 0;
+/** A fresh key range of 10 for one cell. */
+const etKey = (): number => {
+  etNext += 1;
+  return 1000 + etNext * 10;
+};
+const ET_VARS = [
+  'H: Codeunit "ET Helper";',
+  'Row: Record "ET Row";',
+  'Row2: Record "ET Row";',
+  "R: Boolean;",
+];
+const et = (
+  type: string,
+  method: string,
+  setup: string[],
+  call: string,
+  vars: string[] = [],
+): Cell => ({
+  type: `ET ${type}`,
+  method,
+  state: "et",
+  vars: [...ET_VARS, ...vars],
+  setup,
+  call,
+});
+/** Row2 filtered to a cell's key range, for counting. */
+const etRange = (k: number): string => `Row2.SetRange("Key", ${k}, ${k + 9});`;
+const TMP_VARS = ['Tmp: Record "ET Row" temporary;', 'Tmp2: Record "ET Row" temporary;'];
+const tmpAdd = (rec: string, key: number): string =>
+  `${rec}.Init(); ${rec}."Key" := ${key}; ${rec}.Insert();`;
+const ET_CELLS: readonly Cell[] = (() => {
+  const cells: Cell[] = [];
+  const add = (c: Cell): void => {
+    cells.push(c);
+  };
+  // --- TryFunction ---
+  add(
+    et(
+      "Try",
+      "ReturnError",
+      ["ClearLastError();", "R := H.TryError();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  add(
+    et(
+      "Try",
+      "ReturnOk",
+      ["ClearLastError();", "R := H.TryOk();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  add(et("Try", "UnusedError", [], "H.TryError(); Error('V:[reached]');"));
+  add(et("Try", "UnusedOk", [], "H.TryOk(); Error('V:[reached]');"));
+  {
+    const k = etKey();
+    add(
+      et(
+        "Try",
+        "InsertThenError",
+        [`R := H.TryInsertThenError(${k});`, etRange(k)],
+        "Error('V:[%1|%2|%3]', Format(R, 0, 9), Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Try",
+        "InsertOk",
+        [`R := H.TryInsertOk(${k});`, etRange(k)],
+        "Error('V:[%1|%2]', Format(R, 0, 9), Row2.Count());",
+      ),
+    );
+  }
+  add(et("Try", "LastErrorCode", ["R := H.TryError();"], "Error('V:[%1]', GetLastErrorCode());"));
+  add(
+    et(
+      "Try",
+      "CallStack",
+      ["R := H.TryError();"],
+      "Error('V:[%1]', Format(StrLen(GetLastErrorCallStack()) > 0, 0, 9));",
+    ),
+  );
+  add(
+    et(
+      "Try",
+      "ClearLastError",
+      ["R := H.TryError();", "ClearLastError();"],
+      "Error('V:[%1|%2]', GetLastErrorText(), GetLastErrorCode());",
+    ),
+  );
+  add(
+    et(
+      "Try",
+      "ErrorInfo",
+      ["R := H.TryErrorInfo();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  add(
+    et("Try", "Substituted", ["R := H.TryLabelError();"], "Error('V:[%1]', GetLastErrorText());"),
+  );
+  add(
+    et(
+      "Try",
+      "OkAfterError",
+      ["R := H.TryError();", "R := H.TryOk();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  add(
+    et(
+      "Try",
+      "TempThenError",
+      ["R := H.TryInsertTempThenError(Tmp);"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), Tmp.Count());",
+      TMP_VARS,
+    ),
+  );
+  // --- Codeunit.Run ---
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailReturn",
+        [
+          "ClearLastError();",
+          "Row.Init();",
+          `Row."Key" := ${k};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2|%3]', Format(R, 0, 9), Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "OkReturn",
+        [
+          "Row.Init();",
+          `Row."Key" := ${k};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Ok", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2]', Format(R, 0, 9), Row2.Count());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailUnused",
+        ["Row.Init();", `Row."Key" := ${k};`],
+        "Codeunit.Run(Codeunit::\"ET Run Fail\", Row); Error('V:[reached]');",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "OkAfterWrite",
+        [
+          `H.InsertRow(${k});`,
+          "Row.Init();",
+          `Row."Key" := ${k + 1};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Ok", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2]', Format(R, 0, 9), Row2.Count());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailAfterWrite",
+        [
+          `H.InsertRow(${k});`,
+          "Row.Init();",
+          `Row."Key" := ${k + 1};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2|%3]', Format(R, 0, 9), Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "OkAfterWriteUnused",
+        [
+          `H.InsertRow(${k});`,
+          "Row.Init();",
+          `Row."Key" := ${k + 1};`,
+          'Codeunit.Run(Codeunit::"ET Run Ok", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1]', Row2.Count());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailLastErrorCode",
+        ["Row.Init();", `Row."Key" := ${k};`, 'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);'],
+        "Error('V:[%1]', GetLastErrorCode());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailCallStack",
+        ["Row.Init();", `Row."Key" := ${k};`, 'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);'],
+        "Error('V:[%1]', Format(StrLen(GetLastErrorCallStack()) > 0, 0, 9));",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailAfterCommit",
+        [
+          `H.InsertRow(${k});`,
+          "Commit();",
+          "Row.Init();",
+          `Row."Key" := ${k + 1};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2]', Format(R, 0, 9), Row2.Count());",
+      ),
+    );
+  }
+  // --- asserterror ---
+  add(et("Assert", "NoError", [], "asserterror Row.SetRange(\"Key\", 1); Error('V:[reached]');"));
+  add(
+    et(
+      "Assert",
+      "Text",
+      ["asserterror Error('ET asserted');"],
+      "Error('V:[%1]', GetLastErrorText());",
+    ),
+  );
+  add(
+    et(
+      "Assert",
+      "Code",
+      ["asserterror Error('ET asserted');"],
+      "Error('V:[%1]', GetLastErrorCode());",
+    ),
+  );
+  {
+    const k = etKey();
+    add(
+      et(
+        "Assert",
+        "RollbackInside",
+        [`asserterror H.InsertThenError(${k});`, etRange(k)],
+        "Error('V:[%1|%2]', Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Assert",
+        "RollbackBefore",
+        [`H.InsertRow(${k});`, "asserterror Error('ET asserted');", etRange(k)],
+        "Error('V:[%1]', Row2.Count());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Assert",
+        "AfterCommit",
+        [`H.InsertRow(${k});`, "Commit();", `asserterror H.InsertThenError(${k + 1});`, etRange(k)],
+        "Error('V:[%1|%2]', Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  add(
+    et(
+      "Assert",
+      "ErrorInfo",
+      ["asserterror H.RaiseInfo();"],
+      "Error('V:[%1]', GetLastErrorText());",
+    ),
+  );
+  add(
+    et(
+      "Assert",
+      "TempNotRolledBack",
+      ["asserterror H.InsertTempThenError(Tmp);"],
+      "Error('V:[%1]', Tmp.Count());",
+      TMP_VARS,
+    ),
+  );
+  // --- ErrorInfo values ---
+  const EI = ["EI: ErrorInfo;"];
+  add(
+    et(
+      "Info",
+      "Defaults",
+      [],
+      "Error('V:[%1|%2|%3|%4]', Format(EI.Collectible, 0, 9), Format(EI.ErrorType), Format(EI.Verbosity), EI.Message);",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Create",
+      ["EI := ErrorInfo.Create('ET m');"],
+      "Error('V:[%1|%2]', EI.Message, Format(EI.Collectible, 0, 9));",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "CreateCollectible",
+      ["EI := ErrorInfo.Create('ET m', true);"],
+      "Error('V:[%1|%2]', EI.Message, Format(EI.Collectible, 0, 9));",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Title",
+      ["EI.Title('ET title');", "EI.Message('ET body');", "asserterror Error(EI);"],
+      "Error('V:[%1|%2]', GetLastErrorText(), EI.Title);",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Detailed",
+      ["EI.Message('ET body');", "EI.DetailedMessage('ET detail');", "asserterror Error(EI);"],
+      "Error('V:[%1|%2]', GetLastErrorText(), EI.DetailedMessage);",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Dimensions",
+      ["Dims.Add('ET k', 'ET v');", "EI.CustomDimensions(Dims);"],
+      "Error('V:[%1|%2]', EI.CustomDimensions.Count(), EI.CustomDimensions.Get('ET k'));",
+      [...EI, "Dims: Dictionary of [Text, Text];"],
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "ClientType",
+      ["EI.Message('ET client');", "EI.ErrorType(ErrorType::Client);", "asserterror Error(EI);"],
+      "Error('V:[%1]', GetLastErrorText());",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Percent",
+      ["asserterror Error(ErrorInfo.Create('ET 100% done'));"],
+      "Error('V:[%1]', GetLastErrorText());",
+    ),
+  );
+  // --- collectible errors ---
+  add(
+    et(
+      "Collect",
+      "AndClear",
+      [],
+      "Error('V:[%1|%2]', H.CollectAndClear(), Format(HasCollectedErrors(), 0, 9));",
+    ),
+  );
+  add(et("Collect", "AndKeep", [], "H.CollectAndKeep(); Error('V:[reached]');"));
+  add(et("Collect", "ThenPlain", [], "H.CollectThenPlain(); Error('V:[reached]');"));
+  add(et("Collect", "KeepGoing", [], "Error('V:[%1]', H.CollectKeepGoing());"));
+  add(
+    et(
+      "Collect",
+      "Outside",
+      ["asserterror H.RaiseCollectibleOutside();"],
+      "Error('V:[%1|%2]', GetLastErrorText(), Format(HasCollectedErrors(), 0, 9));",
+    ),
+  );
+  add(
+    et(
+      "Collect",
+      "NoneYet",
+      [],
+      "Error('V:[%1|%2]', Format(HasCollectedErrors(), 0, 9), GetCollectedErrors().Count());",
+    ),
+  );
+  add(
+    et(
+      "Collect",
+      "KeepInTry",
+      ["R := H.TryCollectKeep();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  // --- triggers of a temporary record ---
+  const TRIG = ['T: Record "ET Trig" temporary;'];
+  add(
+    et(
+      "Trig",
+      "TempInsertTrue",
+      ["T.Init();", 'T."Key" := 1;', "T.Val := 'BAD';", "T.Insert(true);"],
+      "Error('V:[%1]', T.Count());",
+      TRIG,
+    ),
+  );
+  add(
+    et(
+      "Trig",
+      "TempInsertFalse",
+      ["T.Init();", 'T."Key" := 1;', "T.Val := 'BAD';", "T.Insert(false);"],
+      "Error('V:[%1]', T.Count());",
+      TRIG,
+    ),
+  );
+  add(
+    et(
+      "Trig",
+      "TempModifyTrue",
+      ["T.Init();", 'T."Key" := 1;', "T.Insert(false);", "T.Val := 'BAD';", "T.Modify(true);"],
+      "Error('V:[%1]', T.Val);",
+      TRIG,
+    ),
+  );
+  add(
+    et(
+      "Trig",
+      "TempDeleteTrue",
+      ["T.Init();", 'T."Key" := 1;', "T.Val := 'BAD';", "T.Insert(false);", "T.Delete(true);"],
+      "Error('V:[%1]', T.Count());",
+      TRIG,
+    ),
+  );
+  {
+    const k = etKey();
+    add(
+      et(
+        "Trig",
+        "RealInsertTrue",
+        ["RT.Init();", `RT."Key" := ${k};`, "RT.Val := 'BAD';", "RT.Insert(true);"],
+        "Error('V:[reached]');",
+        ['RT: Record "ET Trig";'],
+      ),
+    );
+  }
+  // --- temporary records ---
+  add(
+    et(
+      "Temp",
+      "IsTemporary",
+      [],
+      "Error('V:[%1|%2]', Format(Tmp.IsTemporary, 0, 9), Format(Row.IsTemporary, 0, 9));",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "CopyShared",
+      [tmpAdd("Tmp2", 1), "Tmp.Copy(Tmp2, true);", tmpAdd("Tmp2", 2)],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "CopyNotShared",
+      [tmpAdd("Tmp2", 1), "Tmp.Copy(Tmp2);", tmpAdd("Tmp2", 2)],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "CopySharedInsertOther",
+      ["Tmp.Copy(Tmp2, true);", tmpAdd("Tmp", 1)],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "CopySharedDeleteAll",
+      [tmpAdd("Tmp2", 1), tmpAdd("Tmp2", 2), "Tmp.Copy(Tmp2, true);", "Tmp.DeleteAll();"],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "ResetClearsFilter",
+      [
+        tmpAdd("Tmp", 1),
+        tmpAdd("Tmp", 2),
+        tmpAdd("Tmp", 3),
+        'Tmp.SetRange("Key", 2);',
+        "Tmp.Reset();",
+      ],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp.GetFilters());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "FilteredDeleteAll",
+      [
+        tmpAdd("Tmp", 1),
+        tmpAdd("Tmp", 2),
+        tmpAdd("Tmp", 3),
+        'Tmp.SetRange("Key", 2, 3);',
+        "Tmp.DeleteAll();",
+        "Tmp.Reset();",
+      ],
+      "Error('V:[%1]', Tmp.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(et("Temp", "ByVar", ["H.AddByVar(Tmp, 1);"], "Error('V:[%1]', Tmp.Count());", TMP_VARS));
+  add(et("Temp", "ByValue", ["H.AddByValue(Tmp, 1);"], "Error('V:[%1]', Tmp.Count());", TMP_VARS));
+  {
+    const k = etKey();
+    add(
+      et(
+        "Temp",
+        "ByValueToRealParam",
+        [`H.AddByValueReal(Tmp, ${k});`, etRange(k)],
+        "Error('V:[%1|%2]', Tmp.Count(), Row2.Count());",
+        TMP_VARS,
+      ),
+    );
+  }
+  add(
+    et(
+      "Temp",
+      "AutoIncTemp",
+      [
+        "TA.Val := 'a';",
+        "TA.Insert();",
+        "I1 := TA.Id;",
+        "TA.Val := 'b';",
+        "TA.Id := 0;",
+        "TA.Insert();",
+      ],
+      "Error('V:[%1|%2]', I1, TA.Id);",
+      ['TA: Record "ET Auto" temporary;', "I1: Integer;"],
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "AutoIncReal",
+      [
+        "RA.Val := 'a';",
+        "RA.Insert();",
+        "I1 := RA.Id;",
+        "RA.Val := 'b';",
+        "RA.Id := 0;",
+        "RA.Insert();",
+      ],
+      "Error('V:[%1]', RA.Id - I1);",
+      ['RA: Record "ET Auto";', "I1: Integer;"],
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "DuplicateKey",
+      [tmpAdd("Tmp", 1), tmpAdd("Tmp", 1)],
+      "Error('V:[reached]');",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "ClearShared",
+      [tmpAdd("Tmp2", 1), "Tmp.Copy(Tmp2, true);", "Clear(Tmp);"],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "ClearSingle",
+      [tmpAdd("Tmp", 1), "Clear(Tmp);"],
+      "Error('V:[%1|%2]', Tmp.Count(), Format(Tmp.IsTemporary, 0, 9));",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "RealShareTemp",
+      [tmpAdd("Tmp", 1), "Row.Copy(Tmp, true);"],
+      "Error('V:[%1|%2]', Row.Count(), Format(Row.IsTemporary, 0, 9));",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "ModifyAll",
+      [
+        tmpAdd("Tmp", 1),
+        tmpAdd("Tmp", 2),
+        "Tmp.ModifyAll(Val, 'ET x');",
+        "Tmp.SetRange(Val, 'ET x');",
+      ],
+      "Error('V:[%1]', Tmp.Count());",
+      TMP_VARS,
+    ),
+  );
+  return cells;
+})();
+/** The helper and the two Codeunit.Run targets follow the last cell. */
+const ET_HELPER = 51000 + 1 + ET_CELLS.length;
+export const ERRORS_TEMP: Family = {
+  name: "errors-temp",
+  issue: "",
+  known: [],
+  testPermissions: "Disabled",
+  extraIds: 3,
+  support: `table 51000 "ET Row"
+{
+    fields
+    {
+        field(1; "Key"; Integer) { }
+        field(2; Val; Text[30]) { }
+    }
+    keys { key(PK; "Key") { Clustered = true; } }
+}
+
+table 51001 "ET Auto"
+{
+    fields
+    {
+        field(1; Id; Integer) { AutoIncrement = true; }
+        field(2; Val; Text[30]) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+table 51002 "ET Trig"
+{
+    fields
+    {
+        field(1; "Key"; Integer) { }
+        field(2; Val; Text[30]) { }
+    }
+    keys { key(PK; "Key") { Clustered = true; } }
+
+    trigger OnInsert()
+    begin
+        if Val = 'BAD' then
+            Error('ET insert refused');
+    end;
+
+    trigger OnModify()
+    begin
+        if Val = 'BAD' then
+            Error('ET modify refused');
+    end;
+
+    trigger OnDelete()
+    begin
+        if Val = 'BAD' then
+            Error('ET delete refused');
+    end;
+}
+
+codeunit ${ET_HELPER} "ET Helper"
+{
+    [TryFunction]
+    procedure TryError()
+    begin
+        Error('ET try failed');
+    end;
+
+    [TryFunction]
+    procedure TryOk()
+    begin
+    end;
+
+    [TryFunction]
+    procedure TryInsertThenError(K: Integer)
+    begin
+        InsertRow(K);
+        Error('ET try failed after insert');
+    end;
+
+    [TryFunction]
+    procedure TryInsertOk(K: Integer)
+    begin
+        InsertRow(K);
+    end;
+
+    [TryFunction]
+    procedure TryErrorInfo()
+    begin
+        RaiseInfo();
+    end;
+
+    [TryFunction]
+    procedure TryLabelError()
+    begin
+        Error('ET value %1', 7);
+    end;
+
+    [TryFunction]
+    procedure TryInsertTempThenError(var T: Record "ET Row" temporary)
+    begin
+        InsertTempThenError(T);
+    end;
+
+    [TryFunction]
+    procedure TryCollectKeep()
+    begin
+        CollectAndKeep();
+    end;
+
+    procedure InsertRow(K: Integer)
+    var
+        Row: Record "ET Row";
+    begin
+        Row.Init();
+        Row."Key" := K;
+        Row.Insert();
+    end;
+
+    procedure InsertThenError(K: Integer)
+    begin
+        InsertRow(K);
+        Error('ET after insert');
+    end;
+
+    procedure InsertTempThenError(var T: Record "ET Row" temporary)
+    begin
+        T.Init();
+        T."Key" := 1;
+        T.Insert();
+        Error('ET after temp insert');
+    end;
+
+    procedure RaiseInfo()
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Message('ET info message');
+        EI.DetailedMessage('ET info detail');
+        Error(EI);
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectAndClear(): Text
+    var
+        EI: ErrorInfo;
+        Errs: List of [ErrorInfo];
+        T: Text;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET c1');
+        Error(EI);
+        EI.Message('ET c2');
+        Error(EI);
+        Errs := GetCollectedErrors();
+        T := StrSubstNo('%1|%2|%3|%4', Format(HasCollectedErrors(), 0, 9), Errs.Count(), Errs.Get(1).Message, Errs.Get(2).Message);
+        ClearCollectedErrors();
+        exit(T + '|' + Format(HasCollectedErrors(), 0, 9));
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectAndKeep()
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET k1');
+        Error(EI);
+        EI.Message('ET k2');
+        Error(EI);
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectThenPlain()
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET p1');
+        Error(EI);
+        Error('ET plain stops');
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectKeepGoing(): Text
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET g1');
+        Error(EI);
+        exit('ET reached the end');
+    end;
+
+    procedure RaiseCollectibleOutside()
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET outside');
+        Error(EI);
+    end;
+
+    procedure AddByVar(var T: Record "ET Row" temporary; K: Integer)
+    begin
+        T.Init();
+        T."Key" := K;
+        T.Insert();
+    end;
+
+    procedure AddByValue(T: Record "ET Row" temporary; K: Integer)
+    begin
+        T.Init();
+        T."Key" := K;
+        T.Insert();
+    end;
+
+    procedure AddByValueReal(T: Record "ET Row"; K: Integer)
+    begin
+        T.Init();
+        T."Key" := K;
+        T.Insert();
+    end;
+}
+
+codeunit ${ET_HELPER + 1} "ET Run Fail"
+{
+    TableNo = "ET Row";
+
+    trigger OnRun()
+    begin
+        Rec.Insert();
+        Error('ET run failed');
+    end;
+}
+
+codeunit ${ET_HELPER + 2} "ET Run Ok"
+{
+    TableNo = "ET Row";
+
+    trigger OnRun()
+    begin
+        Rec.Insert();
+    end;
+}
+`,
+  handles: {},
+  cells: ET_CELLS,
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -6644,6 +7561,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [ZIP_BLOB.name]: ZIP_BLOB,
   // PR-431: appended (BC-check number 28): edge's setrange-other-type-convert and restamped-row texts, for leg C's keep cases
   [EDGE_REFUSALS.name]: EDGE_REFUSALS,
+  // PR-487: appended (BC-check number 29): errors, transactions and temporary records, for a per-cell BC differential
+  [ERRORS_TEMP.name]: ERRORS_TEMP,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
