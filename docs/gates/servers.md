@@ -305,8 +305,28 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**The current proof for `bc1`-`bc3` is coord PR-309's, on 2026-11-22, under LethAL Control 1.0.0.29 (R1138's renew without a
-lock during a run)** (the first table below).
+**The current proof for `bc1`-`bc3` is coord PR-462's, on 2026-11-26/27, under LethAL Control 1.0.0.30 (R1170's Generation
+counter; headless unchanged)** (the table right below).
+- **Driver:** `/coord/handoff/PR-462/prove.sh` (PR-309's, lane preproc), one server at a time in one worktree (bc2, then bc3,
+  then bc1), each under its own coord lease. Head f605cbb2 (branch lethal/pr-462).
+- **Setup:** `bc-linux-setup.ts --held-lease` upgraded each server from 1.0.0.29 and read the build back by sha256 (eb830ade…
+  = local). The build was read back AGAIN after the last gate (`--predict`'s `already-pinned LethAL Control 1.0.0.30`, and
+  doctor's `control-version`), so the figures are tied to 1.0.0.30 at both ends.
+- **Gates:** every gate's first line named its server, and each passed its own comparison with its baseline. `lethal doctor`
+  was clean, and each lease was released healthy.
+- **An older client against 1.0.0.30 (bc2):** lethal-bugs' pinned DOTests client `ac413797d` ran its own `itest:bcdev` and
+  `itest:lease` against its own baselines: both PASS, its doctor read 1.0.0.30 (`/coord/handoff/PR-462/older/`).
+- **`bc4` stays on 1.0.0.29** while lethal-bugs' DOTests series runs there (the setup script's per-server pin, R1170): its
+  proof row is unchanged.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc1` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.30 | `/coord/handoff/PR-462/prove/bc1/<gate>.log`, `run.log`, `setup.log`, `readback-*.log` beside them |
+| `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.30 | `/coord/handoff/PR-462/prove/bc2/<gate>.log`, `run.log`, `setup.log`, `readback-*.log` beside them |
+| `bc3` | setup; the same 13, and `itest:hang` | 1.0.0.30 | `/coord/handoff/PR-462/prove/bc3/<gate>.log`, `run.log`, `setup.log`, `readback-*.log` beside them |
+
+**The proof before it, coord PR-309's, on 2026-11-22, under LethAL Control 1.0.0.29 (R1138's renew without a lock during a
+run)**, is history (the table right below).
 - **Driver:** `/coord/handoff/PR-309/prove.sh` (PR-198's, lane bugs), one server at a time in one worktree (bc3, then bc2, then
   bc1), each under its own coord lease. Head 49a635ec (branch lethal/pr309, master merged).
 - **Setup:** `bc-linux-setup.ts --held-lease` upgraded each server from 1.0.0.28 and read the build back by sha256 (545efbea…
