@@ -3,18 +3,21 @@
  * alrunner can order fixes by value. Built on PR-490's join (`scripts/bc-v3-join.ts`).
  *
  *   bun scripts/v3-refusal-cost.ts run --name <label> --v3 <report.json> --v3-store <db> [--bc <report.json> ...]
- *                                     [--bc-store <db> ...] --out <costs.json>
- *   bun scripts/v3-refusal-cost.ts render --out <priority.md> <costs.json> [<costs.json> ...]
+ *                                     --out <costs.json>
+ *   bun scripts/v3-refusal-cost.ts render --out <priority.md> --unmapped-out <private.txt> <costs.json> [...]
  *
  * Per family, for one v3 run:
  * - `testsRefused`: tests not run at v3's baseline (the store's latest run) with that family's refusal text;
- * - `errorMutants`: mutants whose final v3 verdict is `error` with that family's text in the note (a refusal under
- *   mutation, or PR-250's cut quoting a baseline refusal);
+ * - `errorMutants`: mutants whose final v3 verdict is `error` because of this family's refusal of the MUTANT itself
+ *   (its own note matches; a non-refusal error note is not counted);
+ * - `cascadeErrors`: mutants v3 ends as `error` because an EARLIER test of the codeunit was refused while it ran: the
+ *   note names that test by method, and the error is credited to that test's own family (not to whatever the note's
+ *   truncated quote happens to match);
  * - with BC reports (joined on the full site key), over the joined keys only:
  *   - `killsLost`: BC killed it, and BC's killing test is refused at v3's baseline with that family's text;
  *   - `reachedOnlyByRefused`: every one of BC's covering tests is refused on v3, at least one by this family (a mutant
  *     reached by tests of two families counts in both).
- * Ranked by killsLost + errorMutants, then testsRefused. Families mapped to no issue are listed as `unmapped` with a
+ * Ranked by killsLost + errorMutants + cascadeErrors, then testsRefused. Families mapped to no issue are listed as `unmapped` with a
  * normalised text, so a new class is never silently dropped. `render` writes counts, issue numbers and family labels
  * only: no project source, object, file or test name, so the file can go to alrunner.
  */
@@ -102,7 +105,8 @@ export const FAMILIES: readonly Family[] = [
     issue: "#8002",
     label:
       "an earlier test changed a number sequence that existed before it (TestIsolation = Function rollback not measured)",
-    pattern: /changed number sequence/,
+    // #8002 covers both forms: a NumberSequence or an IsolatedStorage key that existed before the test
+    pattern: /changed (number sequence|IsolatedStorage key)/,
   },
   {
     id: "relationfieldno",
@@ -155,8 +159,15 @@ export const FAMILIES: readonly Family[] = [
   {
     id: "setfilter-value-expected",
     issue: "#8213",
-    label: "SetFilter value expected after `..`; Evaluate into Decimal form",
-    pattern: /SetFilter: value expected after|Evaluate of .* into Decimal/,
+    label: "SetFilter value expected after `..`",
+    pattern: /SetFilter: value expected after/,
+  },
+  {
+    // #8219's title names it: "Evaluate of a comparison filter into Decimal"
+    id: "evaluate-comparison-decimal",
+    issue: "#8219",
+    label: "Evaluate of a comparison filter into Decimal",
+    pattern: /Evaluate of .* into Decimal/,
   },
   {
     id: "setfilter-empty-term",
@@ -286,9 +297,19 @@ export function familyOf(text: string): string | null {
 export interface FamilyCost {
   testsRefused: number;
   errorMutants: number;
+  cascadeErrors: number;
   killsLost: number;
   reachedOnlyByRefused: number;
 }
+const ZERO: FamilyCost = {
+  testsRefused: 0,
+  errorMutants: 0,
+  cascadeErrors: 0,
+  killsLost: 0,
+  reachedOnlyByRefused: 0,
+};
+/** LethAL's cascade note: an earlier test of the codeunit, named by method, was refused while it ran. */
+const CASCADE = /an earlier test of this codeunit was refused while it ran \(([^:()]+): /;
 export interface RunCost {
   readonly name: string;
   readonly v3Mutants: number;
@@ -331,7 +352,7 @@ export function costOf(
 ): RunCost {
   const families: Record<string, FamilyCost> = {};
   const of = (id: string): FamilyCost => {
-    families[id] ??= { testsRefused: 0, errorMutants: 0, killsLost: 0, reachedOnlyByRefused: 0 };
+    families[id] ??= { ...ZERO };
     return families[id];
   };
   const testFamily = new Map<string, string>();
@@ -341,11 +362,24 @@ export function costOf(
     testFamily.set(test, f);
     of(f).testsRefused++;
   }
+  /** a cascade note's earlier test (a method name) -> that refused test's family, when exactly one refused test has it */
+  const cascadeFamily = (method: string): string | undefined => {
+    const hits = [...testFamily].filter(([t]) => t.endsWith(`.${method}`));
+    return hits.length === 1 ? hits[0]?.[1] : undefined;
+  };
   const v3Verdict = new Map<string, string>();
   for (const m of v3.mutants as M[]) {
     v3Verdict.set(siteKey(m), m.verdict);
     if (m.verdict !== "error") continue;
-    const f = familyOf(m.failureNote ?? "");
+    const note = m.failureNote ?? "";
+    const cascade = CASCADE.exec(note);
+    if (cascade?.[1] !== undefined) {
+      // credit the earlier test's own refusal; fall back to the note's quote only when that test is not resolvable
+      const f = cascadeFamily(cascade[1]) ?? familyOf(note);
+      if (f !== null) of(f).cascadeErrors++;
+      continue;
+    }
+    const f = familyOf(note);
     if (f !== null) of(f).errorMutants++;
   }
   let joined = 0;
@@ -367,7 +401,7 @@ export function costOf(
   return { name, v3Mutants: v3.mutants.length, joined, families };
 }
 
-const score = (c: FamilyCost) => c.killsLost + c.errorMutants;
+const score = (c: FamilyCost) => c.killsLost + c.errorMutants + c.cascadeErrors;
 
 /** The unmapped texts, as `U<n>\t<text>`, numbered as `render` numbers them. PRIVATE: they may name project objects. */
 export function unmappedTexts(runs: readonly RunCost[]): string[] {
@@ -387,11 +421,12 @@ export function render(runs: readonly RunCost[]): string {
         return {
           testsRefused: t.testsRefused + c.testsRefused,
           errorMutants: t.errorMutants + c.errorMutants,
+          cascadeErrors: t.cascadeErrors + (c.cascadeErrors ?? 0),
           killsLost: t.killsLost + c.killsLost,
           reachedOnlyByRefused: t.reachedOnlyByRefused + c.reachedOnlyByRefused,
         };
       },
-      { testsRefused: 0, errorMutants: 0, killsLost: 0, reachedOnlyByRefused: 0 },
+      { ...ZERO },
     );
   const ranked = [...ids].sort(
     (a, b) =>
@@ -421,14 +456,24 @@ export function render(runs: readonly RunCost[]): string {
         `- **${r.name}**: ${r.v3Mutants} v3 mutants${r.joined > 0 ? `, ${r.joined} joined with BC verdicts` : " (no BC verdicts joined)"}`,
     ),
     "",
-    "Columns, per run: tests refused at v3's baseline / mutants v3 ends as `error` with this text / BC kills whose",
-    "killing test v3 refused (joined runs) / mutants BC reaches only through tests v3 refused (joined runs).",
-    "Ranked by kills lost + error mutants, summed over the runs.",
+    "Columns, per run:",
+    "- **tests**: tests refused at v3's baseline;",
+    "- **errors**: mutants v3 ends as `error` because of this family's refusal of the mutant itself;",
+    "- **cascade**: mutants v3 ends as `error` because an earlier test of the codeunit was refused while it ran,",
+    "  credited to that earlier test's own family;",
+    "- **kills lost**: BC kills whose killing test v3 refused while v3 did not kill the mutant (joined runs only);",
+    "- **only-refused**: mutants BC reaches only through tests v3 refused (joined runs only; a mutant reached by",
+    "  two families' tests counts in both).",
+    "",
+    "Ranked by kills lost + errors + cascade, summed over the runs. Read the rank as an order, not a total:",
+    "- the runs can overlap (an area run is part of a whole-project run), so a sum counts the same test twice;",
+    "- kills lost exist only for a run with BC verdicts joined; a run without them shows `-` and cannot add any;",
+    "- one mutant can count in two families (a kill lost under one, an error under another).",
     "",
   ];
   const cols = runs.map((r) => r.name);
   const table = [
-    `| rank | issue | family | ${cols.map((c) => `${c}: tests / errors / kills lost / only-refused`).join(" | ")} |`,
+    `| rank | issue | family | ${cols.map((c) => `${c}: tests / errors / cascade / kills lost / only-refused`).join(" | ")} |`,
     `|---|---|---|${cols.map(() => "---").join("|")}|`,
     ...ranked.map((id, i) => {
       const l = label(id);
@@ -436,7 +481,7 @@ export function render(runs: readonly RunCost[]): string {
         const c = r.families[id];
         if (c === undefined) return "";
         const bc = r.joined > 0 ? ` / ${c.killsLost} / ${c.reachedOnlyByRefused}` : " / - / -";
-        return `${c.testsRefused} / ${c.errorMutants}${bc}`;
+        return `${c.testsRefused} / ${c.errorMutants} / ${c.cascadeErrors ?? 0}${bc}`;
       });
       return `| ${i + 1} | ${l.issue} | ${l.label} | ${cells.join(" | ")} |`;
     }),
