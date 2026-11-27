@@ -42,8 +42,9 @@ codeunit 91002 "LC Control State"
         ResetSinceLoad: Boolean;
         SuiteCounter: Integer;
         // R206 §2.1: THE SESSION-FRESHNESS PREDICATE. Incremented by NoteTestMethodRun, immediately
-        // before each of the two places a test method runs (LC Run Method's RunAllTests, LC Run
-        // Many's RunTests), and NEVER reset: ResetAttestationState must not touch it, and the next
+        // before each of the three places a test method runs (LC Run Method's RunAllTests, LC Run
+        // Many's RunTests, and the gated OnBeforeTestMethodRun of LC Client Subscribers, a client
+        // session only), and NEVER reset: ResetAttestationState must not touch it, and the next
         // cost cut (one suite per session) must not stop it. A fresh session reports 0 at the top
         // of RunMutant/RunMutantMany; a session the platform handed to a call after another call
         // had run tests in it reports how many. It is single-instance state exactly as the
@@ -68,7 +69,7 @@ codeunit 91002 "LC Control State"
         exit(CopyStr('LC' + Format(SuiteCounter), 1, 10));
     end;
 
-    /// <summary>R206 §2.1: called immediately before a test method is run, at both run sites. The
+    /// <summary>R206 §2.1: called immediately before a test method is run, at the three run sites (LC Run Method, LC Run Many, and the gated client-session subscriber). The
     /// ONLY writer of TestMethodRuns.</summary>
     procedure NoteTestMethodRun()
     begin
@@ -1537,7 +1538,6 @@ codeunit 91002 "LC Control State"
             exit;
         end;
 
-
         if ActiveSessionHolds(Lease."Op Session Id") then begin
             Reason := 'client-session-alive';
             AliveSessionId := Lease."Op Session Id";
@@ -1559,8 +1559,9 @@ codeunit 91002 "LC Control State"
     var
         ActiveSession: Record "Active Session";
     begin
-        // Fails CLOSED (PR-478 amendment 1): R53 measured that a web-service session sees itself under a NEGATIVE
-        // id, so a row for either sign counts as alive.
+        // Fails CLOSED (PR-478 amendment 1): a row for the id OR its negative counts as alive (R53 measured a
+        // web-service session seeing itself under a negative id). This covers the two signs only. Whether one
+        // session can see another at all is measured on the Windows BC; this code does not claim it.
         ActiveSession.SetFilter("Session ID", '%1|%2', BoundSessionId, -BoundSessionId);
         exit(not ActiveSession.IsEmpty());
     end;
@@ -1591,6 +1592,11 @@ codeunit 91002 "LC Control State"
         end;
         if Lease."Op Session Id" <> 0 then begin
             Reason := 'already-bound';
+            exit(false);
+        end;
+        // A session id <= 0 names no session: never record it (a 0 would read as "never bound").
+        if SessionId() <= 0 then begin
+            Reason := 'no-session-id';
             exit(false);
         end;
         Lease."Op Session Id" := SessionId();
@@ -1660,7 +1666,7 @@ codeunit 91002 "LC Control State"
 
     /// <summary>1.0.0.31 (PR-478, amendment 1): the fenced, READ-ONLY read of every attestation row of one op.
     /// The same fence as the other actions (blank credentials fail loud; a tuple mismatch answers
-    /// `lease-invalid` and no rows). It writes nothing and takes no lock.</summary>
+    /// `lease-invalid` and no rows). It writes nothing and takes no lock: both records read ReadCommitted.</summary>
     procedure TryReadClientAttestation(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Valid: Boolean; var Rows: JsonArray)
     var
         Lease: Record "LC Lease";
@@ -1672,6 +1678,8 @@ codeunit 91002 "LC Control State"
 
         ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
 
+        Lease.ReadIsolation := IsolationLevel::ReadCommitted;
+        Attestation.ReadIsolation := IsolationLevel::ReadCommitted;
         if not Lease.Get('') then
             Error(LeaseRowMissingErr());
         if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then

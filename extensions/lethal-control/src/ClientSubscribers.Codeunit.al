@@ -7,7 +7,8 @@ using System.TestTools.TestRunner;
 /// IsBoundClientSession). A headless run (RunMutant, RunMutantMany) is never that session, so it writes no row
 /// and keeps its latched identity mismatch.
 ///
-/// OnBeforeTestMethodRun resets the observations ONLY (never ResetSinceLoad). OnAfterTestMethodRun writes the
+/// OnBeforeTestMethodRun counts the method (NoteTestMethodRun, the R206 freshness counter) and resets the
+/// observations ONLY (never ResetSinceLoad). OnAfterTestMethodRun writes the
 /// attestation row; it reads nothing from the tuple table, it attests what the session loaded. No Commit here:
 /// the runner commits after the method.</summary>
 codeunit 91016 "LC Client Subscribers"

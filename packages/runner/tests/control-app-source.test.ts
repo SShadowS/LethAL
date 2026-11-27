@@ -156,7 +156,7 @@ describe("the session-freshness predicate (R206 §2.1)", () => {
     expect(body).not.toContain("SuiteCounter");
   });
 
-  test("both run sites call NoteTestMethodRun immediately before the run", () => {
+  test("all three run sites call NoteTestMethodRun immediately before the run", () => {
     const method = statementsBefore(read("RunMethod.Codeunit.al"), "Mgt.RunAllTests(Line);", 1);
     expect(method[0]).toBe("State.NoteTestMethodRun();");
     const many = statementsBefore(
@@ -778,6 +778,7 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
       'if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then begin Reason := \'not-client-run\'; exit(false); end;',
       'if (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then begin Reason := \'op-mismatch\'; exit(false); end;',
       "if Lease.\"Op Session Id\" <> 0 then begin Reason := 'already-bound'; exit(false); end;",
+      "if SessionId() <= 0 then begin Reason := 'no-session-id'; exit(false); end;",
     ];
     for (const check of checks) {
       expect(bind.indexOf(check), check).toBeGreaterThan(-1);
@@ -863,37 +864,56 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     expect(fence).toBeGreaterThan(-1);
     expect(tuple).toBeGreaterThan(fence);
     expect(read).toBeGreaterThan(tuple);
+    // Valid is set only AFTER the tuple check, which exits on a mismatch
+    const flat = body.replace(/\s+/g, " ");
+    expect(flat).toContain("<> Generation) then exit; Valid := true;");
+    expect(flat.indexOf("Valid := true;")).toBeLessThan(flat.indexOf("Attestation.FindSet()"));
+    expect(flat.indexOf("Valid := true;")).toBe(flat.lastIndexOf("Valid := true;"));
+    // no lock: both records read ReadCommitted, before their first read
+    const leaseIso = body.indexOf("Lease.ReadIsolation := IsolationLevel::ReadCommitted;");
+    const attIso = body.indexOf("Attestation.ReadIsolation := IsolationLevel::ReadCommitted;");
+    expect(leaseIso).toBeGreaterThan(-1);
+    expect(attIso).toBeGreaterThan(-1);
+    expect(body.indexOf("Lease.Get(")).toBeGreaterThan(leaseIso);
+    expect(read).toBeGreaterThan(attIso);
     expect(body).toContain('Attestation.SetRange("Attempt Id", AttemptId);');
     expect(body).toContain('Attestation.SetRange("Op Seq", OpSeq);');
-    for (const write of ["Modify", "Insert", "Delete", "Commit", "LockTable", ":= "]) {
-      if (write === ":= ") continue;
+    for (const write of ["Modify(", "Insert(", "Delete(", "Commit(", "LockTable("]) {
       expect(body, write).not.toContain(write);
     }
+    const wrapper = codeOnly(procedureBody(api, "ReadClientAttestation")).replace(/\s+/g, " ");
+    expect(wrapper).toContain(
+      "if Valid then Obj.Add('rows', Rows) else Obj.Add('reason', 'lease-invalid');",
+    );
+    expect(wrapper).toContain("Obj.Add('read', Valid);");
     expect(codeOnly(procedureBody(api, "ReadClientAttestation"))).toContain(
       "State.TryReadClientAttestation(",
     );
     expect(codeOnly(procedureBody(api, "ReadClientAttestation"))).not.toMatch(
       /Modify|Insert|Delete|Commit/,
     );
-    for (const field of [
-      "attemptId",
-      "opSeq",
-      "codeunitId",
-      "method",
-      "loaded",
-      "loadedGeneration",
-      "loadedMutantId",
-      "observedAny",
-      "observedIdentityMismatch",
-      "observedActive",
-      "success",
-      "testMethodRuns",
-      "sessionId",
-      "serverGeneration",
-      "databaseId",
-    ]) {
-      expect(body, field).toContain(`Row.Add('${field}',`);
+    // every JSON field, as the full statement: the name AND the field it reads
+    const fields: Array<[string, string]> = [
+      ["attemptId", 'Attestation."Attempt Id"'],
+      ["opSeq", 'Attestation."Op Seq"'],
+      ["codeunitId", 'Attestation."Codeunit Id"'],
+      ["method", "Attestation.Method"],
+      ["loaded", "Attestation.Loaded"],
+      ["loadedGeneration", 'Attestation."Loaded Generation"'],
+      ["loadedMutantId", 'Attestation."Loaded Mutant Id"'],
+      ["observedAny", 'Attestation."Observed Any"'],
+      ["observedIdentityMismatch", 'Attestation."Observed Identity Mismatch"'],
+      ["observedActive", 'Attestation."Observed Active"'],
+      ["success", "Attestation.Success"],
+      ["testMethodRuns", 'Attestation."Test Method Runs"'],
+      ["sessionId", 'Attestation."Session Id"'],
+      ["serverGeneration", 'Attestation."Server Generation"'],
+      ["databaseId", 'Attestation."Database Id"'],
+    ];
+    for (const [json, source] of fields) {
+      expect(body, json).toContain(`Row.Add('${json}', ${source});`);
     }
+    expect(body.match(/Row\.Add\(/g)).toHaveLength(fields.length);
   });
 
   test("outside an op, loading the tuple also loads the expected ids, before the identity compare", () => {
