@@ -1,5 +1,8 @@
 namespace LethAL.Control;
 
+// 1.0.0.31: "Active Session" (2000000110).
+using System.Environment;
+
 /// <summary>
 /// Authoritative active-mutant state + target-artifact registry access, SingleInstance so the
 /// guard's repeated Active() checks within one run don't re-hit the DB. Owns the reads/writes of
@@ -21,6 +24,8 @@ codeunit 91002 "LC Control State"
 {
     SingleInstance = true;
     InherentPermissions = X;
+    // 1.0.0.31: DeactivateForClient reads "Active Session" to prove a bound client session is gone.
+    Permissions = tabledata "Active Session" = R;
 
     var
         CachedTargetAppId: Text;
@@ -89,6 +94,12 @@ codeunit 91002 "LC Control State"
             CachedArtifactId := Active."Artifact Id";
             CachedMutantId := Active."Mutant Id";
             CachedGeneration := Active.Generation;
+            // 1.0.0.31 (PR-478, B3): outside any op (a client session) the expected identity is the row's own, so a
+            // stale artifact's guard still latches a mismatch. Inside an op WriteActive set it and Loaded is true.
+            if not InOdataOp then begin
+                ExpectedTargetAppId := Active."Target App Id";
+                ExpectedArtifactId := Active."Artifact Id";
+            end;
         end;
         Loaded := true;
     end;
@@ -248,9 +259,11 @@ codeunit 91002 "LC Control State"
     procedure IsActive(TargetAppId: Text; ArtifactId: Text; MutantId: Text): Boolean
     begin
         ObservedAny := true;
+        // 1.0.0.31: the refresh runs BEFORE the identity compare, because in a client session it is what loads the
+        // expected identity. Inside an op it exits at once, so the headless order of effects is unchanged.
+        RefreshIfMoved();
         if (TargetAppId <> ExpectedTargetAppId) or (ArtifactId <> ExpectedArtifactId) then
             ObservedIdentityMismatch := true;
-        RefreshIfMoved();
         if CachedMutantId = '' then
             exit(false);
         exit((CachedTargetAppId = TargetAppId) and (CachedArtifactId = ArtifactId) and (CachedMutantId = MutantId));
@@ -658,7 +671,7 @@ codeunit 91002 "LC Control State"
         if not Peek.Get('') then
             Error(LeaseRowMissingErr());
         if (Peek.Epoch = Epoch) and (Peek.Token = Token) and (Peek."Server Generation" = Generation) and
-           (Peek."Op Kind" = Peek."Op Kind"::run) and (Peek."Expires At" >= CurrentDateTime + (TtlSeconds * 1000)) then begin
+           ((Peek."Op Kind" = Peek."Op Kind"::run) or (Peek."Op Kind" = Peek."Op Kind"::"client-run")) and (Peek."Expires At" >= CurrentDateTime + (TtlSeconds * 1000)) then begin
             Renewed := true;
             ExpiresAt := Peek."Expires At";
             exit;
@@ -671,7 +684,7 @@ codeunit 91002 "LC Control State"
         if (Lease.Epoch = Epoch) and (Lease.Token = Token) and (Lease."Server Generation" = Generation) then begin
             NewExpiry := CurrentDateTime + (TtlSeconds * 1000);
             // During a run never pull the claim's runway inwards.
-            if (Lease."Op Kind" = Lease."Op Kind"::run) and (Lease."Expires At" > NewExpiry) then
+            if ((Lease."Op Kind" = Lease."Op Kind"::run) or (Lease."Op Kind" = Lease."Op Kind"::"client-run")) and (Lease."Expires At" > NewExpiry) then
                 NewExpiry := Lease."Expires At";
             Lease."Expires At" := NewExpiry;
             Lease.Modify();
@@ -1239,7 +1252,9 @@ codeunit 91002 "LC Control State"
         end;
 
         // 3. Exact match on the ACTIVE marker -> clear marker + active tuple + tombstone, one txn.
-        if (Lease."Op Kind" <> Lease."Op Kind"::none) and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq) then begin
+        // 1.0.0.31 (PR-478, B3): a `client-run` op is never recovered here. Its session may still be running; only
+        // DeactivateForClient, after a read of "Active Session", tombstones it.
+        if (Lease."Op Kind" <> Lease."Op Kind"::none) and (Lease."Op Kind" <> Lease."Op Kind"::"client-run") and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq) then begin
             ForceClearActive();
             Lease."Op Kind" := Lease."Op Kind"::none;
             Lease."Op Session Id" := 0;  // R53 — see TryFinishRun.
@@ -1305,6 +1320,13 @@ codeunit 91002 "LC Control State"
         // stops a lost-ack-after-success from killing a live session.
         if OpSeq <= Lease."Last Completed Op Seq" then begin
             Refusal := 'already-completed';
+            exit;
+        end;
+
+
+        // 2b. 1.0.0.31 (PR-478, B3): a `client-run` op is never stopped here (its stop is the gated, probed path).
+        if Lease."Op Kind" = Lease."Op Kind"::"client-run" then begin
+            Refusal := 'client-run';
             exit;
         end;
 
@@ -1374,6 +1396,11 @@ codeunit 91002 "LC Control State"
             Refusal := 'already-completed';
             exit;
         end;
+        // 1.0.0.31 (PR-478, B3): see TryStopHungRun step 2b.
+        if Lease."Op Kind" = Lease."Op Kind"::"client-run" then begin
+            Refusal := 'client-run';
+            exit;
+        end;
         if (Lease."Op Kind" <> Lease."Op Kind"::run) or (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then begin
             Refusal := 'not-active';
             exit;
@@ -1407,6 +1434,215 @@ codeunit 91002 "LC Control State"
         Lease.Modify();
         Commit();
         Stopped := true;
+    end;
+
+    /// <summary>1.0.0.31 (PR-478, A3/B3): PHASE 1 of a CLIENT-session op. Fenced and ordered exactly like
+    /// TryBeginRun (the checks are repeated here, not shared, so TryBeginRun's headless body stays byte-for-byte
+    /// what the 13 gates measured), but it claims a `client-run` op, records NO session id (the client session
+    /// binds itself, BindClientSession), writes the tuple and bumps Generation, and returns the Generation it
+    /// wrote. It ends with the serving OData session's in-memory state RESET: the deactivate may land in another
+    /// pooled session, so the session that wrote the tuple must not keep it as an op of its own.</summary>
+    procedure TryActivateForClient(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; TargetAppId: Text; ArtifactId: Text; MutantId: Text; RunBoundMs: Integer; var Claimed: Boolean; var Reason: Text; var NewGeneration: BigInteger)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Claimed := false;
+        Reason := '';
+        NewGeneration := 0;
+
+        ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then begin
+            Reason := 'lease-invalid';
+            exit;
+        end;
+
+        if (TargetAppId = '') or (ArtifactId = '') or (RegisteredArtifact(TargetAppId) <> ArtifactId) then begin
+            Reason := 'artifact-mismatch';
+            exit;
+        end;
+
+        if OpSeq <= Lease."Last Completed Op Seq" then begin
+            Reason := 'lease-invalid';
+            exit;
+        end;
+
+        if (Lease."Op Kind" = Lease."Op Kind"::"client-run") and (Lease."Op Seq" = OpSeq) and (Lease."Op Attempt Id" = AttemptId) then begin
+            Reason := 'op-in-flight';
+            exit;
+        end;
+
+        if (OpSeq = Lease."Last Completed Op Seq" + 1) and (Lease."Op Kind" = Lease."Op Kind"::none) then begin
+            Lease."Op Kind" := Lease."Op Kind"::"client-run";
+            Lease."Op Attempt Id" := CopyStr(AttemptId, 1, MaxStrLen(Lease."Op Attempt Id"));
+            Lease."Op Seq" := OpSeq;
+            Lease."Op Started At" := CurrentDateTime;
+            // No session id here: BindClientSession records the client session's own id.
+            Lease."Op Session Id" := 0;
+            ExtendRunClaim(Lease, RunBoundMs);
+            Lease.Modify();
+            WriteActive(TargetAppId, ArtifactId, MutantId);
+            NewGeneration := CachedGeneration;
+            Commit();
+            ResetAttestationState();
+            Claimed := true;
+            exit;
+        end;
+
+        Reason := 'lease-invalid';
+    end;
+
+    /// <summary>1.0.0.31 (PR-478, B3 overrun ruling): the ONLY path that tombstones a `client-run` op. It does so
+    /// only when "Active Session" no longer holds the op's BOUND session id; while the session is alive it answers
+    /// `client-session-alive` and leaves the op in flight. A never-bound op (no session id) is refused as
+    /// `no-session-id`: nothing proves its session is gone. The tuple clear is unconditional (ForceClearActive),
+    /// as in TryRecoverOp: the call carries no tuple, and the marker match is the ownership proof.</summary>
+    procedure TryDeactivateForClient(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Deactivated: Boolean; var AlreadyCompleted: Boolean; var Reason: Text)
+    var
+        Lease: Record "LC Lease";
+    begin
+        Deactivated := false;
+        AlreadyCompleted := false;
+        Reason := '';
+
+        ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+
+        if (Lease.Epoch <> Epoch) or (Lease.Token <> Token) or (Lease."Server Generation" <> Generation) then begin
+            Reason := 'lease-invalid';
+            exit;
+        end;
+
+        if OpSeq <= Lease."Last Completed Op Seq" then begin
+            Deactivated := true;
+            AlreadyCompleted := true;
+            exit;
+        end;
+
+        if (Lease."Op Kind" <> Lease."Op Kind"::"client-run") or (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then begin
+            Reason := 'not-active';
+            exit;
+        end;
+
+        if Lease."Op Session Id" <= 0 then begin
+            Reason := 'no-session-id';
+            exit;
+        end;
+
+
+        if ActiveSessionHolds(Lease."Op Session Id") then begin
+            Reason := 'client-session-alive';
+            exit;
+        end;
+
+        ForceClearActive();
+        Lease."Op Kind" := Lease."Op Kind"::none;
+        Lease."Op Session Id" := 0;
+        Lease."Last Completed Op Seq" := OpSeq;
+        TrimRunClaim(Lease);
+        Lease.Modify();
+        Commit();
+        Deactivated := true;
+    end;
+
+    /// <summary>True when "Active Session" has a row for this session id.</summary>
+    local procedure ActiveSessionHolds(BoundSessionId: Integer): Boolean
+    var
+        ActiveSession: Record "Active Session";
+    begin
+        ActiveSession.SetRange("Session ID", BoundSessionId);
+        exit(not ActiveSession.IsEmpty());
+    end;
+
+    /// <summary>1.0.0.31 (PR-478, B3): the bind. Called by page "LC Client Bind" inside the CLIENT session. Sets
+    /// "Op Session Id" := SessionId() only when the op is `client-run`, its attempt id and op seq match, and the
+    /// field is blank, so a second bind (or a bind from another session) is refused. No other path sets the
+    /// field for `client-run`: the writer gate and the stop key on this value, never on an id the client sent.</summary>
+    procedure BindClientSession(AttemptId: Text; OpSeq: BigInteger): Boolean
+    var
+        Lease: Record "LC Lease";
+    begin
+        if AttemptId = '' then
+            exit(false);
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+        if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then
+            exit(false);
+        if (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then
+            exit(false);
+        if Lease."Op Session Id" <> 0 then
+            exit(false);
+        Lease."Op Session Id" := SessionId();
+        Lease.Modify();
+        Commit();
+        exit(true);
+    end;
+
+    /// <summary>1.0.0.31 (PR-478, B3): the gate both Test Runner - Mgt subscribers use: true only when THIS session
+    /// is the bound session of the in-flight `client-run` op. A headless session never is. An unlocked read, so a
+    /// headless method never waits on the lease lock; the lease is read under InherentPermissions.</summary>
+    procedure IsBoundClientSession(): Boolean
+    var
+        Lease: Record "LC Lease";
+    begin
+        Lease.ReadIsolation := IsolationLevel::ReadUncommitted;
+        if not Lease.Get('') then
+            exit(false);
+        if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then
+            exit(false);
+        exit((SessionId() > 0) and (Lease."Op Session Id" = SessionId()));
+    end;
+
+    /// <summary>1.0.0.31 (PR-478, B3): the per-method observation reset for a client session. Clears the observations
+    /// ONLY. It never touches ResetSinceLoad, the cache or TestMethodRuns.</summary>
+    procedure ResetObservations()
+    begin
+        ObservedAny := false;
+        ObservedIdentityMismatch := false;
+        ObservedActive := false;
+    end;
+
+    /// <summary>1.0.0.31 (PR-478, B3): writes the attestation row for the method that just ran in the bound client
+    /// session. It attests what the session LOADED (the cache and the observations), and never reads the tuple
+    /// table. No Commit: the runner commits after the method.</summary>
+    procedure WriteClientAttestation(CodeunitId: Integer; MethodName: Text; Success: Boolean)
+    var
+        Lease: Record "LC Lease";
+        Attestation: Record "LC Client Attestation";
+        MethodKey: Text[128];
+    begin
+        Lease.ReadIsolation := IsolationLevel::ReadUncommitted;
+        if not Lease.Get('') then
+            exit;
+        MethodKey := CopyStr(MethodName, 1, MaxStrLen(Attestation.Method));
+        if not Attestation.Get(Lease."Op Attempt Id", Lease."Op Seq", CodeunitId, MethodKey) then begin
+            Attestation.Init();
+            Attestation."Attempt Id" := Lease."Op Attempt Id";
+            Attestation."Op Seq" := Lease."Op Seq";
+            Attestation."Codeunit Id" := CodeunitId;
+            Attestation.Method := MethodKey;
+            Attestation.Insert();
+        end;
+        Attestation.Loaded := Loaded;
+        Attestation."Loaded Generation" := CachedGeneration;
+        Attestation."Loaded Mutant Id" := CopyStr(CachedMutantId, 1, MaxStrLen(Attestation."Loaded Mutant Id"));
+        Attestation."Observed Any" := ObservedAny;
+        Attestation."Observed Identity Mismatch" := ObservedIdentityMismatch;
+        Attestation."Observed Active" := ObservedActive;
+        Attestation.Success := Success;
+        Attestation."Test Method Runs" := TestMethodRuns;
+        Attestation."Session Id" := SessionId();
+        Attestation."Server Generation" := Lease."Server Generation";
+        Attestation."Database Id" := Lease."Database Id";
+        Attestation.Modify();
     end;
 
     local procedure RecordStoppedOp(var Lease: Record "LC Lease"; AttemptId: Text; OpSeq: BigInteger)

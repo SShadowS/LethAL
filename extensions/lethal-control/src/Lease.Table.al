@@ -23,7 +23,9 @@ table 91006 "LC Lease"
         field(7; "Client Nonce"; Text[64]) { }
         field(8; "Op Kind"; Option)
         {
-            OptionMembers = none,publish,run;
+            // 1.0.0.31 (PR-478): `client-run` is a client-session op (ActivateForClient). Appended, so the
+            // stored ordinals of none/publish/run do not move. Only DeactivateForClient tombstones it.
+            OptionMembers = none,publish,run,"client-run";
         }
         field(9; "Op Attempt Id"; Text[64]) { }
         field(10; "Op Started At"; DateTime) { }

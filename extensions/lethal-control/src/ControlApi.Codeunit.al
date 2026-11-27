@@ -879,6 +879,46 @@ codeunit 91003 "LC Control API"
         Obj.WriteTo(ResultJson);
     end;
 
+    /// <summary>OData action (1.0.0.31, PR-478): claim a `client-run` op and write the active tuple for a CLIENT
+    /// session. Thin wrapper over "LC Control State".TryActivateForClient; the fence, the ordering and the reset
+    /// of this serving session's state live there. JSON: {claimed, generation?, reason?}.</summary>
+    procedure ActivateForClient(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; TargetAppId: Text; ArtifactId: Text; MutantId: Text; RunBoundMs: Integer) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Claimed: Boolean;
+        Reason: Text;
+        NewGeneration: BigInteger;
+        Obj: JsonObject;
+    begin
+        State.TryActivateForClient(Epoch, Token, Generation, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, RunBoundMs, Claimed, Reason, NewGeneration);
+        Obj.Add('claimed', Claimed);
+        if Claimed then
+            Obj.Add('generation', NewGeneration);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
+        Obj.WriteTo(ResultJson);
+    end;
+
+    /// <summary>OData action (1.0.0.31, PR-478): tombstone a `client-run` op, but only after "Active Session"
+    /// shows its bound session gone; otherwise `client-session-alive` and the op stays in flight. Thin wrapper over
+    /// "LC Control State".TryDeactivateForClient. JSON: {deactivated, alreadyCompleted?, reason?}.</summary>
+    procedure DeactivateForClient(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Deactivated: Boolean;
+        AlreadyCompleted: Boolean;
+        Reason: Text;
+        Obj: JsonObject;
+    begin
+        State.TryDeactivateForClient(Epoch, Token, Generation, AttemptId, OpSeq, Deactivated, AlreadyCompleted, Reason);
+        Obj.Add('deactivated', Deactivated);
+        if AlreadyCompleted then
+            Obj.Add('alreadyCompleted', AlreadyCompleted);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
+        Obj.WriteTo(ResultJson);
+    end;
+
     /// <summary>OData action: the operator recovery reset (design §8). Step 3 of a FOUR-step procedure
     /// that a restart alone does not accomplish — restart the NST, read the current serverGeneration
     /// from a live status/harness call against the restarted instance, call this with that value as
