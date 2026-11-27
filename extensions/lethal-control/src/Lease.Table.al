@@ -61,6 +61,9 @@ table 91006 "LC Lease"
         /// TryForceResetLease, which re-mints the generation. A client resuming a run across a
         /// generation change carries its verdicts only when this is unchanged.</summary>
         field(16; "Database Id"; Text[32]) { }
+        /// <summary>1.0.0.31 (PR-478, amendment 3): the bound client session of a `client-run` op marked its own end
+        /// (EndClientSession). Cleared by ActivateForClient. The only proof DeactivateForClient accepts.</summary>
+        field(17; "Op Session Ended"; Boolean) { }
     }
 
     keys

@@ -940,6 +940,23 @@ codeunit 91003 "LC Control API"
         Obj.WriteTo(ResultJson);
     end;
 
+    /// <summary>OData action (1.0.0.31, PR-478 amendments 3 and 4): the CALLER, if it is the bound session of the
+    /// in-flight `client-run` op, marks its own end (the same "LC Control State".EndClientSession the page's End
+    /// action uses). Self-only: nothing about the session id comes from the wire. JSON: {ended, reason?}.</summary>
+    procedure EndCallerSession(AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        State: Codeunit "LC Control State";
+        Ended: Boolean;
+        Reason: Text;
+        Obj: JsonObject;
+    begin
+        Ended := State.EndClientSession(AttemptId, OpSeq, Reason);
+        Obj.Add('ended', Ended);
+        if Reason <> '' then
+            Obj.Add('reason', Reason);
+        Obj.WriteTo(ResultJson);
+    end;
+
     /// <summary>OData action (1.0.0.31, PR-478 amendment 1): fenced, read-only. Every "LC Client Attestation" row of
     /// (attemptId, opSeq). JSON: {read, rows?, reason?}; rows is an array of objects with every field
     /// (attemptId, opSeq, codeunitId, method, loaded, loadedGeneration, loadedMutantId, observedAny,

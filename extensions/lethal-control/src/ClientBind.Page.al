@@ -32,6 +32,12 @@ page 91015 "LC Client Bind"
                     Editable = false;
                     ToolTip = 'True when this session is now the bound session of the op.';
                 }
+                field(EndedField; Ended)
+                {
+                    Caption = 'Ended';
+                    Editable = false;
+                    ToolTip = 'True when this session has marked its end.';
+                }
             }
         }
     }
@@ -53,6 +59,19 @@ page 91015 "LC Client Bind"
                     Bound := State.BindClientSession(AttemptId, OpSeq, Reason);
                 end;
             }
+            action("End")
+            {
+                Caption = 'End';
+                ToolTip = 'Mark this bound session as ended. The last step, after the test run returns.';
+
+                trigger OnAction()
+                var
+                    State: Codeunit "LC Control State";
+                    Reason: Text;
+                begin
+                    Ended := State.EndClientSession(AttemptId, OpSeq, Reason);
+                end;
+            }
         }
     }
 
@@ -60,4 +79,5 @@ page 91015 "LC Client Bind"
         AttemptId: Text[64];
         OpSeq: BigInteger;
         Bound: Boolean;
+        Ended: Boolean;
 }

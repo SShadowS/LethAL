@@ -1,8 +1,5 @@
 namespace LethAL.Control;
 
-// 1.0.0.31: "Active Session" (2000000110).
-using System.Environment;
-
 /// <summary>
 /// Authoritative active-mutant state + target-artifact registry access, SingleInstance so the
 /// guard's repeated Active() checks within one run don't re-hit the DB. Owns the reads/writes of
@@ -24,8 +21,6 @@ codeunit 91002 "LC Control State"
 {
     SingleInstance = true;
     InherentPermissions = X;
-    // 1.0.0.31: DeactivateForClient reads "Active Session" to prove a bound client session is gone.
-    Permissions = tabledata "Active Session" = R;
 
     var
         CachedTargetAppId: Text;
@@ -1254,7 +1249,7 @@ codeunit 91002 "LC Control State"
 
         // 3. Exact match on the ACTIVE marker -> clear marker + active tuple + tombstone, one txn.
         // 1.0.0.31 (PR-478, B3): a `client-run` op is never recovered here. Its session may still be running; only
-        // DeactivateForClient, after a read of "Active Session", tombstones it.
+        // DeactivateForClient, after the bound session marked its own end, tombstones it.
         if (Lease."Op Kind" <> Lease."Op Kind"::none) and (Lease."Op Kind" <> Lease."Op Kind"::"client-run") and (Lease."Op Attempt Id" = AttemptId) and (Lease."Op Seq" = OpSeq) then begin
             ForceClearActive();
             Lease."Op Kind" := Lease."Op Kind"::none;
@@ -1484,6 +1479,7 @@ codeunit 91002 "LC Control State"
             Lease."Op Started At" := CurrentDateTime;
             // No session id here: BindClientSession records the client session's own id.
             Lease."Op Session Id" := 0;
+            Lease."Op Session Ended" := false;
             ExtendRunClaim(Lease, RunBoundMs);
             Lease.Modify();
             WriteActive(TargetAppId, ArtifactId, MutantId);
@@ -1498,7 +1494,8 @@ codeunit 91002 "LC Control State"
     end;
 
     /// <summary>1.0.0.31 (PR-478, B3 overrun ruling): the ONLY path that tombstones a `client-run` op. It does so
-    /// only when "Active Session" no longer holds the op's BOUND session id; while the session is alive it answers
+    /// only when "Op Session Ended" is set (the bound session's own EndClientSession; "Active Session" cannot prove
+    /// a client session gone, measured on bcwin); otherwise it answers
     /// `client-session-alive` and leaves the op in flight. A never-bound op (no session id) is refused as
     /// `no-session-id`: nothing proves its session is gone. The tuple clear is unconditional (ForceClearActive),
     /// as in TryRecoverOp: the call carries no tuple, and the marker match is the ownership proof.</summary>
@@ -1538,7 +1535,9 @@ codeunit 91002 "LC Control State"
             exit;
         end;
 
-        if ActiveSessionHolds(Lease."Op Session Id") then begin
+        // Unknown is alive: only the bound session's own End proves it gone.
+
+        if not Lease."Op Session Ended" then begin
             Reason := 'client-session-alive';
             AliveSessionId := Lease."Op Session Id";
             exit;
@@ -1554,18 +1553,6 @@ codeunit 91002 "LC Control State"
         Deactivated := true;
     end;
 
-    /// <summary>True when "Active Session" has a row for this session id.</summary>
-    local procedure ActiveSessionHolds(BoundSessionId: Integer): Boolean
-    var
-        ActiveSession: Record "Active Session";
-    begin
-        // Fails CLOSED (PR-478 amendment 1): a row for the id OR its negative counts as alive (R53 measured a
-        // web-service session seeing itself under a negative id). This covers the two signs only. Whether one
-        // session can see another at all is measured on the Windows BC; this code does not claim it.
-        ActiveSession.SetFilter("Session ID", '%1|%2', BoundSessionId, -BoundSessionId);
-        exit(not ActiveSession.IsEmpty());
-    end;
-
     /// <summary>1.0.0.31 (PR-478, B3): the bind. Called by page "LC Client Bind" inside the CLIENT session. Sets
     /// "Op Session Id" := SessionId() only when the op is `client-run`, its attempt id and op seq match, and the
     /// field is blank, so a second bind (or a bind from another session) is refused. No other path sets the
@@ -1573,10 +1560,17 @@ codeunit 91002 "LC Control State"
     procedure BindClientSession(AttemptId: Text; OpSeq: BigInteger; var Reason: Text): Boolean
     var
         Lease: Record "LC Lease";
+        EndedSession: Record "LC Ended Session";
     begin
         Reason := '';
         if AttemptId = '' then begin
             Reason := 'blank-attempt-id';
+            exit(false);
+        end;
+        // Amendment 4: a session that has ended never runs under a mutant again (the control app caches the active
+        // mutant per session). Refused before any other check or change.
+        if EndedSession.Get(SessionId()) then begin
+            Reason := 'session-ended';
             exit(false);
         end;
         Lease.LockTable();
@@ -1600,6 +1594,47 @@ codeunit 91002 "LC Control State"
             exit(false);
         end;
         Lease."Op Session Id" := SessionId();
+        Lease.Modify();
+        Commit();
+        exit(true);
+    end;
+
+    /// <summary>1.0.0.31 (PR-478, amendments 3 and 4): the bound client session marks its OWN end, as its last step
+    /// after the test run returns. Self-only: it acts only when the op is `client-run`, the attempt and op seq match,
+    /// and "Op Session Id" is the CALLER's SessionId() (> 0). In one transaction it records the caller's id in
+    /// "LC Ended Session" (so the bind refuses it from now on) and sets "Op Session Ended", which is the only thing
+    /// DeactivateForClient accepts as proof the session is gone. A hung or crashed session never marks it.</summary>
+    procedure EndClientSession(AttemptId: Text; OpSeq: BigInteger; var Reason: Text): Boolean
+    var
+        Lease: Record "LC Lease";
+        EndedSession: Record "LC Ended Session";
+    begin
+        Reason := '';
+        Lease.LockTable();
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+        if Lease."Op Kind" <> Lease."Op Kind"::"client-run" then begin
+            Reason := 'not-client-run';
+            exit(false);
+        end;
+        if (AttemptId = '') or (Lease."Op Attempt Id" <> AttemptId) or (Lease."Op Seq" <> OpSeq) then begin
+            Reason := 'op-mismatch';
+            exit(false);
+        end;
+        if SessionId() <= 0 then begin
+            Reason := 'no-session-id';
+            exit(false);
+        end;
+        if Lease."Op Session Id" <> SessionId() then begin
+            Reason := 'not-bound-session';
+            exit(false);
+        end;
+        if not EndedSession.Get(SessionId()) then begin
+            EndedSession.Init();
+            EndedSession."Session Id" := SessionId();
+            EndedSession.Insert();
+        end;
+        Lease."Op Session Ended" := true;
         Lease.Modify();
         Commit();
         exit(true);
@@ -1760,6 +1795,7 @@ codeunit 91002 "LC Control State"
     procedure TryForceResetLease(ExpectedGeneration: Text; var ResetDone: Boolean; var NewGeneration: Text; var NewEpoch: Integer; var Reason: Text)
     var
         Lease: Record "LC Lease";
+        EndedSession: Record "LC Ended Session";
     begin
         ResetDone := false;
         NewGeneration := '';
@@ -1791,7 +1827,10 @@ codeunit 91002 "LC Control State"
         Lease."Op Session Id" := 0;  // R53 — see TryFinishRun.
         Lease."Stopped Op Attempt Id" := '';  // R198 — with the other op fields.
         Lease."Stopped Op Seq" := 0;
+        Lease."Op Session Ended" := false;
         Lease.Modify();
+        // 1.0.0.31 (PR-478, amendment 4): the contract requires an NST restart first, and session ids restart with it.
+        EndedSession.DeleteAll();
         ForceClearActive();
         Commit();
 
