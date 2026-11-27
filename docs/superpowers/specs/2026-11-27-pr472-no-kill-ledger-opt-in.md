@@ -38,3 +38,25 @@ bcdev; the default stays today's (the ledger, plus R1174's re-walk). Measurement
 - **Then:** VERIFY, the gates per legs.ts on the final head with the default (unchanged), and CI.
 - **A note for lethal-bugs:** a LethAL change is a new pin for DOTests; the flag is off unless passed.
 - **Not run now:** the scoped A/B of the real kill cost; it runs only if the default is ever reconsidered.
+
+## Amendment 1 (2026-11-27, from the Opus build review, before any live run)
+- **Correction: a verdict CAN move with the flag on, in one direction only.**
+  - In the default, a mutant is killed if the ledger's order kills it, or, after a survivor, if the R1174 re-walk in the
+    no-ledger order kills it. With the flag, only the no-ledger order counts.
+  - So the flag's kills are a SUBSET of the default's. A kill that happens only in the ledger order, because it rests on state
+    an earlier-run test codeunit left, is a SURVIVOR with the flag.
+  - Arguably that is the more honest verdict, since the kill depended on test order. But it is a verdict move, and the text
+    must say so.
+  - The caveat, the help text and this spec say exactly that: killed -> survived only, for order-dependent kills; never
+    survived -> killed.
+- **The proof on the fixtures, restated:**
+  - expected 0 verdict moves on sandbox-app and sandbox-data with the flag on, since their tests are not written to share
+    state across codeunits;
+  - a move from killed to survived is reported by site key with its killer and the no-ledger walk, and checked to be
+    order-dependent (it is not a BLOCK by itself);
+  - any move from survived or no-coverage to killed, or any other direction, is a BLOCK;
+  - a red test pins the one direction on the R1174 rig.
+- **Resume and lending cannot mix the two modes:** `killLedgerOff` joins the resume fingerprint only when on (as
+  `v3CarryWalkOff` does), and a resume across a change of the flag is refused by name.
+- **Also added:** a test of the CLI-to-session wiring (`runFromCliWithAccept`); the flag's row in README's run-flag table;
+  and the resume message no longer claims a carried kill seeds the ledger when the flag is on.
