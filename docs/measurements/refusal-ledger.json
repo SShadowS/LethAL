@@ -276,8 +276,8 @@
   },
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>",
-    "state": "fixed",
-    "note": "PR-05: 1 previously refused test(s) run on edge-a184cfc79 (PR-05 re-run), none still refused for it (0 now another refusal, 0 not reached) (was: R-983: not examined)",
+    "state": "unexamined",
+    "note": "PR-497: 18 sightings on e5176a9fd (DOTests). A cascade key masks the earlier test's refusal, so it stands for every cause's cascade and one fixed cause cannot make it fixed; a cascade is costed by its earlier test's own family (v3-refusal-cost.ts, PR-492) (was: PR-05: 1 previously refused test(s) run on edge-a184cfc79 (PR-05 re-run), none still refused for it (0 now another refusal, 0 not reached); R-983: not examined)",
     "issue": "#7609, #7924"
   },
   {
@@ -300,9 +300,9 @@
   },
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): part of its reach is not known (<reach>), so it may change anything, so the state it would have left is no",
-    "state": "fixed",
+    "state": "unexamined",
     "repro": "/coord/handoff/R-983/recheck",
-    "note": "R-983: fixed on current (re-run); Bank Deposits files re-run: cascade gone"
+    "note": "PR-497: 763 sightings on e5176a9fd (DOTests; mostly #8592 RelationFieldNo and #8172 GoToKey cascades, PR-492/493). A cascade key masks the earlier test's refusal, so it stands for every cause's cascade and one fixed cause cannot make it fixed; costed by the earlier test's family (v3-refusal-cost.ts) (was: R-983: fixed on current (re-run); Bank Deposits files re-run: cascade gone)"
   },
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>)): it can change session state the analysis does not follow, so the state it would have left is not BC's; th",
@@ -318,9 +318,9 @@
   },
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>)): part of its reach is not known (<reach>), so it may change anything, so the state it would have left is n",
-    "state": "fixed",
+    "state": "unexamined",
     "repro": "/coord/handoff/R-983/recheck",
-    "note": "R-983: fixed on current (re-run); Bank Deposits files re-run: cascade gone"
+    "note": "PR-497: 2 sightings on e5176a9fd (DOTests). A cascade key masks the earlier test's refusal, so it stands for every cause's cascade and one fixed cause cannot make it fixed; costed by the earlier test's family (v3-refusal-cost.ts) (was: R-983: fixed on current (re-run); Bank Deposits files re-run: cascade gone)"
   },
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit, <test>, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (onl",
@@ -1370,9 +1370,9 @@
   },
   {
     "key": "NotRun: out-of-scope: IsolatedStorage.Get of a missing Guid key as a statement (the Key of the error text is not pinned)",
-    "state": "fixed",
+    "state": "unexamined",
     "repro": "/coord/handoff/R-983/repro",
-    "note": "R-983: fixed on current (repro)"
+    "note": "PR-497: still refused on e5176a9fd in another shape (1 DOTests mutant), though R-983's repro cell passes on both 5a58a0f16 and e5176a9fd: the fix covers R-983's shape only; that shape not reduced yet (was: R-983: fixed on current (repro))"
   },
   {
     "key": "NotRun: out-of-scope: MCP Config Implementation.GetAPIQueryPublishers: column N of platform table <x> (N) is not pinned: no corpus test fixes its value (docs/probes-needed.md)",
@@ -1645,9 +1645,9 @@
   },
   {
     "key": "NotRun: out-of-scope: SetFilter: empty filter term",
-    "state": "fixed",
+    "state": "unexamined",
     "repro": "/coord/handoff/R-983/repro",
-    "note": "R-983: fixed on current (repro); BC error now"
+    "note": "PR-497: still refused on e5176a9fd in another shape (2 DOTests mutants, toggle-blank-string), though R-983's 'A|' cell gives BC's error on both 5a58a0f16 and e5176a9fd: the fix covers R-983's shape only; that shape not reduced yet (was: R-983: fixed on current (repro); BC error now)"
   },
   {
     "key": "NotRun: out-of-scope: SetFilter: filter value not evaluated: Integer <value>",
@@ -1817,9 +1817,9 @@
   },
   {
     "key": "NotRun: out-of-scope: use of an OutStream that was never created",
-    "state": "fixed",
+    "state": "unexamined",
     "repro": "/coord/handoff/R-983/repro",
-    "note": "R-983: fixed on current (repro)"
+    "note": "PR-497: still refused on e5176a9fd in another shape (4 DOTests mutants, void-method-call), though R-983's cell passes on both 5a58a0f16 and e5176a9fd: the fix covers R-983's shape only; that shape not reduced yet (was: R-983: fixed on current (repro))"
   },
   {
     "key": "NotRun: out-of-scope: use of an unassigned XmlElement",
@@ -2614,5 +2614,156 @@
     "state": "open",
     "note": "PR-161: refused on edge-4ebfe7913 for Format(Char 'a', 0, '<Number>'); BC 28.4 (bc3, dev-endpoint runner) answers 97, and Format(C) / Format(C, 0, 9) answer the character (invented probe /coord/handoff/PR-161/probe, codeunit 91564); met in a probe helper, no corpus sighting yet",
     "issue": "#8348"
+  },
+  {
+    "key": "NotRun: out-of-scope: the value of field <x> of platform table <x> is not known for field <x> of table <x>, a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8592",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (14: (test 14)); family relationfieldno (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.KeyIndex on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8254",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (8: (mutant 8)); family recordref-not-open (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.Compression.ZipArchive.Dispose: a .NET write over the bytes an AL OutStream held before the call (what the Blob then holds is not pinned)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (5: (test 4, mutant 1)); family zip-archive (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Report.SaveAs as Pdf of report <x>: not measured on BC. Never measured: data items = another tree (measured: one; three top-level; two top-level). Nearest measured rows differ in: data items another",
+    "state": "open",
+    "issue": "#9266",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (5: (mutant 4, test 1)); family saveas-pdf-tree (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an action left another row (another primary key) in Rec with changes to save (not pinned)",
+    "state": "open",
+    "issue": "#7821",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (4: (mutant 4)); family page-row-state (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GoToKey on a list that opened on the last row of its descending view, with more rows above the rows it holds than a window (not pinned)",
+    "state": "open",
+    "issue": "#8172",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (4: (test 4)); family gotokey-descending (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetRange or SetFilter of Code <x> into a BigInteger field in a shape no cell measures (assumption setrange-other-type-convert)",
+    "state": "open",
+    "issue": "#9263",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (4: (mutant 4)); family filter-number-field (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: The test result of an error whose text is not pinned (probe wanted: the missing-object text: it ends with the emit version of the run's BC build, which is not known (the run has no BC build to read",
+    "state": "by-design",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (4: (mutant 4)); unpinned-error-text: by design"
+  },
+  {
+    "key": "NotRun: out-of-scope: SystemRowVersion of a row of Service Invoice Header that the open transaction inserted before a row version sent ahead of it: BC gives the row its row version when it sends it, this runtime the Inse",
+    "state": "open",
+    "issue": "#8993",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (3: (mutant 3)); family rowversion (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: CopyStream from an untouched handle into a DotNet stream",
+    "state": "open",
+    "issue": "#7760",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (2: (mutant 2)); family untouched-handle (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (2: (mutant 2)); family json-writer (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: event getprintername: codeunit <x>.OnAfterFindPrinter subscribes to its publisher by the id N; that BC binds it as it binds the name is measured for other publisher kinds and events only (al-runner",
+    "state": "open",
+    "issue": "#8470",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (2: (mutant 2)); family subscriber-by-id (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: event onafterreleasepurchasedoc: codeunit <x>.OnAfterReleasePurchaseDoc subscribes to its publisher by the id N; that BC binds it as it binds the name is measured for other publisher kinds and event",
+    "state": "open",
+    "issue": "#8470",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (2: (test 2)); family subscriber-by-id (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Record.SetFilter(): a record handed by value whose view the probe did not measure (a filter in filter group N or in a group other than -N, N, N and N, the caller standing in a group other than N and",
+    "state": "open",
+    "issue": "#8596",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (2: (mutant 1, test 1)); family by-value-view (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetFilter: a Boolean filter value under GlobalLanguage N (the words of that language are not pinned)",
+    "state": "by-design",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (2: (test 2)); culture-dependent, answered from Linux BC's culture data, not filed (R1210)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table (not pinned)",
+    "state": "open",
+    "issue": "#8004",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (2: (test 2)); family datacaption-no-source (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a list without the new-row line that lost its only row to an action (not pinned)",
+    "state": "open",
+    "issue": "#7821",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); family page-row-state (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a read of the content of a placeholder Pdf of report Standard Statement (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts wit",
+    "state": "by-design",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); placeholder-pdf: by design"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of Integer N to Date",
+    "state": "unexamined",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); no family or issue yet (one sighting; no BC check)"
+  },
+  {
+    "key": "NotRun: out-of-scope: ordering of the character U+NC (no collation weight)",
+    "state": "open",
+    "issue": "#8203",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); family collation-no-weight (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Report.SaveAs#N to an untouched handle, which is not an OutStream",
+    "state": "open",
+    "issue": "#7760",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); family untouched-handle (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SystemRowVersion of a row of Service Header that the open transaction inserted before a row version sent ahead of it: BC gives the row its row version when it sends it, this runtime the Insert's",
+    "state": "open",
+    "issue": "#8993",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); family rowversion (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the test ends while the error of a duplicate-key Insert into table CDO Setup is deferred: whether the test runner raises it at the end of the test is measured only for the default TransactionModel",
+    "state": "open",
+    "issue": "#8267",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); family deferred-duplicate-insert (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: view condition <x>",
+    "state": "unexamined",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); no family or issue yet (one sighting; no BC check)"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlAttributeCollection method on something else",
+    "state": "open",
+    "issue": "#8486",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); family xml-attribute-collection (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlNode as XML content (only XML nodes and text are pinned)",
+    "state": "open",
+    "issue": "#8084",
+    "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); family xml-node (v3-refusal-cost.ts, PR-492/493)"
   }
 ]

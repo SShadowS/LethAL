@@ -234,6 +234,9 @@
     "cls": "platform table *: has no provider",
     "raw": "NotRun: out-of-scope: platform table 'Tenant Media Set' (2000000183) has no provider"
   },
+  "NotRun: out-of-scope: RecordRef.KeyIndex on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
   "NotRun: out-of-scope: RecordRef.CopyLinks on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
     "cls": "RecordRef.* on a RecordRef that is not open"
   },

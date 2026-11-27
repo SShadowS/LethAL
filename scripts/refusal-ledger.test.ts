@@ -171,7 +171,8 @@ describe("the ledger", () => {
     );
     expect(rows.map((r) => [r.key, r.entry?.state])).toEqual([
       [`${NR}SetFilter: an empty filter term`, undefined],
-      [`${NR}SetFilter: empty filter term`, "fixed"],
+      // PR-497: reopened from "fixed" (still refused on e5176a9fd in a shape R-983's repro does not cover)
+      [`${NR}SetFilter: empty filter term`, "unexamined"],
     ]);
     const out = render(rows);
     expect(out).toContain("1 known, 1 NEW");
