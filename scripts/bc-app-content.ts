@@ -49,6 +49,8 @@ export const SERVERS = {
   bc3: { odata: 7248, dev: 7249, api: 7252 },
   /** BC 29 W1 (29.0.54011.57673), not 28.4 like bc1-bc3; `--server all` skips it (bc-linux-setup.ts). */
   bc4: { odata: 7448, dev: 7449, api: 7452 },
+  /** A second BC 29 W1 (owner, 2026-11-27, for PR-427's split runs beside bc4); `--server all` skips it too. */
+  bc5: { odata: 7548, dev: 7549, api: 7552 },
 } as const;
 export type ServerName = keyof typeof SERVERS;
 
