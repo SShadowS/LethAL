@@ -11,7 +11,7 @@ import { compareAppVersions, confirmedDowngradeRefusal } from "./app-version";
 import type { PublishIdentity } from "./app-version";
 import { AlcCompileError, type ArtifactCompiler } from "./artifact";
 import { type BoundArtifact, type PublishedPackageRead, isUnread } from "./backend";
-import { hashPackage } from "./baseline-snapshot";
+import { appContentIdentity, hashPackage } from "./baseline-snapshot";
 import {
   type DeploymentVerification,
   type PublishOutcome,
@@ -83,6 +83,12 @@ export interface CompiledTestApp {
    * `package:` identity compare with (R931); `sha256` stays the raw file hash the publishers check.
    */
   readonly packageHash: string;
+  /**
+   * PR-476: `appContentIdentity` of the compiled bytes: the cross-session identity (`package:c2:...`)
+   * verify records, equal to what a later bcdev session reads from the served copy. The publish
+   * read-back still compares `packageHash`: a republish of the same source must not look accepted.
+   */
+  readonly identity: string;
   /** From testDir/app.json. */
   readonly appId: string;
   readonly name: string;
@@ -281,10 +287,12 @@ export async function compileTestApp(a: {
       if (err instanceof AlcCompileError) throw new TestAppError("compile-failed", err.message);
       throw err;
     }
+    const compiledBytes = new Uint8Array(await readFile(out.appPath));
     return {
       appPath: out.appPath,
       sha256: out.sha256,
-      packageHash: hashPackage(new Uint8Array(await readFile(out.appPath))),
+      packageHash: hashPackage(compiledBytes),
+      identity: appContentIdentity(compiledBytes),
       appId: manifest.id,
       name: manifest.name,
       publisher: manifest.publisher,

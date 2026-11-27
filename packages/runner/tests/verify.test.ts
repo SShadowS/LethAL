@@ -2386,6 +2386,9 @@ describe("C02-09: gap ids", () => {
           appPath: "t.app",
           sha256: "e".repeat(64),
           packageHash: "e".repeat(64),
+          // PR-476: deliberately NOT `package:${packageHash}`, so a verify that hand-builds its
+          // recorded identity from `packageHash` is told apart from one that uses the shared value.
+          identity: `package:c2:${"d".repeat(64)}`,
           appId: APP,
           name: "T",
           publisher: "p",
@@ -3931,6 +3934,18 @@ describe("C02-09: gap ids", () => {
       expect(out.results.map((r) => r.id)).toEqual(["0/M0001"]);
       expect(out.counts).toEqual({ killed: 1, survived: 0, error: 0, skipped: 0 });
       expect(out.exitCode).toBe(VERIFY_EXIT.ok);
+      w.store.close();
+    });
+
+    // PR-476 site #3: the identity verify records is `compiled.identity` (the shared c2 function's
+    // value), never `package:` + `packageHash` built by hand. Red if verify builds it by hand.
+    test("PR-476: the verify run records the compiled test app's shared identity", async () => {
+      const w = await sameWorld([inPost("M0001", "survived")], { target: { M0001: killedBy(N1) } });
+      await w.verify(["0/M0001"]);
+      const rows = w.store.db
+        .query("SELECT test_app_hash AS h FROM runs WHERE backend = 'lethal-verify'")
+        .all() as Array<{ h: string }>;
+      expect(rows.map((r) => r.h)).toEqual([`package:c2:${"d".repeat(64)}`]);
       w.store.close();
     });
 

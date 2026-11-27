@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { readPackageEntry } from "../src/app-package";
 import { AlcCompileError, ArtifactCompiler, ArtifactPrepareError } from "../src/artifact";
 import type { BoundArtifact, PublishedPackageRead } from "../src/backend";
-import { hashPackage, testAppHashFor } from "../src/baseline-snapshot";
+import { appContentIdentity, hashPackage, testAppHashFor } from "../src/baseline-snapshot";
 import { decidePublishOutcome } from "../src/deployment-verifier";
 import type { LeaseFence } from "../src/orchestrator";
 import {
@@ -28,6 +28,7 @@ import {
   symbolPackageId,
 } from "../src/test-app-publish";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { entriesOf, navxPackage } from "./helpers/navx-package";
 import { removeScratchDirs } from "./helpers/scratch";
 import { CAUSES, HTTP_500, UNREAD } from "./helpers/unread";
 
@@ -148,6 +149,10 @@ test("compileTestApp compiles against the bound artifact, never the stale target
     version: "1.0.0.2",
     compiledAgainst: { artifactId: fx.target.artifactId, sha256: fx.target.sha256 },
   });
+  // PR-476: the identity verify records is the shared function's value over the compiled bytes
+  // (these fake bytes are not NAVX-shaped, so it is the old form here).
+  expect(app.identity).toBe(appContentIdentity(new TextEncoder().encode("compiled-test-app")));
+  expect(app.identity).toBe(`package:${app.packageHash}`);
 });
 
 test("compileTestApp stages target.appBytes into the scratch cache, never a re-read of appPath", async () => {
@@ -596,6 +601,7 @@ const COMPILED: CompiledTestApp = {
   appPath: "C:/out/x-testapp.app",
   sha256: hashPackage(NEW),
   packageHash: hashPackage(NEW),
+  identity: `package:${hashPackage(NEW)}`,
   appId: TESTS_ID,
   name: "LethAL Sandbox Tests",
   publisher: "LethAL",
@@ -674,6 +680,28 @@ test("publishTestApp: a server read-back that differs from the compiled file onl
   );
   expect(err).toBeInstanceOf(TestAppError);
   expect((err as TestAppError).message).toContain("not the compiled");
+});
+
+// PR-476 test 6: the publish read-back is within-session, so it keeps `hashPackage`. A read-back
+// with the SAME c2 identity but other bytes (a republish of the same source, a different entry time)
+// is NOT the compiled package. Red if the compare used `appContentIdentity`.
+test("publishTestApp: a read-back with the same c2 identity but another hashPackage is not accepted (PR-476)", async () => {
+  const compiled = navxPackage({ id: 1, level: "stored", time: 0, entries: entriesOf() });
+  const served = navxPackage({ id: 2, level: 9, time: 0x4321, entries: entriesOf() });
+  expect(appContentIdentity(served)).toBe(appContentIdentity(compiled));
+  expect(hashPackage(served)).not.toBe(hashPackage(compiled));
+  const C: CompiledTestApp = {
+    ...COMPILED,
+    packageHash: hashPackage(compiled),
+    identity: appContentIdentity(compiled),
+  };
+  const err = await publishTestApp(loggingFence([]), C, deps([], [OLD, served])).catch((e) => e);
+  expect(err).toBeInstanceOf(TestAppError);
+  expect((err as TestAppError).message).toContain("not the compiled");
+  // Control: the very bytes read back are accepted (a re-stamped package id alone, R-931).
+  const same = navxPackage({ id: 9, level: "stored", time: 0, entries: entriesOf() });
+  const ok = await publishTestApp(loggingFence([]), C, deps([], [OLD, same])).catch((e) => e);
+  expect(ok).not.toBeInstanceOf(Error);
 });
 
 test("publishTestApp refuses a local version below the resident one before the fence", async () => {

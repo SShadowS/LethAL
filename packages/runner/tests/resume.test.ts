@@ -3973,7 +3973,7 @@ describe("R247: no verdict crosses a test-app change", () => {
         const backend = new PackageBackend(APP_B);
         await expect(again(r, backend, { resume: target(r.runId) })).rejects.toThrow(
           new RegExp(
-            `^${flag(r.runId)}: run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is ${hashOf(APP_B)}\\. .*version stamp.*byte for byte.*\\(R247, R495\\)\\. Drop the resume flag to run from scratch\\.$`,
+            `^${flag(r.runId)}: run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is ${hashOf(APP_B)}\\. .*A recompile that changes only the build timestamp no longer counts.*\\(R247, R495\\)\\.( Note: the prior run's test-app identity is the pre-R1234 form.*)? Drop the resume flag to run from scratch\\.$`,
           ),
         );
         expect(backend.deploys).toBe(0);

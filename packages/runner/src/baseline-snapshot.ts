@@ -33,6 +33,7 @@ import {
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
 } from "@lethal/schemata";
+import { packageEntries } from "./app-package";
 import {
   type PackageUnread,
   type PublishedPackageRead,
@@ -557,44 +558,127 @@ export function decodeSource(bytes: Buffer): string {
  */
 export function hashPackage(bytes: Uint8Array): string {
   const h = createHash("sha256");
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const navx =
-    bytes.byteLength >= 40 &&
-    dv.getUint32(0, true) === 0x5856414e &&
-    dv.getUint32(4, true) === 40 &&
-    dv.getUint32(8, true) === 2 &&
-    dv.getUint32(36, true) === 0x5856414e &&
-    dv.getBigUint64(28, true) === BigInt(bytes.byteLength - 40);
-  if (!navx) return h.update(bytes).digest("hex");
+  if (!hasNavxShape(bytes)) return h.update(bytes).digest("hex");
   h.update(bytes.subarray(0, 12));
   h.update(new Uint8Array(16));
   h.update(bytes.subarray(28));
   return h.digest("hex");
 }
 
+/** The one NAVX shape check `hashPackage` and `appContentIdentity` share: "NAVX" at 0 and 36, header
+ *  length 40, format version 2, and the u64 at 28 equal to the bytes after the header. */
+function hasNavxShape(bytes: Uint8Array): boolean {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return (
+    bytes.byteLength >= 40 &&
+    dv.getUint32(0, true) === 0x5856414e &&
+    dv.getUint32(4, true) === 40 &&
+    dv.getUint32(8, true) === 2 &&
+    dv.getUint32(36, true) === 0x5856414e &&
+    dv.getBigUint64(28, true) === BigInt(bytes.byteLength - 40)
+  );
+}
+
 /**
- * The test app's identity for the snapshot key. The published package when the backend can read
- * it (bcdev), else the test project's own `.al` tree (al-runner compiles the test bundle itself, so
- * the source IS what runs). `undefined` when neither can be established, which means "do not
- * reuse": an unknown test app is not an unchanged one. R630: a failed package read is returned AS
- * ITSELF (`{ unread }`), so a refusal can name its cause; it is never a hash.
+ * PR-476 (R1234): `NavxManifest.xml` with the value of the ONE `Timestamp` attribute of the ONE
+ * `<Build` element emptied, or the bytes unchanged. It blanks only when exactly one `<Build` element
+ * carries exactly one attribute named exactly `Timestamp` (so not `XTimestamp`); anything else is
+ * hashed as it is (fail closed).
+ */
+function blankBuildTimestamp(manifest: Buffer): Buffer {
+  const text = manifest.toString("latin1"); // a byte-exact round trip
+  const builds = [...text.matchAll(/<Build(?=[\s/>])(?:"[^"]*"|'[^']*'|[^>"'])*>/g)];
+  const [build] = builds;
+  if (builds.length !== 1 || build === undefined) return manifest;
+  const stamps = [...build[0].matchAll(/\s+([^\s=/>"']+)\s*=\s*("[^"]*"|'[^']*')/g)].filter(
+    (a) => a[1] === "Timestamp",
+  );
+  const [stamp] = stamps;
+  if (stamps.length !== 1 || stamp === undefined) return manifest;
+  const whole = stamp[0];
+  const quote = stamp[2]?.[0] ?? '"';
+  const blanked = whole.slice(0, whole.indexOf(quote)) + quote + quote;
+  const at = (build.index ?? 0) + (stamp.index ?? 0);
+  return Buffer.from(text.slice(0, at) + blanked + text.slice(at + whole.length), "latin1");
+}
+
+/**
+ * PR-476 (R1234): a test app's identity that survives a RECOMPILE of unchanged source, for the
+ * identities stored and compared ACROSS sessions: `package:c2:<hex>`. A NAVX-shaped package is hashed
+ * by content: the header without the package id (12..27) and the zip length (28..35), then every zip
+ * entry (name, size, sha256 of its bytes) sorted by name, with only the Build Timestamp value in
+ * `NavxManifest.xml` blanked. The zip's entry times and deflate bytes never enter. Any other shape
+ * (signed, wrapped, unknown) gives `package:<hashPackage>`, as before. `packageEntries` THROWS on a
+ * package it cannot read, so there is never a partial digest. Within ONE session `hashPackage`
+ * stays the drift signal: the same c2 with a moved `hashPackage` means something was PUBLISHED.
+ */
+export function appContentIdentity(bytes: Uint8Array): string {
+  if (!hasNavxShape(bytes)) return `package:${hashPackage(bytes)}`;
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const lines: Array<{ name: Buffer; line: string }> = [];
+  const walk = packageEntries(buf);
+  let step = walk.next();
+  while (step.done !== true) {
+    const e = step.value;
+    const data = e.name === "NavxManifest.xml" ? blankBuildTimestamp(e.data) : e.data;
+    const sha = createHash("sha256").update(data).digest("hex");
+    lines.push({ name: e.nameBytes, line: `E ${e.name}\t${e.uncompressedSize}\t${sha}\n` });
+    step = walk.next();
+  }
+  const h = createHash("sha256")
+    .update(buf.subarray(0, 12))
+    .update(buf.subarray(36, step.value.headerEnd))
+    .digest("hex");
+  lines.sort((a, b) => Buffer.compare(a.name, b.name));
+  const all = createHash("sha256").update(`H ${h}\n`);
+  for (const l of lines) all.update(l.line);
+  return `package:c2:${all.digest("hex")}`;
+}
+
+/** One served test-app read: `identity` is the cross-session key (`appContentIdentity`), `bytesHash`
+ *  is `package:` + `hashPackage`, the within-session republish signal (PR-476). A `source:` read has
+ *  both equal. */
+export interface TestAppRead {
+  readonly identity: string;
+  readonly bytesHash: string;
+}
+
+/**
+ * The test app's identity for the snapshot key: `testAppReadFor`'s `identity`. The published package
+ * when the backend can read it (bcdev), else the test project's own `.al` tree (al-runner compiles
+ * the test bundle itself, so the source IS what runs). `undefined` when neither can be established,
+ * which means "do not reuse": an unknown test app is not an unchanged one. R630: a failed package
+ * read is returned AS ITSELF (`{ unread }`), so a refusal can name its cause; it is never a hash.
  */
 export async function testAppHashFor(
   fetchPackage: (() => Promise<PublishedPackageRead>) | undefined,
   testDir: string,
-  /** R631: only a test forces `"skip"`; a skipped link still makes the answer `undefined`. */
   links: LinkPolicy = "refuse",
 ): Promise<string | PackageUnread | undefined> {
+  const r = await testAppReadFor(fetchPackage, testDir, links);
+  return r === undefined || "unread" in r ? r : r.identity;
+}
+
+/** `testAppHashFor` with both values of the read: the cross-session identity and the bytes hash. */
+export async function testAppReadFor(
+  fetchPackage: (() => Promise<PublishedPackageRead>) | undefined,
+  testDir: string,
+  /** R631: only a test forces `"skip"`; a skipped link still makes the answer `undefined`. */
+  links: LinkPolicy = "refuse",
+): Promise<TestAppRead | PackageUnread | undefined> {
   if (fetchPackage !== undefined) {
     const bytes = await fetchPackage();
-    if (bytes instanceof Uint8Array) return `package:${hashPackage(bytes)}`;
+    if (bytes instanceof Uint8Array) {
+      return { identity: appContentIdentity(bytes), bytesHash: `package:${hashPackage(bytes)}` };
+    }
     // R630 review I1: explicit, before the fall-through below. The read failed, which is not the
     // same as "no package concept", and must never become the source tree's hash.
     if (isUnread(bytes)) return bytes;
     // `undefined`: the backend cannot form the request (env-tool path). Fall through to source.
   }
   try {
-    return `source:${await hashTestDir(testDir, links)}`;
+    const source = `source:${await hashTestDir(testDir, links)}`;
+    return { identity: source, bytesHash: source };
   } catch {
     return undefined;
   }

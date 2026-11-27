@@ -53,6 +53,7 @@ import type {
 import * as baselineSnapshotModule from "../src/baseline-snapshot";
 import {
   SourceSnapshotUnreadableError,
+  appContentIdentity,
   hashPackage,
   hashTargetSource,
   testAppHashFor,
@@ -199,6 +200,7 @@ import {
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { sameContentOtherBytes } from "./helpers/navx-package";
 import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import {
@@ -3961,6 +3963,44 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
           `package:${hashPackage(PA)}`,
           true,
         ]);
+      });
+
+      // PR-476 test 5 (the baseline re-read): two reads with the SAME c2 identity and another
+      // hashPackage are a republish. The re-read compares bytesHash, so it is TestAppChangedError and
+      // withdraws the proof; compared as c2 it would be "unchanged-endpoints" (or R686's refusal) and
+      // keep the proof. Revert: compare `identity` at the re-read or in `testAppRefusal`'s input.
+      test("PR-476: the same c2 and another hashPackage at the re-read is TestAppChangedError, and withdraws the proof", async () => {
+        const [W1, W2] = sameContentOtherBytes(testAppPackage("1.0.0.0"));
+        expect(appContentIdentity(W1)).toBe(appContentIdentity(W2));
+        expect(hashPackage(W1)).not.toBe(hashPackage(W2));
+        const dirs = await qualProject();
+        await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+        const backend = new QualificationBackend(missingFor);
+        const run = backend.run.bind(backend);
+        let baselineRan = false;
+        const served = () => (baselineRan ? W2 : W1);
+        const store = new ResultsStore(":memory:");
+        const err = await runSession({
+          backend: Object.assign(backend, {
+            fetchPublishedAppPackage: async () => served(),
+            microsoftMode: () => servedIsInstalled(served),
+            run: (ref: TestMethodRef, opts: RunOpts) => {
+              baselineRan = true;
+              return run(ref, opts);
+            },
+          }),
+          store,
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(TestAppChangedError);
+        expect((err as Error).message).toContain(`package:${hashPackage(W1)}`);
+        expect((err as Error).message).toContain(`package:${hashPackage(W2)}`);
+        const row = store.getRun(1);
+        expect([row?.testAppHash, row?.testAppProven]).toEqual([null, false]);
       });
 
       test("12: A -> A is StaleTestAppError, cause unchanged-endpoints", async () => {
@@ -12623,6 +12663,105 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         drifted(r, null);
         r.store.close();
       });
+      // PR-476 test 5, once per builder of `TestAppIdentity`. Two NAVX packages with the same c2
+      // identity and another hashPackage (a republish of unchanged source): within a session that is
+      // drift. Red if `assertNoTestAppDrift` compared c2 (nothing would throw), or if a builder left
+      // `bytesHash` out (a compile error: the field is required).
+      const [W1, W2] = sameContentOtherBytes(P2);
+      const sameC2 = () => {
+        expect(appContentIdentity(W1)).toBe(appContentIdentity(W2));
+        expect(hashPackage(W1)).not.toBe(hashPackage(W2));
+      };
+      const driftOf = (r: { outcome: unknown }) => {
+        expect(r.outcome).toBeInstanceOf(TestAppDriftedError);
+        const e = r.outcome as TestAppDriftedError;
+        expect([e.proven, e.now]).toEqual([
+          `package:${hashPackage(W1)}`,
+          `package:${hashPackage(W2)}`,
+        ]);
+      };
+      test("PR-476 (5, no-hook builder): the same c2 and another hashPackage at a batch is drift", async () => {
+        sameC2();
+        const r = await envRun({
+          noHook: true,
+          pre: W1,
+          post: W1,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          preSequence: [W1, W1, W1, W2],
+          dirs: await twoBatches(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        driftOf(r);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        r.store.close();
+      });
+      test("PR-476 (5, env-tool hook builder): the same c2 and another hashPackage after the read-back is drift", async () => {
+        sameC2();
+        const r = await envRun({
+          post: W1,
+          postSequence: [W1, W1, W2],
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          dirs: await twoBatches(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        driftOf(r);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        r.store.close();
+      });
+      // PR-476 test 7 (r2a #4), the env-tool resume's TestAppRepublishedError: the prior recorded
+      // `package:<hex>` (a run before R1234, or a package LethAL does not content-hash), this session
+      // proves a c2 identity. The refusal names both causes. Red if the sentence is dropped there.
+      test("PR-476 (7): an old-form prior refused by the env-tool resume names both causes", async () => {
+        const a = await envRun({ post: P2 });
+        expect(a.outcome).not.toBeInstanceOf(Error);
+        expect(a.store.getRun(a.runId)?.testAppHash).toMatch(/^package:[0-9a-f]{64}$/);
+        const r = await envRun({
+          post: W1,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          dirs: a.dirs,
+          store: a.store,
+          extra: { resume: a.runId },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+        const msg = (r.outcome as Error).message;
+        expect(msg).toContain(
+          "the prior run's test-app identity is the pre-R1234 form (package:<hex>)",
+        );
+        expect(msg).toContain(
+          "or a package LethAL does not content-hash (signed or of unknown shape)",
+        );
+        r.store.close();
+      });
+      // PR-476 r2a #3 and test 9: a session that reads a NAVX-shaped package stores the c2 identity
+      // (the shared function's value for those bytes) in the run row AND in every snapshot row, and
+      // never its `hashPackage` twin. Red if `bytesHash` is stored in either place.
+      for (const builder of ["no-hook", "env-tool hook"] as const) {
+        test(`PR-476 (r2a #3, 9): a ${builder} session stores package:c2 in the run row and the snapshot rows`, async () => {
+          const r =
+            builder === "no-hook"
+              ? await envRun({
+                  noHook: true,
+                  pre: W1,
+                  post: W1,
+                  installed: { [APP_ID]: ["1.0.0.2"] },
+                })
+              : await envRun({ post: W1, installed: { [APP_ID]: ["1.0.0.2"] } });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          const c2 = await testAppHashFor(async () => W1, "/nonexistent");
+          expect(c2).toMatch(/^package:c2:[0-9a-f]{64}$/);
+          const row = r.store.getRun(r.runId);
+          expect(row?.testAppProven).toBe(true);
+          expect(row?.testAppHash).toBe(c2 as string);
+          const snaps = r.store.db
+            .query("SELECT test_app_hash AS h FROM baseline_snapshots WHERE run_id = ?")
+            .all(r.runId) as Array<{ h: string }>;
+          expect(snaps.length).toBeGreaterThan(0);
+          for (const s of snaps) expect(s.h).toBe(c2 as string);
+          const stored = [row?.testAppHash, ...snaps.map((s) => s.h)].join("\n");
+          expect(stored).not.toContain(hashPackage(W1));
+          r.store.close();
+        });
+      }
       // R630 C2 (review I1): an unread package at a batch is the same refusal, `.now` stays
       // undefined (never the `source:` fall-through), and the message names the read's cause.
       // Revert (drop `testAppHashFor`'s unread branch): `.now` is a `source:` hash.
@@ -22526,6 +22665,7 @@ const COMPILED: CompiledTestApp = {
   appPath: "C:/out/x-testapp.app",
   sha256: hashPackage(NEW),
   packageHash: hashPackage(NEW),
+  identity: `package:${hashPackage(NEW)}`,
   appId: TESTS_ID,
   name: "LethAL Sandbox Tests",
   publisher: "LethAL",

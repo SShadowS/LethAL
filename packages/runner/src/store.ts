@@ -268,7 +268,12 @@ export interface PublishOutcomeRow {
  *  fingerprint (R-371's `dependencyFingerprint`, taken under the lease). Both must equal a run's
  *  for that run to lend anything. */
 export interface TestAppIdentity {
+  /** The cross-session identity (`appContentIdentity`: `package:c2:...`, or `source:`): what is stored. */
   readonly hash: string;
+  /** PR-476: the within-session republish signal (`package:` + `hashPackage`, or the same `source:`).
+   *  Compared by the drift check and the baseline-refusal re-read; NEVER stored. REQUIRED, so no
+   *  builder can leave the drift check without its input. */
+  readonly bytesHash: string;
   readonly deps: string;
 }
 
@@ -2810,7 +2815,7 @@ export class ResultsStore {
      *  app, or an unknown one (`undefined` here, NULL on the run), is not evidence: a new test is
      *  exactly what might kill it. No key is returned then. R496: the identity is the hash AND the
      *  dependency fingerprint; a run with other or NULL deps yields no keys. */
-    testApp: TestAppIdentity | undefined,
+    testApp: Pick<TestAppIdentity, "hash" | "deps"> | undefined,
     /** R214: this build's effective symbols. A latest run built under another set, or an
      *  unrecorded one, yields no keys. */
     buildSymbols: readonly string[],
