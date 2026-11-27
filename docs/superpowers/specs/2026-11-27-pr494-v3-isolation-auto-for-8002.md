@@ -1,7 +1,11 @@
 # PR-494: can LethAL lift al-runner #8002's refusals by itself? Measured on DOTests' Email area
 
-**Status:** measured, 2026-11-27 (lethal-code). **Waiting for the orchestrator's ruling.** Changing DOTests' v3
-config is a pin change for lethal-bugs. Evidence is in `/coord/handoff/PR-494/`, which is PRIVATE because it
+**Status:** measured, 2026-11-27 (lethal-code). **Ruled (orchestrator, 2026-11-27): NO-GO for DO.** About 12
+times the cost per covered mutant cannot be paid for by 152 kills, and DO speed is the owner's first priority. So
+the 3 h recovery check is skipped: its answer could not change the decision.
+- **Reopen when either:** #8002 is fixed upstream (then `test` mode runs these tests at its own cost), or `method`
+  isolation becomes much cheaper in al-runner.
+- **The cost figure went to alrunner** for #8002 (kraken, PR-494). Evidence is in `/coord/handoff/PR-494/`, which is PRIVATE because it
 holds DO data; only counts and test names appear here.
 
 ## The question
@@ -85,7 +89,7 @@ holds DO data; only counts and test names appear here.
 - **For DO's full project** (43,511 mutants), `auto` as it is would multiply the mutation phase by an order of
   magnitude.
 
-## Recommendation (for the ruling)
+## Recommendation (the ruling took 1 and 3, and skipped 2)
 1. **Do not set `auto` in DOTests' v3 config now.**
    - Its baseline is clean (0 moves, 88 tests recovered).
    - But it is about 12 times slower per covered mutant.
