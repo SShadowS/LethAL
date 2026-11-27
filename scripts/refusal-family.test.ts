@@ -2238,6 +2238,26 @@ describe("PR-488: the numbers-text family", () => {
     expect(f.cells.filter((c) => c.type === "NT Case")).toHaveLength(7);
   });
 
+  // Red: a cell answering a bare number (`nt(..., "D")`): `Error('V:[%1]', D)` formats it in the session's culture.
+  test("every answer is a Format(x, 0, 9), a bracketed text, or a named text source", () => {
+    const TEXT_SOURCES = new Set([
+      "T5",
+      "C5",
+      "GetLastErrorText()",
+      "H.CollectOneCount()",
+      "H.HasCollectedInRun()",
+    ]);
+    for (const c of f.cells) {
+      const expr = c.call.replace(/^Error\('V:\[%1\]', /, "").replace(/\);$/, "");
+      const ok = expr.startsWith("Format(") || expr.startsWith("'[' + ") || TEXT_SOURCES.has(expr);
+      expect({ cell: `${c.type}/${c.method}`, expr, ok }).toEqual({
+        cell: `${c.type}/${c.method}`,
+        expr,
+        ok: true,
+      });
+    }
+  });
+
   // Red: a Format without `, 0, 9` (a number in the session's format, R1210), or a call to Evaluate.
   test("every Format is Format(x, 0, 9) and no cell calls Evaluate", () => {
     let n = 0;

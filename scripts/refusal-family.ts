@@ -132,7 +132,7 @@ const BC4_LINUX = {
   server: "bc4",
   build: "BC 29.0.54011.57673 W1, en-US session",
 } as const;
-/** PR-488: bc1's BC-check runs (PR-487, PR-488). */
+/** PR-488: bc1's BC-check runs with culture cells (numbers-text; errors-temp ran on bc1 too but has none). */
 const BC1_LINUX = {
   os: "linux",
   server: "bc1",
