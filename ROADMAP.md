@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 1197 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**71 of 1197 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1239,7 +1239,7 @@ that ordering is the priority.
 - **R1222** · spec-after-retention.test.ts's heap tests (RUST-03 S4.2c) run close to the 5 s per-test timeout and time out in full VERIFY under ordinary load, with io pressure low enough that VERIFY keeps 5 s · [R1222.md](docs/roadmap/R1222.md) · done (1d361afc5)
 - **R1224** · R590's dependency-skip check awaits a setImmediate after every serve answer; in Bun 1.4.4 a pending setImmediate on a loop with no I/O due waits for the next unrelated timer (measured ~0.9 s per wait in a test rig), so the wait's cost depends on whatever else is scheduled · [R1224.md](docs/roadmap/R1224.md) · done (f28587645, PR-448)
 - **R1225** · selectLegs runs the four BC legs for al-runner-v3-only files (al-runner-server.ts, al-runner-v3-*.ts, the v3 itests), because the packages/runner/ row unions them in: 10 of the last 30 merges were v3-only by path alone (~3.7 lease-hours where logged) · [R1225.md](docs/roadmap/R1225.md) · closed 2026-11-25 — measured by PR-450: the premise fails for packages/runner/src…
-- **R1229** · --resume cannot carry decided verdicts across a BC restart that lost the database, even when the re-setup republished the same apps and the fresh baseline equals the stored one: three bc4 restarts on 2026-11-26 voided about 2,800 verdicts (R680's refusal) · [R1229.md](docs/roadmap/R1229.md) · built (PR-468, branch lethal/pr-468); live restart leg pending
+- **R1229** · --resume cannot carry decided verdicts across a BC restart that lost the database, even when the re-setup republished the same apps and the fresh baseline equals the stored one: three bc4 restarts on 2026-11-26 voided about 2,800 verdicts (R680's refusal) · [R1229.md](docs/roadmap/R1229.md) · done (PR-468) — survivors-only --resume across a lost-database restart; live leg…
 - **R1230** · R496's dependency fingerprint hashes the RAW served System package, which BC re-zips with fresh DOS timestamps on every download, so `test_app_deps` changes across restarts (and across days) with identical content: hash System by zip content (entry name, CRC-32, size) · [R1230.md](docs/roadmap/R1230.md) · done (0442db0c2)
 - **R1233** · LethAL SIGTERMs a serve daemon at once after its shutdown reply, so al-runner's pending workspace-cache write is lost (al-runner #9232): a recycled daemon compiles again instead of reading the cache · [R1233.md](docs/roadmap/R1233.md) · open, filed 2026-11-27 (coord PR-470)
 
