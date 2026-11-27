@@ -247,3 +247,87 @@ Evidence: `/coord/handoff/PR-478/spec-recheck.md`. Ruling (lethal-orchestrator):
 - **The throwaway Windows BC:** asked of kraken when 478a's AL is built, not before (ruling).
 - **Stale wording fixed by this amendment:** §1's "1.0.0.30 present" is now 1.0.0.31 (A1); §3 is completed by A3; §6's
   TestPage line also names R1170 (6) (a known-green test that uses a page part must pass first).
+
+## Amendment 2 (2026-11-27, coord PR-478; the spec-adversary's r1 review and the orchestrator's rulings)
+Evidence: `/coord/handoff/PR-478/adversary-r1.md`. Amendment 2 overrides Amendment 1 where they differ.
+
+### B1. The grouping unit: ONE fresh session per TEST CODEUNIT (ruling; replaces A2's "per mutant" and A4's order)
+- Page 130455 runs a codeunit's methods in one isolation, so the methods of one codeunit see each other's writes. Running
+  only a mutant's covering methods, with a method in between switched off, changes what the baseline measured, and the
+  resulting failure reproduces: a false kill.
+- **So the unit is the test codeunit, in a fresh client session, for the baseline, the coverage run and every mutant.**
+  - Per mutant and per covering codeunit, run the codeunit's methods in DECLARED order, from its first method up to and
+    including its last covering method.
+  - No method inside that prefix is ever switched off.
+  - Each such codeunit run is a new session (open, page 130455, run, close).
+- **Confirmation and reproduction replay exactly the same selection** (the same codeunit, the same prefix, a fresh session).
+  - Results are joined by (codeunit, method, line no.), never by request position.
+  - `reproduceKill` and `confirmWarm` use this replay on this backend, or refuse it by name; their position arguments are
+    not used.
+- **The kept-session path is WITHDRAWN (ruling).** No fixture probe can prove "no leak" for a real project, because BaseApp
+  alone holds many SingleInstance codeunits. PR-480 (478c) keeps only the other cuts (for example folding the attestation
+  read into the next activation), each measured.
+- **R1235's closure narrows** to "within a codeunit": codeunits run in a fixed order, each in its own session, so the order
+  across codeunits is not CI's.
+
+### B2. Never mixed (completes A1; 478b)
+- **A `bcdev-client` run is stored under its own backend kind.** Today `backendName = buildBackend.kind` would store
+  `bcdev`.
+- **Lending:** `backendBuildRefusal` gains an equality arm on the backend kind for non-v3 pairs.
+- **Snapshots:** `findBaselineSnapshot`'s query gains a backend predicate.
+- **Kind branches:** every `isBcdev(...)` and `kind !== "al-runner-v3"` branch is audited with an exhaustive switch, and
+  the list goes into 478b's pre-commitment. `backendSessionKind` returns `client` for the new kind.
+- **R1174's re-walk** and R197's ledger are explicitly off in client mode.
+- **Red tests, one per direction** (client into headless, and headless into client), for each of resume, resume-run,
+  lending, snapshot reuse and compare.
+
+### B3. Control 1.0.0.31 additions (completes A3; 478a)
+- **Overrun (ruling):** no stop, recover or deactivate path tombstones a `client-run` op until a read of `Active Session`
+  shows its bound session gone.
+  - On an overrun the driver sends neither a stop nor a deactivate. The op stays in flight, and the next acquire reads
+    `operation-orphaned`.
+  - A dead client session is retried only after the same proof.
+- **The session binds itself:** inside the op, the small page sets `Op Session Id := SessionId()`, only when the op is
+  `client-run`, the op id matches and the field is blank. The writer gate and the stop key on that bound value, never on an
+  id the client supplied.
+- **Both per-method subscribers are gated:** the observation reset (`OnBeforeTestMethodRun`) is gated exactly like the
+  writer. A headless `RunMutantMany` therefore keeps its latched identity mismatch.
+  - A source pin covers this, plus a red test: a mismatch in method 1 still answers `identityMismatch = true` at the end
+    of a headless RunMany.
+- **The expected identity in a client session:** outside an op, loading or refreshing the tuple from the row also sets
+  `ExpectedTargetAppId` and `ExpectedArtifactId` from that row. A stale artifact's guard then still latches a mismatch, and
+  a red check covers it.
+- **An unreached method:** the row carries `Loaded` (or `GuardCalls`). A row with `Loaded = false` is accepted only when
+  nothing was observed. The writer never reads the tuple table, so it attests what the session loaded.
+- **The writer:** `InherentPermissions` on its own table and on the lease read; the table is `DataPerCompany = false`.
+- **`ActivateForClient`:** ends with the serving OData session's in-memory state reset (pinned), because the deactivate may
+  land in another pooled session.
+
+### B4. Verdicts and read-backs (478b)
+- **The verdict comes from the attestation row's own success field, keyed by op.**
+  - A disagreement with the page's result is a refusal.
+  - A page Failure with no row is a refusal, never a kill.
+- **Before each `RunNextTest`, the driver reads back:**
+  - page 130455's Run set (it must equal the request);
+  - the test runner id (only 130450 is accepted).
+- **Before deactivating:** no child session of the client session may be alive (background sessions, tasks, a job queue
+  run). Otherwise the result is refused, and the test is labelled as one that starts sessions.
+- **NumberSequence** is not rolled back by isolation. This is labelled in the caveat (headless shares it).
+
+### B5. TestPage (ruling)
+- **Client mode SCORES TestPage tests once R1170 (6)'s page-part probe passes** (a known-green test that uses a page part
+  passes in a client session on the Windows BC). That is a large share of the point: DOTests' Email partial had 49 errors
+  from refused TestPage tests.
+- **Until then, they are refused as headless refuses them,** by name.
+
+### B6. Probes that must be able to fail (478a, on the Windows BC unless noted)
+- **The stop (A5):** a stop of a session that is running a test. Negative controls:
+  - a stop that lands on an idle session after the codeunit finished;
+  - a stop on an id that does not exist;
+  - an interaction that finished with its answer lost before the stop.
+  The pre-commitment names the exact client-library signal that counts as "our StopSession ended this run".
+- **A raising `OnAfterTestMethodRun` subscriber:** what page 130455 records.
+- **An `OnBefore` write surviving isolation,** and **IsolatedStorage** under isolation.
+- **The library's error paths, on Linux .NET too:** a test that raises, a `StopSession`, a dropped connection. The exception
+  types and texts are recorded, because classifying "stopped", "dead" and "failed" rests on them.
+- **Each red check covers both directions** of the writer gate and of the reset gate.
