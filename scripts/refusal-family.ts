@@ -132,6 +132,12 @@ const BC4_LINUX = {
   server: "bc4",
   build: "BC 29.0.54011.57673 W1, en-US session",
 } as const;
+/** PR-488: bc1's BC-check runs with culture cells (numbers-text; errors-temp ran on bc1 too but has none). */
+const BC1_LINUX = {
+  os: "linux",
+  server: "bc1",
+  build: "BC 28.4.53241.56590 W1, en-US session",
+} as const;
 
 const untouched = (type: string, method: string, call: string, vars: string[] = []): Cell => ({
   type,
@@ -7511,6 +7517,295 @@ codeunit ${ET_HELPER + 2} "ET Run Ok"
   cells: ET_CELLS,
 };
 
+/**
+ * PR-488: numbers and text builtins, for a per-cell BC differential: Round, Decimal precision, Power, div/mod, divide by
+ * zero, overflow, Duration arithmetic, IncStr, the text functions at 0 / negative / past-the-end positions, SelectStr,
+ * ConvertStr, DelChr, text-length overflow, Code trimming, StrSubstNo forms, case mapping beyond Danish (json-text holds the
+ * Danish cells), and R1236's cheap follow-ups. Each cell reports one value through `Error('V:[%1]', ...)` or fails with the
+ * runtime's own error. Every number is read through Format(x, 0, 9) (R1210: no culture formats); the case cells are
+ * `depends: "locale"`. Operands are variables, so the compiler folds nothing. Cell i is codeunit BASE_ID + 1 + i; the
+ * support codeunits follow the last cell (`extraIds`: the helper, a Codeunit.Run target that does nothing).
+ */
+const NT_VARS = [
+  'H: Codeunit "NT Helper";',
+  "A: Integer;",
+  "B: Integer;",
+  "I: Integer;",
+  "BI: BigInteger;",
+  "D: Decimal;",
+  "Dur: Duration;",
+  "T: Text;",
+  "R: Boolean;",
+];
+const nt = (
+  type: string,
+  method: string,
+  expr: string,
+  setup: string[] = [],
+  extra: { vars?: string[]; locale?: true } = {},
+): Cell => ({
+  type: `NT ${type}`,
+  method,
+  state: "nt",
+  vars: [...NT_VARS, ...(extra.vars ?? [])],
+  setup,
+  call: `Error('V:[%1]', ${expr});`,
+  ...(extra.locale === true ? { depends: "locale" as const } : {}),
+});
+/** A Decimal expression read with format 9. */
+const f9 = (e: string): string => `Format(${e}, 0, 9)`;
+const NT_CELLS: readonly Cell[] = [
+  // --- Round ---
+  ...(
+    [
+      ["half up 1.005", "1.005", "0.01", ""],
+      ["half 2.5", "2.5", "1", ""],
+      ["half -2.5", "-2.5", "1", ""],
+      ["down 2.5", "2.5", "1", "<"],
+      ["up 2.1", "2.1", "1", ">"],
+      ["up -2.1", "-2.1", "1", ">"],
+      ["to 0.05", "1.234", "0.05", ""],
+      ["near -1.25", "-1.25", "0.1", "="],
+      ["to 100", "12345", "100", ""],
+      ["tiny", "0.000000000000000001", "0.00001", ""],
+      ["precision 0", "1.5", "0", ""],
+      ["direction x", "2.5", "1", "x"],
+    ] as const
+  ).map(([m, v, p, dir]) =>
+    nt("Round", m, f9(dir === "" ? `Round(D, ${p})` : `Round(D, ${p}, '${dir}')`), [`D := ${v};`]),
+  ),
+  // --- Decimal and Power ---
+  nt("Decimal", "third times 3", f9("D / 3 * 3"), ["D := 1;"]),
+  nt("Decimal", "third", f9("D / 3"), ["D := 1;"]),
+  nt("Decimal", "0.1 + 0.2", f9("D + 0.2"), ["D := 0.1;"]),
+  nt("Decimal", "divide by zero", f9("1 / D"), ["D := 0;"]),
+  nt("Decimal", "max times 10", f9("D * 10"), ["D := 79228162514264337593543950335.0;"]),
+  nt("Power", "sqrt 2", f9("Power(D, 0.5)"), ["D := 2;"]),
+  nt("Power", "0 ^ 0", f9("Power(D, 0)"), ["D := 0;"]),
+  nt("Power", "negative cube root", f9("Power(D, 1 / 3)"), ["D := -8;"]),
+  nt("Power", "10 ^ 30", f9("Power(D, 30)"), ["D := 10;"]),
+  nt("Power", "2 ^ -1", f9("Power(D, -1)"), ["D := 2;"]),
+  nt("Abs", "negative half", f9("Abs(D)"), ["D := -0.5;"]),
+  nt("Abs", "Integer min", f9("Abs(A)"), ["A := -2147483647 - 1;"]),
+  // --- Integer arithmetic ---
+  nt("Int", "-7 div 2", f9("A div B"), ["A := -7;", "B := 2;"]),
+  nt("Int", "7 mod -2", f9("A mod B"), ["A := 7;", "B := -2;"]),
+  nt("Int", "-7 mod 2", f9("A mod B"), ["A := -7;", "B := 2;"]),
+  nt("Int", "7 / 2", f9("A / B"), ["A := 7;", "B := 2;"]),
+  nt("Int", "div by zero", f9("A div B"), ["A := 7;", "B := 0;"]),
+  nt("Int", "mod by zero", f9("A mod B"), ["A := 7;", "B := 0;"]),
+  nt("Int", "slash by zero", f9("A / B"), ["A := 7;", "B := 0;"]),
+  nt("Int", "max plus 1", f9("I"), ["I := 2147483647;", "I := I + 1;"]),
+  nt("Int", "square overflow", f9("I"), ["I := 100000;", "I := I * I;"]),
+  nt("Int", "BigInteger max plus 1", f9("BI"), ["BI := 9223372036854775807L;", "BI := BI + 1;"]),
+  nt("Int", "Decimal div", f9("D div 2"), ["D := 7.5;"]),
+  // --- Duration ---
+  nt("Duration", "1d1h1m1s1ms", f9("Dur"), ["Dur := 90061001;"]),
+  nt("Duration", "negative", f9("Dur"), ["Dur := -1500;"]),
+  nt("Duration", "times 1.5", f9("Dur * 1.5"), ["Dur := 1001;"]),
+  nt("Duration", "over 3", f9("Dur / 3"), ["Dur := 1000;"]),
+  nt("Duration", "zero", f9("Dur"), ["Dur := 0;"]),
+  // --- IncStr ---
+  ...(
+    [
+      ["empty", "''"],
+      ["no digit", "'ABC'"],
+      ["all nines", "'99'"],
+      ["leading zeros", "'A0099'"],
+      ["digit inside", "'A9B'"],
+      ["minus sign", "'A-9'"],
+      ["spaces", "'A 9 '"],
+    ] as const
+  ).map(([m, v]) => nt("IncStr", m, "'[' + IncStr(T) + ']'", [`T := ${v};`])),
+  nt("IncStr", "by 5", "'[' + IncStr(T, 5) + ']'", ["T := 'A1';"]),
+  nt("IncStr", "by -5", "'[' + IncStr(T, -5) + ']'", ["T := 'A10';"]),
+  nt("IncStr", "by -5 below zero", "'[' + IncStr(T, -5) + ']'", ["T := 'A3';"]),
+  // --- text edges (ASCII) ---
+  ...(
+    [
+      ["CopyStr", "from 0", "CopyStr(T, A)", "0"],
+      ["CopyStr", "from -1", "CopyStr(T, A)", "-1"],
+      ["CopyStr", "length 0", "CopyStr(T, 1, A)", "0"],
+      ["CopyStr", "length -1", "CopyStr(T, 1, A)", "-1"],
+      ["CopyStr", "from past end", "CopyStr(T, A, 2)", "10"],
+      ["CopyStr", "length past end", "CopyStr(T, 2, A)", "100"],
+      ["PadStr", "to 0", "PadStr(T, A)", "0"],
+      ["PadStr", "to -1", "PadStr(T, A)", "-1"],
+      ["PadStr", "empty filler", "PadStr(T, A, '')", "9"],
+      ["DelStr", "2 for 2", "DelStr(T, 2, A)", "2"],
+      ["DelStr", "at 0", "DelStr(T, A, 1)", "0"],
+      ["DelStr", "length past end", "DelStr(T, 5, A)", "100"],
+      ["DelStr", "from past end", "DelStr(T, A)", "7"],
+      ["DelStr", "length 0", "DelStr(T, 1, A)", "0"],
+      ["DelStr", "to the end", "DelStr(T, A)", "2"],
+      ["DelStr", "from -1", "DelStr(T, A)", "-1"],
+      ["InsStr", "at 1", "InsStr(T, 'X', A)", "1"],
+      ["InsStr", "at the end", "InsStr(T, 'X', A)", "7"],
+      ["InsStr", "past the end", "InsStr(T, 'X', A)", "10"],
+      ["InsStr", "at 0", "InsStr(T, 'X', A)", "0"],
+      ["InsStr", "at -1", "InsStr(T, 'X', A)", "-1"],
+    ] as const
+  ).map(([fn, m, e, a]) => nt(fn, m, `'[' + ${e} + ']'`, ["T := 'abcdef';", `A := ${a};`])),
+  nt("CopyStr", "empty text", "'[' + CopyStr(T, 1, 1) + ']'", ["T := '';"]),
+  nt("PadStr", "empty text", "'[' + PadStr(T, 3, '*') + ']'", ["T := '';"]),
+  nt("InsStr", "into empty", "'[' + InsStr(T, 'X', 1) + ']'", ["T := '';"]),
+  ...(
+    [
+      ["0 of 2", "0", "'a,b'"],
+      ["3 of 2", "3", "'a,b'"],
+      ["1 of empty", "1", "''"],
+      ["empty middle", "2", "'a,,b'"],
+      ["after trailing comma", "3", "'a,b,'"],
+      ["-1", "-1", "'a,b'"],
+    ] as const
+  ).map(([m, n, v]) =>
+    nt("SelectStr", m, `'[' + SelectStr(A, T) + ']'`, [`A := ${n};`, `T := ${v};`]),
+  ),
+  nt("ConvertStr", "unequal lengths", "'[' + ConvertStr(T, 'ab', 'b') + ']'", ["T := 'abc';"]),
+  nt("ConvertStr", "empty sets", "'[' + ConvertStr(T, '', '') + ']'", ["T := 'abc';"]),
+  nt("ConvertStr", "repeated from", "'[' + ConvertStr(T, 'aa', 'xy') + ']'", ["T := 'aaa';"]),
+  nt("DelChr", "default", "'[' + DelChr(T) + ']'", ["T := '  a b  ';"]),
+  nt("DelChr", "both ends", "'[' + DelChr(T, '<>', 'x') + ']'", ["T := 'xxaxx';"]),
+  nt("DelChr", "empty set", "'[' + DelChr(T, '=', '') + ']'", ["T := 'abc';"]),
+  nt("DelChr", "leading all", "'[' + DelChr(T, '<', 'a') + ']'", ["T := 'aaa';"]),
+  nt("DelChr", "two chars", "'[' + DelChr(T, '=', 'ba') + ']'", ["T := 'abcab';"]),
+  nt("DelChr", "where x", "'[' + DelChr(T, 'x', 'a') + ']'", ["T := 'abc';"]),
+  nt("DelChr", "where <=>", "'[' + DelChr(T, '<=>', 'a') + ']'", ["T := 'abaca';"]),
+  nt("Length", "Text[5] overflow", "T5", ["T := 'abcdefg';", "T5 := T;"], {
+    vars: ["T5: Text[5];"],
+  }),
+  nt("Length", "Code[5] overflow", "C5", ["T := 'abcdefg';", "C5 := T;"], {
+    vars: ["C5: Code[5];"],
+  }),
+  nt("Length", "Code trims", "'[' + C10 + ']'", ["T := '  ab  ';", "C10 := T;"], {
+    vars: ["C10: Code[10];"],
+  }),
+  nt(
+    "Length",
+    "CopyStr into Text[5]",
+    "T5",
+    ["T := 'abcdefg';", "T5 := CopyStr(T, 1, MaxStrLen(T5));"],
+    { vars: ["T5: Text[5];"] },
+  ),
+  nt("Length", "MaxStrLen Text", f9("MaxStrLen(T)"), []),
+  nt("Length", "surrogate StrLen", f9("StrLen(T)"), ["T := '😀a';"]),
+  nt("Length", "surrogate CopyStr 2", f9("StrLen(CopyStr(T, 2))"), ["T := '😀a';"]),
+  // --- StrSubstNo (Text arguments only) ---
+  ...(
+    [
+      ["missing arg", "'%1 %2', 'a'"],
+      ["extra arg", "'%1', 'a', 'b'"],
+      ["only %3", "'%3', 'a'"],
+      ["%%1", "'%%1', 'a'"],
+      ["percent alone", "'100% done', 'a'"],
+      ["#1### cut", "'#1###', 'abcdefg'"],
+      ["#1##### pad", "'#1#####|', 'ab'"],
+      ["%10", "'%10', 'a'"],
+      ["%1%1", "'%1%1', 'a'"],
+      ["arg holds %1", "'[%1]', 'x%1y'"],
+      ["%1 empty", "'<%1>', ''"],
+    ] as const
+  ).map(([m, args]) => nt("StrSubstNo", m, `'[' + StrSubstNo(${args}) + ']'`)),
+  // --- case mapping beyond Danish (culture data: R1210) ---
+  ...(
+    [
+      ["UpperCase", "sharp s", "ß"],
+      ["LowerCase", "dotted capital I", "İ"],
+      ["UpperCase", "dotless i", "ı"],
+      ["UpperCase", "dz digraph", "ǆ"],
+      ["UpperCase", "fi ligature", "ﬁ"],
+      ["LowerCase", "final sigma", "ΣΑΣ"],
+      ["UpperCase", "n apostrophe", "ŉ"],
+    ] as const
+  ).map(([fn, m, v]) =>
+    nt("Case", `${fn} ${m}`, `'[' + ${fn}(T) + ']' + ${f9(`StrLen(${fn}(T))`)}`, [`T := '${v}';`], {
+      locale: true,
+    }),
+  ),
+  // --- R1236's cheap follow-ups ---
+  nt("Follow", "nested asserterror text", "GetLastErrorText()", ["asserterror H.AssertNothing();"]),
+  nt(
+    "Follow",
+    "ErrorInfo enums format 9",
+    `${f9("EI.ErrorType")} + '|' + ${f9("EI.Verbosity")}`,
+    [],
+    { vars: ["EI: ErrorInfo;"] },
+  ),
+  nt("Follow", "one collected counted", "H.CollectOneCount()"),
+  nt("Follow", "Run ok clears last error", `${f9("R")} + '|' + GetLastErrorText()`, [
+    "asserterror Error('NT before');",
+    'R := Codeunit.Run(Codeunit::"NT Run Ok");',
+  ]),
+  nt("Follow", "HasCollectedErrors in Run", "H.HasCollectedInRun()"),
+];
+const NT_HELPER = 51000 + 1 + NT_CELLS.length;
+export const NUMBERS_TEXT: Family = {
+  name: "numbers-text",
+  // PR-417: the 7 case-mapping cells are culture data; measured on bc1 (Linux BC)
+  bcMeasured: { ...BC1_LINUX, task: "PR-488" },
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/9267",
+  known: [],
+  testPermissions: "Disabled",
+  extraIds: 2,
+  support: `codeunit ${NT_HELPER} "NT Helper"
+{
+    procedure AssertNothing()
+    var
+        X: Integer;
+    begin
+        asserterror X := 1;
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectOneCount(): Text
+    var
+        EI: ErrorInfo;
+        N: Text;
+    begin
+        EI.Collectible(true);
+        EI.Message('NT one');
+        Error(EI);
+        N := Format(GetCollectedErrors().Count(), 0, 9);
+        ClearCollectedErrors();
+        exit(N);
+    end;
+
+    procedure HasCollectedInRun(): Text
+    var
+        Probe: Codeunit "NT Run Ok";
+    begin
+        Probe.Run();
+        exit(Format(Probe.Seen(), 0, 9) + '|' + Format(Probe.Count(), 0, 9));
+    end;
+}
+
+codeunit ${NT_HELPER + 1} "NT Run Ok"
+{
+    var
+        SeenHas: Boolean;
+        SeenCount: Integer;
+
+    trigger OnRun()
+    begin
+        SeenHas := HasCollectedErrors();
+        SeenCount := GetCollectedErrors().Count();
+    end;
+
+    procedure Seen(): Boolean
+    begin
+        exit(SeenHas);
+    end;
+
+    procedure Count(): Integer
+    begin
+        exit(SeenCount);
+    end;
+}
+`,
+  handles: {},
+  cells: NT_CELLS,
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -7563,6 +7858,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [EDGE_REFUSALS.name]: EDGE_REFUSALS,
   // PR-487: appended (BC-check number 29): errors, transactions and temporary records, for a per-cell BC differential
   [ERRORS_TEMP.name]: ERRORS_TEMP,
+  // PR-488: appended (BC-check number 30): numbers and text builtins, for a per-cell BC differential
+  [NUMBERS_TEXT.name]: NUMBERS_TEXT,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */

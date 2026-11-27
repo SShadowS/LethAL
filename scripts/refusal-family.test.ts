@@ -20,6 +20,7 @@ import {
   JSON_TEXT,
   LANGUAGE_REGION,
   NO_CLIENT,
+  NUMBERS_TEXT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
   PUBAPP_FLOWFIELD,
@@ -2087,7 +2088,15 @@ describe("PR-417: BC answers measured on Linux BC", () => {
       (f) => f.cultureData === "all" || f.cells.some((c) => c.depends === "locale"),
     );
     expect(culture.map((f) => f.name).sort()).toEqual(
-      [DATES_FORMULAS, FORMAT_EVALUATE, FORMAT_REGION, JSON_TEXT, LANGUAGE_REGION, RECORD_FILTERS]
+      [
+        DATES_FORMULAS,
+        FORMAT_EVALUATE,
+        FORMAT_REGION,
+        JSON_TEXT,
+        LANGUAGE_REGION,
+        NUMBERS_TEXT,
+        RECORD_FILTERS,
+      ]
         .map((f) => f.name)
         .sort(),
     );
@@ -2128,8 +2137,7 @@ describe("PR-487: the errors-temp family", () => {
   const al = (): string => emitApp(f)["src/Cells.al"] ?? "";
 
   // Red: insert the family before edge-refusals, or drop it from FAMILIES.
-  test("last of FAMILIES (place 28, BC-check number 29): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("errors-temp");
+  test("place 28 of FAMILIES (BC-check number 29): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(27);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051029");
   });
@@ -2198,5 +2206,84 @@ describe("PR-487: the errors-temp family", () => {
     expect(stmts).not.toMatch(/Error\('V:\[[^']*'(, [^,;]+)*, R[,)]/);
     expect(stmts).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
     expect(stmts).not.toMatch(/(?<!Format\()\b\w+\.(IsTemporary|Collectible)\b(?!\()/);
+  });
+});
+
+describe("PR-488: the numbers-text family", () => {
+  const f = NUMBERS_TEXT;
+  const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
+
+  // Red: insert the family before errors-temp, or drop it from FAMILIES.
+  test("last of FAMILIES (place 29, BC-check number 30): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("numbers-text");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(28);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051030");
+  });
+
+  // the 120 cells bc1 (BC 28.4) and edge-e5176a9fd ran (/coord/handoff/PR-488/joined.tsv)
+  test("120 cells with distinct names, 2 support codeunits right after the last cell", () => {
+    expect(f.cells).toHaveLength(120);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(120);
+    const al = emitApp(f)["src/Cells.al"] ?? "";
+    expect(al).toContain(`codeunit ${BASE_ID + 121} "NT Helper"`);
+    expect(al).toContain(`codeunit ${BASE_ID + 122} "NT Run Ok"`);
+    expect(f.extraIds).toBe(2);
+  });
+
+  // Red: mark a non-case cell `locale`, or drop `locale` from a case cell: R1210's filing rule would read the wrong cells.
+  test("exactly the 7 case-mapping cells are locale cells", () => {
+    expect(f.cells.filter((c) => c.depends === "locale").map((c) => c.type)).toEqual(
+      Array(7).fill("NT Case"),
+    );
+    expect(f.cells.filter((c) => c.type === "NT Case")).toHaveLength(7);
+  });
+
+  // Red: a cell answering a bare number (`nt(..., "D")`): `Error('V:[%1]', D)` formats it in the session's culture.
+  test("every answer is a Format(x, 0, 9), a bracketed text, or a named text source", () => {
+    const TEXT_SOURCES = new Set([
+      "T5",
+      "C5",
+      "GetLastErrorText()",
+      "H.CollectOneCount()",
+      "H.HasCollectedInRun()",
+    ]);
+    for (const c of f.cells) {
+      const expr = c.call.replace(/^Error\('V:\[%1\]', /, "").replace(/\);$/, "");
+      const ok = expr.startsWith("Format(") || expr.startsWith("'[' + ") || TEXT_SOURCES.has(expr);
+      expect({ cell: `${c.type}/${c.method}`, expr, ok }).toEqual({
+        cell: `${c.type}/${c.method}`,
+        expr,
+        ok: true,
+      });
+    }
+  });
+
+  // Red: a Format without `, 0, 9` (a number in the session's format, R1210), or a call to Evaluate.
+  test("every Format is Format(x, 0, 9) and no cell calls Evaluate", () => {
+    let n = 0;
+    for (const c of f.cells) {
+      for (const m of stmts(c).matchAll(/Format\(/g)) {
+        n++;
+        let depth = 0;
+        const from = (m.index ?? 0) + "Format".length;
+        for (let j = from; j < stmts(c).length; j++) {
+          if (stmts(c)[j] === "(") depth++;
+          if (stmts(c)[j] === ")" && --depth === 0) {
+            expect({
+              cell: `${c.type}/${c.method}`,
+              f9: stmts(c)
+                .slice(from, j + 1)
+                .endsWith(", 0, 9)"),
+            }).toEqual({
+              cell: `${c.type}/${c.method}`,
+              f9: true,
+            });
+            break;
+          }
+        }
+      }
+      expect(stmts(c)).not.toContain("Evaluate(");
+    }
+    expect(n).toBeGreaterThan(40);
   });
 });
