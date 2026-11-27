@@ -7806,6 +7806,784 @@ codeunit ${NT_HELPER + 1} "NT Run Ok"
   cells: NT_CELLS,
 };
 
+/**
+ * PR-489: I/O, for a per-cell BC differential: WriteText/ReadText, Write/Read, each TextEncoding and its byte-order mark,
+ * EOS, Blob fields with and without CalcFields, CopyStream, the System Application's Temp Blob and Base64 Convert, and
+ * XMLport Export/Import over a stream. Uncreated streams are R1010's (left out). Each cell reports one text through
+ * `Error('V:[%1]', ...)` or fails with the runtime's own error; numbers through Format(x, 0, 9). Cells that write a real
+ * table use their own key (`ioKey`), never DeleteAll. A Windows or MSDos encoding of a non-ASCII letter follows the OS code
+ * page, so those cells are `depends: "locale"` (Linux BC, R1210). Cell i is codeunit BASE_ID + 1 + i; tables 51000-51001,
+ * XMLports 51000-51001; the helper codeunit follows the last cell (`extraIds`).
+ */
+let ioNext = 0;
+/** A fresh key for one cell (a Blob row id, and the stem of its item codes). */
+const ioKey = (): number => {
+  ioNext += 1;
+  return 1000 + ioNext * 10;
+};
+const IO_VARS = [
+  'H: Codeunit "IO Helper";',
+  'TB: Record "IO Blob" temporary;',
+  'TB2: Record "IO Blob" temporary;',
+  "OutS: OutStream;",
+  "OutS2: OutStream;",
+  "InS: InStream;",
+  "InS2: InStream;",
+  "T: Text;",
+  "T2: Text;",
+  "N: Integer;",
+  "R: Boolean;",
+];
+const io = (
+  type: string,
+  method: string,
+  setup: string[],
+  expr: string,
+  extra: { vars?: string[]; locale?: true } = {},
+): Cell => ({
+  type: `IO ${type}`,
+  method,
+  state: "io",
+  vars: [...IO_VARS, ...(extra.vars ?? [])],
+  setup,
+  call: `Error('V:[%1]', ${expr});`,
+  ...(extra.locale === true ? { depends: "locale" as const } : {}),
+});
+// numbers through `n9` (Format(x, 0, 9)), declared with record-filters above
+/** Write lines into TB, then open TB for reading. */
+const ioWrite = (lines: string[], enc?: string): string[] => [
+  enc === undefined
+    ? "TB.Data.CreateOutStream(OutS);"
+    : `TB.Data.CreateOutStream(OutS, TextEncoding::${enc});`,
+  ...lines,
+  enc === undefined
+    ? "TB.Data.CreateInStream(InS);"
+    : `TB.Data.CreateInStream(InS, TextEncoding::${enc});`,
+];
+const IO_ENCODINGS = ["UTF8", "UTF16", "Windows", "MSDos"] as const;
+const IO_CELLS: readonly Cell[] = (() => {
+  const cells: Cell[] = [];
+  const add = (c: Cell): void => {
+    cells.push(c);
+  };
+  // --- WriteText / ReadText / Write / Read ---
+  add(
+    io(
+      "Text",
+      "three lines",
+      ioWrite(["OutS.WriteText('ab');", "OutS.WriteText();", "OutS.WriteText('cd');"]),
+      "H.ReadAll(InS)",
+    ),
+  );
+  add(
+    io("Text", "WriteText length 3", ioWrite(["OutS.WriteText('abcdef', 3);"]), "H.ReadAll(InS)"),
+  );
+  add(
+    io(
+      "Text",
+      "ReadText length 2",
+      [...ioWrite(["OutS.WriteText('abcdef');"]), "N := InS.ReadText(T, 2);"],
+      `T + '|' + ${n9("N")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "ReadText returns",
+      [...ioWrite(["OutS.WriteText('abc');"]), "N := InS.ReadText(T);"],
+      `T + '|' + ${n9("N")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "ReadText at EOS",
+      [
+        ...ioWrite(["OutS.WriteText('a');"]),
+        "InS.ReadText(T);",
+        "T2 := 'x';",
+        "N := InS.ReadText(T2);",
+      ],
+      `'[' + T2 + ']' + ${n9("N")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "Write then ReadAll",
+      ioWrite(["OutS.Write('ab');"]),
+      `H.ReadAll(InS) + ${n9("TB.Data.Length")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "Write twice Read",
+      [...ioWrite(["OutS.Write('ab');", "OutS.Write('cd');"]), "InS.Read(T);", "InS.Read(T2);"],
+      "T + '|' + T2",
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "Integer binary",
+      [...ioWrite(["N := 258;", "OutS.Write(N);"]), "N := 0;", "InS.Read(N);"],
+      `${n9("N")} + '|' + ${n9("TB.Data.Length")}`,
+    ),
+  );
+  add(io("Text", "WriteText length", ioWrite(["OutS.WriteText('abc');"]), n9("TB.Data.Length")));
+  add(
+    io(
+      "Text",
+      "empty WriteText",
+      ioWrite(["OutS.WriteText('');"]),
+      `${n9("TB.Data.Length")} + '|' + ${n9("TB.Data.HasValue")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "WriteText newline only",
+      ioWrite(["OutS.WriteText();"]),
+      `${n9("TB.Data.Length")} + '|' + H.ReadAll(InS)`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "bytes of two lines",
+      ioWrite(["OutS.WriteText('a');", "OutS.WriteText();", "OutS.WriteText('b');"]),
+      "H.Bytes(InS, 8)",
+    ),
+  );
+  // --- EOS ---
+  add(io("EOS", "new Blob", ["TB.Data.CreateInStream(InS);"], n9("InS.EOS")));
+  add(
+    io(
+      "EOS",
+      "after last line",
+      [...ioWrite(["OutS.WriteText('a');"]), "InS.ReadText(T);"],
+      n9("InS.EOS"),
+    ),
+  );
+  add(
+    io(
+      "EOS",
+      "between lines",
+      [
+        ...ioWrite(["OutS.WriteText('a');", "OutS.WriteText();", "OutS.WriteText('b');"]),
+        "InS.ReadText(T);",
+      ],
+      n9("InS.EOS"),
+    ),
+  );
+  add(io("EOS", "before reading", ioWrite(["OutS.WriteText('a');"]), n9("InS.EOS")));
+  // --- encodings: length, first bytes, read back ---
+  for (const enc of IO_ENCODINGS) {
+    for (const [name, v] of [
+      ["a", "a"],
+      ["ae letter", "æ"],
+    ] as const) {
+      const codePage = (enc === "Windows" || enc === "MSDos") && name !== "a";
+      add(
+        io(
+          "Enc",
+          `${enc} ${name}`,
+          [
+            ...ioWrite([`OutS.WriteText('${v}');`], enc),
+            `TB.Data.CreateInStream(InS2, TextEncoding::${enc});`,
+          ],
+          `${n9("TB.Data.Length")} + '|' + H.Bytes(InS, 6) + '|' + H.ReadAll(InS2)`,
+          codePage ? { locale: true } : {},
+        ),
+      );
+    }
+  }
+  add(
+    io(
+      "Enc",
+      "UTF16 read as UTF8",
+      [
+        ...ioWrite(["OutS.WriteText('a');"], "UTF16"),
+        "TB.Data.CreateInStream(InS2, TextEncoding::UTF8);",
+      ],
+      "H.Bytes(InS2, 6) + '|' + H.ReadAll(InS2)",
+    ),
+  );
+  add(
+    io(
+      "Enc",
+      "UTF8 ae read as UTF16",
+      [
+        ...ioWrite(["OutS.WriteText('æ');"], "UTF8"),
+        "TB.Data.CreateInStream(InS2, TextEncoding::UTF16);",
+      ],
+      n9("StrLen(H.ReadAll(InS2))"),
+    ),
+  );
+  add(
+    io(
+      "Enc",
+      "UTF8 ae read as Windows",
+      [
+        ...ioWrite(["OutS.WriteText('æ');"], "UTF8"),
+        "TB.Data.CreateInStream(InS2, TextEncoding::Windows);",
+      ],
+      "H.ReadAll(InS2)",
+      { locale: true },
+    ),
+  );
+  add(
+    io(
+      "Enc",
+      "UTF8 ae read without encoding",
+      [...ioWrite(["OutS.WriteText('æ');"], "UTF8"), "TB.Data.CreateInStream(InS2);"],
+      "H.ReadAll(InS2)",
+      // no encoding: the default one decodes the non-ASCII bytes by the OS code page
+      { locale: true },
+    ),
+  );
+  add(
+    io(
+      "Enc",
+      "default ae bytes",
+      ioWrite(["OutS.WriteText('æ');"]),
+      `${n9("TB.Data.Length")} + '|' + H.Bytes(InS, 6)`,
+      { locale: true },
+    ),
+  );
+  // --- Blob fields on a real table ---
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "HasValue without CalcFields",
+        [`H.InsertBlob(${k}, 'abc');`, `B.Get(${k});`],
+        `${n9("B.Data.HasValue")} + '|' + ${n9("B.Data.Length")}`,
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "after CalcFields",
+        [
+          `H.InsertBlob(${k}, 'abc');`,
+          `B.Get(${k});`,
+          "B.CalcFields(Data);",
+          "B.Data.CreateInStream(InS);",
+        ],
+        `${n9("B.Data.Length")} + '|' + H.ReadAll(InS)`,
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "Clear then Modify",
+        [
+          `H.InsertBlob(${k}, 'abc');`,
+          `B.Get(${k});`,
+          "Clear(B.Data);",
+          "B.Modify();",
+          `B.Get(${k});`,
+          "B.CalcFields(Data);",
+        ],
+        n9("B.Data.HasValue"),
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "rewrite and Modify",
+        [
+          `H.InsertBlob(${k}, 'a');`,
+          `B.Get(${k});`,
+          "B.Data.CreateOutStream(OutS);",
+          "OutS.WriteText('bb');",
+          "B.Modify();",
+          "Clear(B);",
+          `B.Get(${k});`,
+          "B.CalcFields(Data);",
+          "B.Data.CreateInStream(InS);",
+        ],
+        "H.ReadAll(InS)",
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "never written",
+        ["B.Init();", `B.Id := ${k};`, "B.Insert();", `B.Get(${k});`, "B.CalcFields(Data);"],
+        `${n9("B.Data.HasValue")} + '|' + ${n9("B.Data.Length")}`,
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "empty text written",
+        [`H.InsertBlob(${k}, '');`, `B.Get(${k});`, "B.CalcFields(Data);"],
+        `${n9("B.Data.HasValue")} + '|' + ${n9("B.Data.Length")}`,
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "read without CalcFields",
+        [`H.InsertBlob(${k}, 'abc');`, `B.Get(${k});`, "B.Data.CreateInStream(InS);"],
+        "'[' + H.ReadAll(InS) + ']'",
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  // --- CopyStream ---
+  add(
+    io(
+      "Copy",
+      "whole",
+      [
+        ...ioWrite(["OutS.WriteText('ab');", "OutS.WriteText();", "OutS.WriteText('cd');"]),
+        "TB2.Data.CreateOutStream(OutS2);",
+        "CopyStream(OutS2, InS);",
+        "TB2.Data.CreateInStream(InS2);",
+      ],
+      "H.ReadAll(InS2)",
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "2 bytes",
+      [
+        ...ioWrite(["OutS.WriteText('abcdef');"]),
+        "TB2.Data.CreateOutStream(OutS2);",
+        "CopyStream(OutS2, InS, 2);",
+        "TB2.Data.CreateInStream(InS2);",
+      ],
+      `H.ReadAll(InS2) + '|' + H.ReadAll(InS)`,
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "from empty",
+      [
+        "TB.Data.CreateInStream(InS);",
+        "TB2.Data.CreateOutStream(OutS2);",
+        "R := CopyStream(OutS2, InS);",
+      ],
+      `${n9("R")} + '|' + ${n9("TB2.Data.Length")}`,
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "returns",
+      [
+        ...ioWrite(["OutS.WriteText('ab');"]),
+        "TB2.Data.CreateOutStream(OutS2);",
+        "R := CopyStream(OutS2, InS);",
+      ],
+      `${n9("R")} + '|' + ${n9("TB2.Data.Length")}`,
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "after partial read",
+      [
+        ...ioWrite(["OutS.WriteText('ab');", "OutS.WriteText();", "OutS.WriteText('cd');"]),
+        "InS.ReadText(T);",
+        "TB2.Data.CreateOutStream(OutS2);",
+        "CopyStream(OutS2, InS);",
+        "TB2.Data.CreateInStream(InS2);",
+      ],
+      "H.ReadAll(InS2)",
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "Temp Blob to Temp Blob",
+      [
+        "Blob1.CreateOutStream(OutS);",
+        "OutS.WriteText('ab');",
+        "Blob1.CreateInStream(InS);",
+        "Blob2.CreateOutStream(OutS2);",
+        "CopyStream(OutS2, InS);",
+        "Blob2.CreateInStream(InS2);",
+      ],
+      `H.ReadAll(InS2) + ${n9("Blob2.Length()")}`,
+      { vars: ['Blob1: Codeunit "Temp Blob";', 'Blob2: Codeunit "Temp Blob";'] },
+    ),
+  );
+  // --- Temp Blob ---
+  const TEMP_BLOB = { vars: ['Blob1: Codeunit "Temp Blob";'] };
+  add(
+    io(
+      "TempBlob",
+      "round trip",
+      ["Blob1.CreateOutStream(OutS);", "OutS.WriteText('ab');", "Blob1.CreateInStream(InS);"],
+      `H.ReadAll(InS) + ${n9("Blob1.Length()")} + '|' + ${n9("Blob1.HasValue()")}`,
+      TEMP_BLOB,
+    ),
+  );
+  add(
+    io(
+      "TempBlob",
+      "empty",
+      [],
+      `${n9("Blob1.Length()")} + '|' + ${n9("Blob1.HasValue()")}`,
+      TEMP_BLOB,
+    ),
+  );
+  add(
+    io(
+      "TempBlob",
+      "UTF16 a",
+      ["Blob1.CreateOutStream(OutS, TextEncoding::UTF16);", "OutS.WriteText('a');"],
+      n9("Blob1.Length()"),
+      TEMP_BLOB,
+    ),
+  );
+  add(
+    io(
+      "TempBlob",
+      "read twice",
+      [
+        "Blob1.CreateOutStream(OutS);",
+        "OutS.WriteText('ab');",
+        "Blob1.CreateInStream(InS);",
+        "T := H.ReadAll(InS);",
+        "Blob1.CreateInStream(InS2);",
+      ],
+      "T + H.ReadAll(InS2)",
+      TEMP_BLOB,
+    ),
+  );
+  // --- Base64 Convert ---
+  const B64 = { vars: ['B64: Codeunit "Base64 Convert";'] };
+  add(io("Base64", "To abc", [], "B64.ToBase64('abc')", B64));
+  add(io("Base64", "From YWJj", [], "B64.FromBase64('YWJj')", B64));
+  add(io("Base64", "To ae", [], "B64.ToBase64('æ')", B64));
+  add(io("Base64", "To ae UTF8", [], "B64.ToBase64('æ', TextEncoding::UTF8)", B64));
+  add(io("Base64", "From w6Y= UTF8", [], "B64.FromBase64('w6Y=', TextEncoding::UTF8)", B64));
+  add(io("Base64", "From invalid", [], "B64.FromBase64('not base64!')", B64));
+  add(io("Base64", "To empty", [], "'[' + B64.ToBase64('') + ']'", B64));
+  add(io("Base64", "From empty", [], "'[' + B64.FromBase64('') + ']'", B64));
+  add(io("Base64", "To stream", ioWrite(["OutS.WriteText('abc');"]), "B64.ToBase64(InS)", B64));
+  add(
+    io(
+      "Base64",
+      "From to stream",
+      [
+        "TB.Data.CreateOutStream(OutS);",
+        "B64.FromBase64('YWJj', OutS);",
+        "TB.Data.CreateInStream(InS);",
+      ],
+      "H.ReadAll(InS)",
+      B64,
+    ),
+  );
+  add(
+    io("Base64", "To ae Windows", [], "B64.ToBase64('æ', TextEncoding::Windows)", {
+      ...B64,
+      locale: true,
+    }),
+  );
+  add(io("Base64", "From padding missing", [], "B64.FromBase64('YWI')", B64));
+  // --- XMLport over a stream ---
+  const XP = (port: string) => ({ vars: [`Xp: XmlPort "${port}";`, 'Item: Record "IO Item";'] });
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Export Xml",
+        [
+          `H.InsertItems('X${k}');`,
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+          "Xp.SetTableView(Item);",
+          "TB.Data.CreateOutStream(OutS);",
+          "Xp.SetDestination(OutS);",
+          "Xp.Export();",
+          "TB.Data.CreateInStream(InS);",
+        ],
+        "H.ReadAll(InS)",
+        // the UTF-16 export read through the default encoding: its byte-order mark and NULs decode by the OS code page
+        { ...XP("IO Items Xml"), locale: true },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Export Csv",
+        [
+          `H.InsertItems('X${k}');`,
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+          "Xp.SetTableView(Item);",
+          "TB.Data.CreateOutStream(OutS);",
+          "Xp.SetDestination(OutS);",
+          "Xp.Export();",
+          "TB.Data.CreateInStream(InS);",
+        ],
+        "H.ReadAll(InS)",
+        XP("IO Items Csv"),
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Import Xml",
+        [
+          ...ioWrite([
+            `OutS.WriteText('<Items><Item><Code>X${k}1</Code><Name>N1</Name></Item><Item><Code>X${k}2</Code><Name>N2</Name></Item></Items>');`,
+          ]),
+          "Xp.SetSource(InS);",
+          "Xp.Import();",
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+        ],
+        `${n9("Item.Count()")} + '|' + H.ItemNames('X${k}')`,
+        XP("IO Items Xml"),
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Import Csv",
+        [
+          ...ioWrite([
+            `OutS.WriteText('X${k}1,N1');`,
+            "OutS.WriteText();",
+            `OutS.WriteText('X${k}2,N2');`,
+          ]),
+          "Xp.SetSource(InS);",
+          "Xp.Import();",
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+        ],
+        `${n9("Item.Count()")} + '|' + H.ItemNames('X${k}')`,
+        XP("IO Items Csv"),
+      ),
+    );
+  }
+  add(
+    io(
+      "Xmlport",
+      "Import malformed Xml",
+      [...ioWrite(["OutS.WriteText('<Items><Item>');"]), "Xp.SetSource(InS);", "Xp.Import();"],
+      "'reached'",
+      XP("IO Items Xml"),
+    ),
+  );
+  add(
+    io(
+      "Xmlport",
+      "Import empty stream",
+      ["TB.Data.CreateInStream(InS);", "Xp.SetSource(InS);", "Xp.Import();"],
+      "'reached'",
+      XP("IO Items Xml"),
+    ),
+  );
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Import Xml with declaration",
+        [
+          ...ioWrite([
+            `OutS.WriteText('<?xml version="1.0" encoding="UTF-8"?><Items><Item><Code>X${k}1</Code><Name>N1</Name></Item></Items>');`,
+          ]),
+          "Xp.SetSource(InS);",
+          "Xp.Import();",
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+        ],
+        n9("Item.Count()"),
+        XP("IO Items Xml"),
+      ),
+    );
+  }
+  return cells;
+})();
+const IO_HELPER = 51000 + 1 + IO_CELLS.length;
+export const IO_STREAMS: Family = {
+  name: "io-streams",
+  // PR-417: the 6 code-page cells are culture data; measured on bc1 (Linux BC)
+  bcMeasured: { ...BC1_LINUX, task: "PR-489" },
+  issue: "",
+  known: [],
+  testPermissions: "Disabled",
+  extraIds: 1,
+  dependencies: [
+    {
+      id: "63ca2fa4-4f03-4f2b-a480-172fef340d3f",
+      name: "System Application",
+      publisher: "Microsoft",
+      version: "28.0.0.0",
+    },
+  ],
+  support: `table 51000 "IO Blob"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Data; Blob) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+table 51001 "IO Item"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+        field(2; Name; Text[30]) { }
+    }
+    keys { key(PK; Code) { Clustered = true; } }
+}
+
+xmlport 51000 "IO Items Xml"
+{
+    Format = Xml;
+    Direction = Both;
+    schema
+    {
+        textelement(Items)
+        {
+            tableelement(Item; "IO Item")
+            {
+                fieldelement(Code; Item.Code) { }
+                fieldelement(Name; Item.Name) { }
+            }
+        }
+    }
+}
+
+xmlport 51001 "IO Items Csv"
+{
+    Format = VariableText;
+    Direction = Both;
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(Item; "IO Item")
+            {
+                fieldelement(Code; Item.Code) { }
+                fieldelement(Name; Item.Name) { }
+            }
+        }
+    }
+}
+
+codeunit ${IO_HELPER} "IO Helper"
+{
+    /// Every line to the end, each followed by '|'.
+    procedure ReadAll(var InS: InStream): Text
+    var
+        Line: Text;
+        Result: Text;
+    begin
+        while not InS.EOS do begin
+            InS.ReadText(Line);
+            Result += Line + '|';
+        end;
+        exit(Result);
+    end;
+
+    /// The first N bytes as numbers, space separated.
+    procedure Bytes(var InS: InStream; N: Integer): Text
+    var
+        B: Byte;
+        V: Integer;
+        I: Integer;
+        Result: Text;
+    begin
+        while (I < N) and not InS.EOS do begin
+            InS.Read(B);
+            V := B;
+            Result += Format(V, 0, 9) + ' ';
+            I += 1;
+        end;
+        exit(Result);
+    end;
+
+    procedure InsertBlob(K: Integer; V: Text)
+    var
+        B: Record "IO Blob";
+        OutS: OutStream;
+    begin
+        B.Init();
+        B.Id := K;
+        B.Data.CreateOutStream(OutS);
+        OutS.WriteText(V);
+        B.Insert();
+    end;
+
+    procedure InsertItems(Stem: Text)
+    var
+        Item: Record "IO Item";
+    begin
+        Item.Init();
+        Item.Code := CopyStr(Stem + '1', 1, 20);
+        Item.Name := 'N1';
+        Item.Insert();
+        Item.Init();
+        Item.Code := CopyStr(Stem + '2', 1, 20);
+        Item.Name := 'N2';
+        Item.Insert();
+    end;
+
+    procedure ItemNames(Stem: Text): Text
+    var
+        Item: Record "IO Item";
+        Result: Text;
+    begin
+        Item.SetFilter(Code, '%1', Stem + '*');
+        if Item.FindSet() then
+            repeat
+                Result += Item.Code + '=' + Item.Name + ';';
+            until Item.Next() = 0;
+        exit(Result);
+    end;
+}
+`,
+  handles: {},
+  cells: IO_CELLS,
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -7860,6 +8638,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [ERRORS_TEMP.name]: ERRORS_TEMP,
   // PR-488: appended (BC-check number 30): numbers and text builtins, for a per-cell BC differential
   [NUMBERS_TEXT.name]: NUMBERS_TEXT,
+  // PR-489: appended (BC-check number 31): streams, encodings, Blob fields, Temp Blob, Base64 and XMLport over a stream
+  [IO_STREAMS.name]: IO_STREAMS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
