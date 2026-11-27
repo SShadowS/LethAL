@@ -16,6 +16,9 @@ table 91000 "LC Mutation Active"
         field(2; "Target App Id"; Text[40]) { }
         field(3; "Artifact Id"; Text[32]) { }
         field(4; "Mutant Id"; Text[64]) { }
+        // 1.0.0.30 (R1170, PR-462; measured by PR-314's probe): bumped by every write of the tuple, so a session
+        // that cached it can tell the row moved without reading the whole tuple each time.
+        field(5; Generation; BigInteger) { }
     }
 
     keys
