@@ -10,6 +10,24 @@ mkdir -p "$src"
 clone() { # <name> <url>
   if [ ! -d "$src/$1/.git" ]; then git clone --quiet "$2" "$src/$1"; else git -C "$src/$1" pull --quiet --ff-only || true; fi
 }
+# PR-484: install a sibling's dependencies (run in its folder). With a lockfile, `npm ci` whenever its sha256 differs
+# from the stamp the last install left in node_modules (a pull that bumps a dependency is then installed; 2026-11-27,
+# business-central-mcp kept bc-toolbox-envelope 0.1 and failed tsc). A failed `npm ci` fails setup and writes no stamp.
+# Without a lockfile: `npm install` only when node_modules is missing, as before.
+deps() {
+  if [ -f package-lock.json ]; then
+    local want have
+    want=$(sha256sum package-lock.json | cut -c1-64)
+    have=$(cat node_modules/.kraken-lock.sha256 2>/dev/null || true)
+    if [ ! -d node_modules ] || [ "$want" != "$have" ]; then
+      # explicit: deps runs inside an && list, where `set -e` does not stop on a failure
+      npm ci --silent || return 1
+      echo "$want" > node_modules/.kraken-lock.sha256
+    fi
+  else
+    [ -d node_modules ] || npm install --silent || return 1
+  fi
+}
 # four worktrees run setup at once and share $src: one at a time through the siblings
 (
   flock 9
@@ -17,7 +35,7 @@ clone() { # <name> <url>
   clone business-central-mcp https://github.com/SShadowS/business-central-mcp.git
   clone pi-mcp https://github.com/SShadowS/pi-mcp.git
   for r in bc-dev-mcp business-central-mcp pi-mcp; do
-    (cd "$src/$r" && { [ -d node_modules ] || npm install --silent; } && npm run --silent --if-present build)
+    (cd "$src/$r" && deps && npm run --silent --if-present build)
   done
 ) 9>"$src/.lock"
 # fixture symbol folders (.alpackages, gitignored) arrive as one tar through secret_files; kraken

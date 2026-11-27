@@ -1,4 +1,4 @@
-import { test as bunTest, expect } from "bun:test";
+import { test as bunTest, describe, expect } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -185,6 +185,109 @@ test("a sibling with no build script does not fail setup (build runs with --if-p
   } finally {
     rmSync(t.root, { recursive: true, force: true });
   }
+});
+
+// PR-484: a sibling's dependencies are reinstalled (`npm ci`) when its lockfile changed, by a sha256 stamp in node_modules.
+describe("PR-484: npm ci on a lockfile change", () => {
+  const LOCK = "business-central-mcp";
+  const lockSha = (s: string) => createHash("sha256").update(s).digest("hex");
+  /** A fake npm: logs the call; `ci` recreates node_modules (failing when FAIL_CI=1); `install` creates it. */
+  const npmFake = (t: ReturnType<typeof setup>) =>
+    writeFileSync(
+      join(t.bin, "npm"),
+      `#!/bin/bash\necho "npm $* @$(basename "$PWD")" >> "${t.calls.replaceAll("\\", "/")}"\nif [ "$1" = ci ]; then [ "$FAIL_CI" = 1 ] && exit 1; rm -rf node_modules; mkdir node_modules; fi\nif [ "$1" = install ]; then mkdir -p node_modules; fi\n`,
+      { mode: 0o755 },
+    );
+  /** The three siblings already cloned; `lock` gets a lockfile and node_modules with `stamp` (none when undefined). */
+  const seed = (t: ReturnType<typeof setup>, lockText: string, stamp: string | undefined) => {
+    for (const r of ["bc-dev-mcp", LOCK, "pi-mcp"]) {
+      mkdirSync(join(t.src, r, ".git"), { recursive: true });
+      mkdirSync(join(t.src, r, "node_modules"), { recursive: true });
+    }
+    writeFileSync(join(t.src, LOCK, "package-lock.json"), lockText);
+    if (stamp !== undefined)
+      writeFileSync(join(t.src, LOCK, "node_modules", ".kraken-lock.sha256"), `${stamp}\n`);
+  };
+  const npmCalls = (t: ReturnType<typeof setup>, verb: string) =>
+    (existsSync(t.calls) ? readFileSync(t.calls, "utf8") : "")
+      .split("\n")
+      .filter((l) => l.startsWith(`npm ${verb} `));
+  const stampOf = (t: ReturnType<typeof setup>) =>
+    readFileSync(join(t.src, LOCK, "node_modules", ".kraken-lock.sha256"), "utf8").trim();
+
+  test("(1) a lockfile and a MATCHING stamp: no npm ci, no npm install", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      seed(t, "lock-v1", lockSha("lock-v1"));
+      run(t);
+      expect(npmCalls(t, "ci")).toEqual([]);
+      expect(npmCalls(t, "install")).toEqual([]);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(2) the lockfile changed: exactly one npm ci, in that repo, and the stamp is the new sha", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      seed(t, "lock-v2", lockSha("lock-v1"));
+      run(t);
+      expect(npmCalls(t, "ci")).toEqual([`npm ci --silent @${LOCK}`]);
+      expect(stampOf(t)).toBe(lockSha("lock-v2"));
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(3) node_modules with no stamp: npm ci once; a second run installs nothing", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      seed(t, "lock-v1", undefined);
+      run(t);
+      expect(npmCalls(t, "ci")).toHaveLength(1);
+      run(t);
+      expect(npmCalls(t, "ci")).toHaveLength(1);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(4) a failing npm ci fails setup and writes no stamp", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      seed(t, "lock-v2", lockSha("lock-v1"));
+      const r = Bun.spawnSync(["bash", script], {
+        cwd: t.wt,
+        env: {
+          ...process.env,
+          PATH: t.bin + delimiter + process.env.PATH,
+          KRAKEN_SETUP_SRC: t.src,
+          FAIL_CI: "1",
+        },
+      });
+      expect(r.exitCode).not.toBe(0);
+      expect(stampOf(t)).toBe(lockSha("lock-v1"));
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(5) no lockfile: npm install only when node_modules is missing", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      for (const r of ["bc-dev-mcp", LOCK, "pi-mcp"])
+        mkdirSync(join(t.src, r, ".git"), { recursive: true });
+      mkdirSync(join(t.src, "pi-mcp", "node_modules"));
+      run(t);
+      expect(npmCalls(t, "install").sort()).toEqual(
+        [`npm install --silent @${LOCK}`, "npm install --silent @bc-dev-mcp"].sort(),
+      );
+      expect(npmCalls(t, "ci")).toEqual([]);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
 });
 
 test("siblings default to /work/src, on the work volume", () => {
