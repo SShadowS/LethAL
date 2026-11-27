@@ -108,6 +108,34 @@ lethal-code, 2026-11-27. Written before any code.
 8. **The fallback:** non-NAVX or signed bytes → `package:<hashPackage>`, as today.
 9. **#2 and #1 agree:** a session's stored identity equals `testAppHashFor`'s for the same bytes.
 
+## r2a (the delta review of r2; overrides the text above where they differ)
+
+1. **(B4) `bytesHash` is a REQUIRED field of `TestAppIdentity`.**
+   - Every builder sets it: the no-hook session (≈ 8780), the env-tool hook path (≈ 8689: `after.packageHash` as
+     `package:<hashPackage>`), and al-runner's `source:` identity, where `bytesHash` = that same source identity, so
+     al-runner's drift check is unchanged.
+   - `assertNoTestAppDrift` compares `provenTestApp.bytesHash` against each read's `bytesHash`. It can never be
+     skipped by an absent field.
+   - **Test 5 runs once per builder:** the hook path, the no-hook path and al-runner. Each one's drift check fires
+     when the bytes move.
+2. **(S5) The re-read site's values:**
+   - `batchTestAppReader` returns `{ identity, bytesHash }`;
+   - `snapshotKey` gains `beforeBytes`;
+   - R462's `before`, R686's `proven` and `after`, and the proof-withdrawal condition all use `bytesHash`.
+   - `snapshotKey.testAppHash` stays c2 (`findBaselineSnapshot`, the snapshot write, `priorRestartSnapshot`).
+   - The closed-world tag goes on both values or on neither; never on one only.
+3. **(S6) A store guard:** `createRun`, `setRunTestAppHash` and `insertBaselineSnapshot` THROW on a value matching
+   the old form when the session computed a c2 identity for a NAVX-shaped package.
+   - Simpler and equivalent: a test that a session reading a NAVX-shaped package stores `package:c2:` in BOTH the run
+     row and the snapshot row, plus a red check that storing `bytesHash` turns it red.
+   - `bytesHash` keeps the `package:<hashPackage>` form that `testAppRefusal` and `baselineFoundNoneRefusal` require
+     (`startsWith("package:")`).
+4. **The old-form sentence** goes also on the env-tool resume's `TestAppRepublishedError` (≈ 8697-8720).
+   - Its wording: "the prior run's test-app identity is the pre-R1234 form, or a package LethAL does not
+     content-hash (signed or of unknown shape)".
+   - **Test 7 adds:** a NEW-client run whose package fell back (signed) is refused WITHOUT the pre-R1234 claim being
+     the only explanation, that is, the sentence names both causes.
+
 ## Gates
 
 - `legs.ts` for the touched files: bcdev and lease at least, plus CI. The itests that assert
