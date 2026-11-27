@@ -132,6 +132,40 @@ lethal-code, 2026-11-27.
    Pinned by a test, and the banner says so.
 6. **NIT 6:** the banner gives the window's row count apart from the left-out count.
 
+## r3 (2026-11-27, approved by the orchestrator; the build is HELD until the load question below is read)
+
+- **Why:** bugs found a confound.
+  - A FRESH bc4 ran its baseline 3.87× slower per test than email3's first baseline at server1 load1 ≈ 340, which is
+    mostly kraken-alsem's benchmarks, outside our container. BC runs on server1.
+  - So part 1's email3 slowdown may be host load, at least partly. R1228 carries bugs' correction (8a4fe76da).
+  - server1 keeps NO load history, so the 29 healthy controls cannot be compared with email3's hours after the fact.
+- **The change to the design:**
+  - At each block's end, the monitor reads the host's `/proc/pressure/cpu` "some avg60" and `/proc/loadavg` load1
+    (the container sees the host's values: BC runs on the same host).
+    - A read error records `null`, never 0.
+  - The block's median, PSI and load1 are kept.
+  - The STOP warning and the banner print the 3 blocks' PSI and load1 beside their medians: "… at 4.9× (PSI 72%,
+    load1 310) …".
+  - Nothing in the STOP rule reads them yet.
+- **The load-gate question**, pre-committed now, evaluated later on NEW data only:
+  - **Data:**
+    - bugs' hourly logs during the narrowed runs (`narrow-*/hourly.tsv`: load and per-mutant cost);
+    - the per-block ratio and PSI of every bcdev run recorded from 2026-11-27 on, by an offline script over its
+      stores and events plus the hourly logs (the r3 build's own records once it lands);
+    - (b)'s runs.
+  - **Labels**, set before computing, from evidence other than the ratio:
+    - **LOAD-ONLY:** a span on a tier restarted ≤ 1 h before, with PSI avg60 ≥ 50%;
+    - **QUIET-DEGRADED:** a span bugs names degraded with PSI avg60 < 20%;
+    - **HEALTHY-QUIET:** a fresh tier with PSI < 20%.
+  - **The rule:**
+    - If any LOAD-ONLY span reaches STOP (3 blocks ≥ 4.0), the STOP needs a load gate. The gate's form is then
+      designed with its own pre-commitment, for example no STOP while PSI avg60 ≥ the LOAD-ONLY spans' minimum, or a
+      concurrent canary.
+    - If no LOAD-ONLY span reaches STOP (with at least 3 such spans of ≥ 150 passing rows each), the STOP stands
+      without a gate.
+    - If no QUIET-DEGRADED span exists, it is reported that tier state alone was never seen to trip the STOP.
+  - **Below the data floor** (fewer than 3 LOAD-ONLY spans): "not enough data", and the build stays held.
+
 ## Constants (exported)
 
 - `TIER_SLOWDOWN_BLOCK = 50`, `TIER_SLOWDOWN_STOP = 4.0`, `TIER_SLOWDOWN_HOLD = 3`, `TIER_SLOWDOWN_MIN_REF_MS = 50`.
