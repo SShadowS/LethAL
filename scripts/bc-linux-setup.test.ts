@@ -109,14 +109,16 @@ describe("continiaDependencyProblems", () => {
   });
 
   // R-826b: bc4 is BC 29. It is named on its own; `all` stays the BC 28.4 servers.
-  test("bc4 is accepted by name, in every mode", () => {
-    expect(parseArgs(["--server", "bc4"]).servers).toEqual(["bc4"]);
-    expect(parseArgs(["--server", "bc4", "--predict"])).toMatchObject({ predict: true });
-    expect(parseArgs(["--server", "bc4", "--write-config-only"])).toMatchObject({
-      servers: ["bc4"],
-      writeConfigOnly: true,
-    });
-    expect(() => parseArgs(["--server", "bc5"])).toThrow(/usage/);
+  test("bc4 and bc5 (BC 29) are accepted by name, in every mode", () => {
+    for (const s of ["bc4", "bc5"] as const) {
+      expect(parseArgs(["--server", s]).servers).toEqual([s]);
+      expect(parseArgs(["--server", s, "--predict"])).toMatchObject({ predict: true });
+      expect(parseArgs(["--server", s, "--write-config-only"])).toMatchObject({
+        servers: [s],
+        writeConfigOnly: true,
+      });
+    }
+    expect(() => parseArgs(["--server", "bc6"])).toThrow(/usage/);
   });
 
   // PR-462: bc4 stays on PR-309's 1.0.0.29 while DOTests' pinned series runs; the rest get 1.0.0.30.
@@ -129,7 +131,9 @@ describe("continiaDependencyProblems", () => {
     for (const s of ["bc1", "bc2", "bc3"] as const) {
       expect(controlFor(s)).toEqual({ path: CONTROL_APP, sha256: CONTROL_SHA256 });
     }
-    expect(Object.keys(CONTROL_PINS)).toEqual(["bc4"]);
+    // bc5 carries the same pinned series' second halves, so it is pinned with bc4.
+    expect(controlFor("bc5")).toEqual(controlFor("bc4"));
+    expect(Object.keys(CONTROL_PINS)).toEqual(["bc4", "bc5"]);
     // The pin's sha is the one checked: these bytes pass against their own pin and not the default.
     const bytes = Buffer.from("not a real app");
     const pin = { path: "/x/c.app", sha256: sha256Of(bytes) };
@@ -163,11 +167,16 @@ describe("continiaDependencyProblems", () => {
       "bc2",
       "bc3",
     ]);
-    expect(() => parseArgs(["--server", "bc5"])).toThrow(/`all` is bc1, bc2 and bc3 \(BC 28\.4\)/);
+    expect(() => parseArgs(["--server", "bc6"])).toThrow(/`all` is bc1, bc2 and bc3 \(BC 28\.4\)/);
   });
 
-  test("--with-continia and --accept-build are bc3's: bc4 refuses them by name", () => {
-    expect(() => parseArgs(["--server", "bc4", "--with-continia"])).toThrow(/bc3 only/);
+  test("--with-continia and --accept-build are bc3's: bc4 and bc5 refuse them by name", () => {
+    expect(() => parseArgs(["--server", "bc4", "--with-continia"])).toThrow(
+      /bc3 only \(bc4 is BC 29\)/,
+    );
+    expect(() => parseArgs(["--server", "bc5", "--with-continia"])).toThrow(
+      /bc3 only \(bc5 is BC 29\)/,
+    );
     expect(parseArgs(["--server", "bc3", "--with-continia"]).withContinia).toBe(true);
   });
 });
@@ -251,6 +260,7 @@ describe("config writer", () => {
       bc2: { odata: 7148, dev: 7149, api: 7152 },
       bc3: { odata: 7248, dev: 7249, api: 7252 },
       bc4: { odata: 7448, dev: 7449, api: 7452 },
+      bc5: { odata: 7548, dev: 7549, api: 7552 },
     });
     const cfg = buildConfig("bc4", login, paths, "sandbox-app") as {
       bcdev: Record<string, unknown>;
@@ -263,6 +273,20 @@ describe("config writer", () => {
     });
     expect(configFileName("bc4")).toBe("lethal.config.bc4.json");
     expect(launchFileName("bc4")).toBe("launch.bc4.json");
+  });
+
+  test("bc5's config names bc5's three ports (a second BC 29, 2026-11-27)", () => {
+    const cfg = buildConfig("bc5", login, paths, "sandbox-app") as {
+      bcdev: Record<string, unknown>;
+    };
+    expect(cfg.bcdev).toMatchObject({
+      server: `${HOST}:7549`,
+      port: 7549,
+      baseUrl: `${HOST}:7548/BC`,
+      apiBaseUrl: `${HOST}:7552/BC`,
+    });
+    expect(configFileName("bc5")).toBe("lethal.config.bc5.json");
+    expect(launchFileName("bc5")).toBe("launch.bc5.json");
   });
 
   test("bc2's config names bc2's three ports and the W1 company", () => {

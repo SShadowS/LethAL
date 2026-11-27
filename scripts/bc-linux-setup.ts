@@ -1,11 +1,11 @@
 /**
- * R589: bring one or more of the BC on Linux servers on server1 (bc1, bc2, bc3 on BC 28.4; bc4 on
- * BC 29) to the state the LethAL BC gates need, and check it with `lethal doctor`. `all` means
- * bc1-bc3 only: bc4 is always named on its own.
+ * R589: bring one or more of the BC on Linux servers on server1 (bc1, bc2, bc3 on BC 28.4; bc4 and
+ * bc5 on BC 29) to the state the LethAL BC gates need, and check it with `lethal doctor`. `all` means
+ * bc1-bc3 only: bc4 and bc5 are always named on their own.
  *
- *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all [--lane <lane>] [--dry-run | --predict]
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|bc5|all [--lane <lane>] [--dry-run | --predict]
  *                                 [--with-continia] [--accept-build <v>] [--held-lease <token>]
- *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all --write-config-only
+ *   bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|bc5|all --write-config-only
  *
  * `--predict` (R599) runs (a) to (d) under the lease and stops: it may fill the shared symbol cache
  * (a read from the server into the write-once cache, ruling (b)), and it writes no config or launch
@@ -127,14 +127,17 @@ export const CONTROL_SHA256 = "eb830ade2fd1c2207f38f58f42bcbac41edc737285256c799
  * PR-462: servers kept on another build. bc4 stays on PR-309's 1.0.0.29 (R1138) while lethal-bugs'
  * DOTests pinned series (PR-427) runs there: it records "LethAL Control: 1.0.0.29" as a pin. Remove
  * the entry when that series ends, in the change that publishes 1.0.0.30 to bc4 (R1170's trigger).
+ * bc5 (2026-11-27) carries the same series' second half of each file, so it is pinned with bc4 and moves with it.
  */
+const PR309_CONTROL = {
+  path: "/coord/handoff/PR-309/control/LethAL_LethAL Control_1.0.0.29.app",
+  sha256: "545efbeaad6d050ea768a257d20a7612c22cd17c3d25567b0b7ab4d5726df578",
+} as const;
 export const CONTROL_PINS: Partial<
   Record<ServerName, { readonly path: string; readonly sha256: string }>
 > = {
-  bc4: {
-    path: "/coord/handoff/PR-309/control/LethAL_LethAL Control_1.0.0.29.app",
-    sha256: "545efbeaad6d050ea768a257d20a7612c22cd17c3d25567b0b7ab4d5726df578",
-  },
+  bc4: PR309_CONTROL,
+  bc5: PR309_CONTROL,
 };
 /**
  * PR-462: bc-demo (the owner's demo server, `bc-demo-setup.ts`, kraken and laptop mode) stays on
@@ -851,16 +854,16 @@ export interface SetupArgs {
   readonly predict?: boolean;
 }
 
-/** What `--server all` means: the BC 28.4 servers. bc4 (BC 29) is never reached by `all`. */
+/** What `--server all` means: the BC 28.4 servers. bc4 and bc5 (BC 29) are never reached by `all`. */
 export const ALL_SERVERS: readonly ServerName[] = ["bc1", "bc2", "bc3"];
 
 const isServerName = (s: string | undefined): s is ServerName =>
   s !== undefined && Object.hasOwn(SERVERS, s);
 
 const USAGE =
-  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all [--lane <lane>] [--dry-run | --predict] [--with-continia [--accept-build <version>]] [--held-lease <token>]\n" +
-  "       bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|all --write-config-only\n" +
-  "       `all` is bc1, bc2 and bc3 (BC 28.4). bc4 (BC 29) is named on its own; --with-continia is bc3 only.";
+  "usage: bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|bc5|all [--lane <lane>] [--dry-run | --predict] [--with-continia [--accept-build <version>]] [--held-lease <token>]\n" +
+  "       bun scripts/bc-linux-setup.ts --server bc1|bc2|bc3|bc4|bc5|all --write-config-only\n" +
+  "       `all` is bc1, bc2 and bc3 (BC 28.4). bc4 and bc5 (BC 29) are named on their own; --with-continia is bc3 only.";
 
 export function parseArgs(argv: readonly string[]): SetupArgs {
   let server: string | undefined;
@@ -899,9 +902,9 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
   )
     throw new Error(`--write-config-only takes only --server\n${USAGE}`);
   if (predict && dryRun) throw new Error(`--predict and --dry-run exclude each other\n${USAGE}`);
-  // bc3's Continia stack is 28.x only: bc4 (BC 29) takes no `--with-continia`.
-  if (withContinia && server === "bc4")
-    throw new Error(`--with-continia is for bc3 only (bc4 is BC 29)\n${USAGE}`);
+  // bc3's Continia stack is 28.x only: bc4 and bc5 (BC 29) take no `--with-continia`.
+  if (withContinia && (server === "bc4" || server === "bc5"))
+    throw new Error(`--with-continia is for bc3 only (${server} is BC 29)\n${USAGE}`);
   if (writeConfigOnly && (isServerName(server) || server === "all"))
     return {
       servers: server === "all" ? [...ALL_SERVERS] : [server],
