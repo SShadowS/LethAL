@@ -46,7 +46,12 @@ describe("R1245: probe-r58-differential's recording wrapper", () => {
     expect(b.batchWorkDate?.()).toBe("2026-10-01");
     await b.activate("m1");
     expect((await b.run(ref, {} as never)).outcome).toBe("pass");
-    expect(calls).toEqual(["baselinePhase(true)", "activate(null)", "baselinePhase(false)", "activate(m1)"]);
+    expect(calls).toEqual([
+      "baselinePhase(true)",
+      "activate(null)",
+      "baselinePhase(false)",
+      "activate(m1)",
+    ]);
     // Only the baseline run is recorded.
     expect([...rec.baselineCoverage]).toEqual([["T.M", ["Codeunit:50000::P"]]]);
   });
