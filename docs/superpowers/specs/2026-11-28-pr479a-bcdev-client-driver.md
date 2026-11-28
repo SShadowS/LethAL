@@ -292,3 +292,85 @@ No false kill or false survivor was found. These pre-commit what the build now d
    - `lethal verify` refuses a bcdev-client source run;
    - the client preflight refuses, by name and before publishing, a missing config path, a missing company, a driver not
      built, and `credentialsEnv`.
+
+## Amendment 5 (2026-11-28, the first live runs on bcwin)
+**Measured** (`/coord/handoff/PR-479/table/`):
+- page 130455's method lines load into its repeater's viewport;
+- their `Line Type` cell reads the option ORDINAL (`1` = Function, `0` = Codeunit), not its caption;
+- a long codeunit's lines arrive in PAGES: sandbox-data-tests has 80 lines and the first viewport held 20.
+
+**Rules:**
+1. **The driver reads ordinals, never captions** (orchestrator ruling): a method line is a line whose `Line Type` is `1`. A
+   caption would break on a translated BC. It is a pure helper, checked by the driver's `--self-test` (run by a test when
+   the driver is built), and red-checked both ways.
+2. **The driver pages the repeater** until it holds every line (TotalRowCount), merging pages by identity. An incomplete
+   read is still the named refusal `methods-viewport-incomplete`, before any op.
+3. **A client report has its own execution-context banner;** it never prints al-runner's label. A test pins it.
+
+**Table 1 (sandbox-app):** PASS. 20 equal with `itest:bcdev`'s frozen table (verdict and killing test); the 6 headless
+no-coverage mutants read survived, as pre-committed; 0 BLOCK.
+
+## Amendment 6 (2026-11-28, page 130455's repeater cannot be paged reliably; the read-back scope)
+**Measured on bcwin** (codeunit 79310, `/coord/handoff/PR-479/smoke/`):
+- **The first viewport:** TotalRowCount 80, offset 0, 20 rows.
+- **After `Scroll(20)`:** offset 60, TotalRowCount 73, 13 rows. Rows 20-59 were never shown.
+- **Reading:** TotalRowCount is an estimate, and the meaning of Scroll's argument is not a plain offset. Paging this repeater
+  rests on undocumented behaviour.
+
+**Change (my call; principles 1, 5, 13), replacing amendment 2 item 5 and amendment 5 item 2:**
+1. **Before the op,** the method-line read-back checks the lines of the FIRST viewport only:
+   - every line read must be a declared method of this codeunit, in declared order, with Run = true;
+   - when the viewport holds the whole codeunit (TotalRowCount within the page), the lines must EQUAL the declared list
+     both ways, as before;
+   - a longer codeunit is not refused for that alone.
+2. **The full proof is the post-run join, which is unchanged and mandatory:** each declared method has exactly one page
+   result and one attestation row; no extra method appears; testMethodRuns runs 1..N in declared order.
+   - A method the page skipped (a filter that did not apply, a stale `Run = false` beyond the first viewport) therefore
+     fails as the named `client-incomplete`, never as a verdict.
+   - That failure comes after a normal End and Deactivate, so it does not wedge the server.
+3. **The driver's paging code is removed,** to keep the driver small. A codeunit longer than one page still runs whole:
+   RunNextTest runs the codeunit, not the viewport.
+4. **A red test:** a fake page whose second viewport would hide a `Run = false` method must end in `client-incomplete`
+   after the op, with End and Deactivate both sent.
+
+## Amendment 7 (2026-11-28, table 2 re-committed per mutant by key; orchestrator ruling)
+Evidence: `/coord/handoff/PR-479/table/result-sandbox-data.md`.
+- **The first table-2 run:** 413 equal, 25 headless no-coverage read survived (pre-committed), and 12 BLOCKs, each explained
+  by measurement through one of two client-mode semantics:
+  - **A, declared order:** the killer is the first failing method in declared order;
+  - **B and C, codeunit-level isolation:** page 130455 runs a codeunit's methods in one isolation, so earlier methods' rows
+    persist. For B, the headless killer `NegationFlipChangesTheCount` is RED at the client baseline ("expected 2 rows other
+    than FILT-A1, got 19"). For C, a mutant equivalent under per-method isolation becomes observable.
+- Both are what a CI run with codeunit isolation sees.
+
+**The table-2 rule, re-committed BY KEY (no class wildcard):**
+- every key of `itest/tables.baseline.json` must equal the client verdict and killing test;
+- except the 25 headless no-coverage mutants, which read survived;
+- and EXACTLY these 12 keys, each with its own expected client answer.
+- The 12 are frozen in `/coord/handoff/PR-479/table/sandbox-data.client-overrides.precommit.json` (sha256 7b898b1b…).
+
+| class | key | client (expected) | headless |
+|---|---|---|---|
+| C | `26725a0933de…\|Data Filter Ops\|CountDecoyOrTarget\|lethal.void-method-call\|1` | killed / DroppedPlaceholderFreeAlternativeChangesTheCount | survived |
+| B | `3fbca8eaf11a…\|Data Filter Ops\|CountExcluding\|lethal.return-value\|1` | survived | killed / NegationFlipChangesTheCount |
+| A | `4b5ee16c6833…\|Data Shadow\|SetRange\|lethal.remove-assignment\|1` | killed / ShadowedBuiltinsRun | killed / SelfShadowedRun |
+| A | `71f50c693e5f…\|Data Trigger Probe\|OnValidate\|lethal.empty-block\|1` | killed / ValidateRunsTheFieldTrigger | killed / ImplicitValidateRunsInsideTheTable |
+| A | `8583acc40cc8…\|Data Shadow\|TestField\|lethal.remove-assignment\|1` | killed / ShadowedBuiltinsRun | killed / SelfShadowedRun |
+| B | `8e53e05fee34…\|Data Filter Ops\|CountExcluding\|lethal.flip-filter-literal\|1` | survived | killed / NegationFlipChangesTheCount |
+| B | `8e53e05fee34…\|Data Filter Ops\|CountExcluding\|lethal.void-method-call\|1` | survived | killed / NegationFlipChangesTheCount |
+| B | `a3ff2f07cb3f…\|Data Filter Ops\|CountExcluding\|lethal.empty-block\|1` | survived | killed / NegationFlipChangesTheCount |
+| A | `c6b8a794c3ec…\|Data Shadow\|SetRange\|lethal.empty-block\|1` | killed / ShadowedBuiltinsRun | killed / SelfShadowedRun |
+| A | `ccaaa68618f9…\|Data Shadow\|TestField\|lethal.empty-block\|1` | killed / ShadowedBuiltinsRun | killed / SelfShadowedRun |
+| A | `d36581a980ee…\|Data Swap Ops\|PrimaryStamp\|lethal.empty-block\|1` | killed / WeakStampAssertionMissesTheSwap | killed / LinkedPairIsStamped |
+| A | `dc31dd558a8c…\|Data Trigger Probe\|OnValidate\|lethal.remove-assignment\|1` | killed / ValidateRunsTheFieldTrigger | killed / ImplicitValidateRunsInsideTheTable |
+
+**Before the proof run:**
+1. **The bug B exposed is fixed:** a client baseline-red method is listed in `notRunAtBaseline`, as a headless one is, so
+   B's survivors carry the not-run note. Red tests both ways (a red method listed; a green one not).
+2. **The caveat text** (`client-no-coverage`'s interpretation in 479a) states A, B and C: on this backend, a verdict can
+   differ from headless because the killer is the first failing method in declared order, and because a codeunit's methods
+   share one isolation.
+3. **The proof** is a FRESH table-2 run on the fixed head. It must match this per-key rule exactly; the first run is not
+   the proof.
+4. **Counting (ruling):** every later client run records how many codeunits are longer than the first viewport, and how
+   many end `client-incomplete`.
