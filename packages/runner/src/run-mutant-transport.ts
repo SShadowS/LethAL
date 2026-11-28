@@ -1095,6 +1095,9 @@ export class RunMutantTransport {
     const controller = new AbortController();
     const timer =
       timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs);
+    // R1244: what had arrived when a bound fired, so a body cut short says so (a proxy that stalls a chunked answer).
+    let gotHeaders: Response | undefined;
+    let received = 0;
     try {
       const res = await this.fetchFn(url, {
         method: "POST",
@@ -1105,10 +1108,19 @@ export class RunMutantTransport {
         body: JSON.stringify(body),
         ...(timeoutMs !== undefined ? { signal: controller.signal } : {}),
       });
+      gotHeaders = res;
       if (!res.ok) {
         throw new Error(`${action} failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
       }
-      const outer: unknown = await res.json();
+      const bytes: Uint8Array[] = [];
+      const reader = res.body?.getReader();
+      for (;;) {
+        const chunk = reader === undefined ? { done: true as const } : await reader.read();
+        if (chunk.done) break;
+        bytes.push(chunk.value);
+        received += chunk.value.byteLength;
+      }
+      const outer: unknown = JSON.parse(Buffer.concat(bytes).toString("utf8"));
       const value = (outer as { value?: unknown }).value;
       if (typeof value !== "string") {
         throw new Error(`${action} returned no string \`value\`: ${JSON.stringify(outer)}`);
@@ -1121,7 +1133,17 @@ export class RunMutantTransport {
     } catch (err) {
       // PR-479 leg 4: our own timer's abort surfaced as a bare "AbortError", which names neither the action nor the bound.
       if (controller.signal.aborted) {
-        throw new Error(`${action} gave no answer within ${timeoutMs} ms (${String(err)})`);
+        const where =
+          gotHeaders === undefined
+            ? "no response headers arrived"
+            : `the answer stopped after ${received} body byte(s) (${
+                gotHeaders.headers.get("transfer-encoding") === "chunked"
+                  ? "chunked"
+                  : `content-length ${gotHeaders.headers.get("content-length") ?? "not given"}`
+              }): response truncated`;
+        throw new Error(
+          `${action} gave no answer within ${timeoutMs} ms; ${where} (${String(err)})`,
+        );
       }
       throw err;
     } finally {

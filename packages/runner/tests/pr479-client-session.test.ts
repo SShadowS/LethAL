@@ -700,6 +700,44 @@ describe("PR-479 round 3b: a client session", () => {
     expect(stub.ops.some((o) => o.mutantId === "M0003")).toBe(false);
   });
 
+  // Amendment 8, ruling 2 (R1244). Red: drop the rethrow of the two reasons from `failed` in scoreClientBatch; the
+  // run then records an error verdict and runs M0003's op against a server that just lost an answer.
+  for (const reason of ["client-attestation-unreadable", "client-attestation-pages"] as const) {
+    test(`ruling 2: ${reason} stops the run by name; no later op runs, and nothing is quarantined`, async () => {
+      const p = await project();
+      const quarantineDir = join(p.root, "q");
+      const stub = new ClientStub(undefined, (ctx) =>
+        ctx.phase === "mutant" && ctx.mutantId === "M0002"
+          ? new ClientRunFailure(reason, "ReadClientAttestation gave no answer within 30000 ms")
+          : undefined,
+      );
+      const store = new ResultsStore(":memory:");
+      const err = await runSession({
+        backend: stub,
+        store,
+        projectDir: p.projectDir,
+        testDir: p.testDir,
+        instrumentedDir: p.instrumentedDir,
+        selectorIds,
+        experimentalClientMode: true,
+        resourceServer: "http://bcwin",
+        resourceServerInstance: "BC",
+        quarantineDir,
+      }).catch((e: unknown) => e);
+      store.close();
+      expect(err).toBeInstanceOf(ClientRunFailure);
+      expect((err as ClientRunFailure).reason).toBe(reason);
+      const m2 = stub.ops.findIndex((o) => o.mutantId === "M0002");
+      expect(m2).toBeGreaterThan(-1);
+      expect(stub.ops.length).toBe(m2 + 1); // the failing op was the last one
+      expect(
+        await new QuarantineStore(quarantineDir).read(
+          quarantineResourceKey({ server: "http://bcwin", serverInstance: "BC" }),
+        ),
+      ).toBeNull();
+    });
+  }
+
   test("a lost Activate is client-activation-unknown, and quarantines; a named check is client-run-failed and the run goes on", async () => {
     const p = await project();
     const quarantineDir = join(p.root, "q");

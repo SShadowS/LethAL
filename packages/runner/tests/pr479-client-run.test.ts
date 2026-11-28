@@ -921,6 +921,20 @@ describe("PR-479 round 3a: one client codeunit op", () => {
     expect(
       await caught(rig("ok", { attestation: () => ({ read: true, rows: [] }) }).run()),
     ).toEqual(["client-run-empty", false]);
+    // amendment 8: an inconsistent page reaches the caller as client-attestation-pages, not renamed unreadable
+    // (red: drop `if (err instanceof ClientRunFailure) throw err;` from runClientCodeunit's page read)
+    expect(
+      await caught(
+        rig("ok", {
+          attestation: (body) => ({
+            read: true,
+            total: 3,
+            from: Number(body.fromIndex),
+            rows: [row({ attemptId: String(body.attemptId), opSeq: Number(body.opSeq) })],
+          }),
+        }).run(),
+      ),
+    ).toEqual(["client-attestation-pages", false]);
     // leg 4: a lost attestation read after the final Deactivate is named, and the op ended
     expect(
       await caught(
@@ -951,6 +965,38 @@ describe("PR-479 round 3a: one client codeunit op", () => {
       .readClientAttestation({ attemptId: "a1", lease, fromIndex: 0, maxRows: 10, timeoutMs: 20 })
       .catch((x: unknown) => x);
     expect(String(e)).toContain("ReadClientAttestation gave no answer within 20 ms");
+    expect(String(e)).toContain("no response headers arrived");
+  });
+
+  // R1244: bcwin's Docker port forward stalled a chunked answer mid-body. Red: drop the byte count from postAction's
+  // abort message (or stop reading the body yourself), and the message no longer says it was cut short.
+  test("R1244: an answer that stalls mid-body names the bytes received and that it was chunked", async () => {
+    const stall = ((_url: string, init?: RequestInit) => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(`{"value":"${"x".repeat(990)}`));
+          init?.signal?.addEventListener("abort", () =>
+            c.error(new DOMException("The operation was aborted.", "AbortError")),
+          );
+        },
+      });
+      return Promise.resolve(
+        new Response(stream, { status: 200, headers: { "transfer-encoding": "chunked" } }),
+      );
+    }) as unknown as typeof fetch;
+    const t = new RunMutantTransport(
+      { baseUrl: "http://odata/BC", company: "CRONUS", username: "u", password: "p" },
+      "target-app",
+      "0123456789abcdef0123456789abcdef",
+      stall,
+    );
+    const lease = { epoch: 1, token: "t", serverGeneration: "g", opSeq: 1 };
+    const e = await t
+      .readClientAttestation({ attemptId: "a1", lease, fromIndex: 0, maxRows: 10, timeoutMs: 50 })
+      .catch((x: unknown) => x);
+    expect(String(e)).toContain("ReadClientAttestation gave no answer within 50 ms");
+    // `{"value":"` (10 bytes) plus 990
+    expect(String(e)).toContain("stopped after 1000 body byte(s) (chunked): response truncated");
   });
 
   test("round 3b: with no baselineWorkDate the op's own start read sets it, and the end read must equal it", async () => {

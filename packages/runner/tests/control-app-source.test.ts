@@ -997,6 +997,9 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     );
     expect(flat).toContain("if Attestation.Next(FromIndex) <> FromIndex then exit;");
     expect(flat).toContain("until (Taken >= MaxRows) or (Attestation.Next() = 0);");
+    // the counter the bound reads: once per row, inside the loop (red: drop it and a page holds every later row)
+    expect(flat).toContain("Rows.Add(Row); Taken += 1; until (Taken >= MaxRows)");
+    expect(flat.indexOf("Taken += 1;")).toBe(flat.lastIndexOf("Taken += 1;"));
     expect(codeOnly(procedureBody(state, "MaxAttestationPageRows")).replace(/\s+/g, " ")).toContain(
       `exit(${CLIENT_ATTESTATION_PAGE_ROWS});`,
     );

@@ -7603,6 +7603,13 @@ async function scoreClientBatch(
       if (!(err instanceof ClientRunFailure)) throw err;
       countIncomplete(err);
       await quarantineIfInFlight(err, `${what} (mutant ${m.mutantId})`);
+      // Amendment 8, ruling 2 (R1244): after a lost or inconsistent attestation read the run STOPS, so no further op
+      // calls a server that just lost an answer (on bcwin a second call after a lost answer wedged the server).
+      if (
+        err.reason === "client-attestation-unreadable" ||
+        err.reason === "client-attestation-pages"
+      )
+        throw err;
       if (err.reason === "client-activation-unknown")
         return {
           verdict: "error",
