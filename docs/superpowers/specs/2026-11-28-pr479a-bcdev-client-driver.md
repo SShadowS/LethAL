@@ -243,3 +243,92 @@ change, so no 1.0.0.32. These are my calls, from design principles 1 (correct fi
    - background sessions, TaskScheduler or a job queue started at login, which can reach a guard during an op;
    - subscribers to Test Runner - Mgt's per-method events in the test app or target, which run outside isolation (shared
      with headless).
+
+## Amendment 3 (2026-11-28, the first smoke run of the repo driver on bcwin)
+**Measured** (`/coord/handoff/PR-479/smoke/`):
+- the open and Activate worked, and the bind passed;
+- page 130455's method-line read-back then found NO lines and refused (`methods-mismatch`), fail-closed;
+- because the refusal came after the bind, the op was bound with no End, and bcwin needed an NST restart
+  (q-20261128T025156-4073f557).
+
+**Changes:**
+1. **Every page 130455 set-up and read-back happens BEFORE the op exists:**
+   - the new order is: open; then page 130455's set-up and read-backs (the codeunit range, the runner id, the company, the
+     method lines and their Run flags); then Activate; then bind (page 91015); then a re-check of the range, runner and
+     company on page 130455; then the run, End, Deactivate, Read, close (amendment 1, item 1 otherwise unchanged);
+   - a read-back refusal therefore closes a session that holds no op, and never wedges the server;
+   - a red test covers it: a read-back refusal happens before the bind is ever requested.
+2. **The method lines:** the driver reads them through the page's repeater, trying the viewport, then fetching rows, then a
+   page refresh, and refuses if none yields them.
+   - Which strategy works on BC 28.4 is MEASURED on bcwin with the driver's diagnostic output before the build goes on.
+     The read-back stays fail-closed.
+3. **The one wedge still possible from the driver** is a failure between Activate and the end of the run. It is recovered
+   only by an NST restart plus ForceResetLease. Waiting out the run bound does not clear it.
+
+## Amendment 4 (2026-11-28, the Opus review of the build, rounds 2-3b; `/coord/handoff/PR-479/review-r2.md`)
+No false kill or false survivor was found. These pre-commit what the build now does, where it departs from the text above.
+1. **The op number** is taken just before Activate. A failure before Activate burns none, so the next op's Activate is not
+   refused.
+2. **A refusal before Activate** waits (with a deadline) for the driver's own close before the process is ended, so that
+   `/cs` session is closed before the next op starts.
+3. **A failed close after the final Deactivate** is `client-close-failed`. The session may linger and later refresh
+   another mutant, so it stops the run and quarantines the lane.
+4. **Time:**
+   - the control's run bound is its cap, 600 s;
+   - the driver has ONE deadline for the op, from the bind to the end of the run: 540 s. It is enforced across the whole
+     RunNextTest loop, so it always fires before the control's bound;
+   - a codeunit run longer than that is `in-flight-unknown` plus quarantine (by design; the run's remaining work ends);
+   - the C# loop has no unit test, so the bcwin run covers it.
+5. **Rows from another server state:** each row's `serverGeneration` and `databaseId` must equal the lease's, else
+   `client-row-stale-server`. This covers attempt ids restarting at a1 after a reset.
+6. **Departures from amendments 1 and 3, kept (both fail closed):**
+   - `ReadClientAttestation` runs AFTER the close (the rows are committed by then);
+   - a lost Activate answer is always left for recovery (quarantine), never cleaned up by a guessed generation.
+7. **Labels:**
+   - `kill-after-red-method` is a WARNING event, not a caveat value;
+   - it also fires when an unscored TestPage method failed before the killer;
+   - a client kill carries no `killPosition`, which reads with headless meaning elsewhere.
+8. **Refusals:**
+   - `lethal verify` refuses a bcdev-client source run;
+   - the client preflight refuses, by name and before publishing, a missing config path, a missing company, a driver not
+     built, and `credentialsEnv`.
+
+## Amendment 5 (2026-11-28, the first live runs on bcwin)
+**Measured** (`/coord/handoff/PR-479/table/`):
+- page 130455's method lines load into its repeater's viewport;
+- their `Line Type` cell reads the option ORDINAL (`1` = Function, `0` = Codeunit), not its caption;
+- a long codeunit's lines arrive in PAGES: sandbox-data-tests has 80 lines and the first viewport held 20.
+
+**Rules:**
+1. **The driver reads ordinals, never captions** (orchestrator ruling): a method line is a line whose `Line Type` is `1`. A
+   caption would break on a translated BC. It is a pure helper, checked by the driver's `--self-test` (run by a test when
+   the driver is built), and red-checked both ways.
+2. **The driver pages the repeater** until it holds every line (TotalRowCount), merging pages by identity. An incomplete
+   read is still the named refusal `methods-viewport-incomplete`, before any op.
+3. **A client report has its own execution-context banner;** it never prints al-runner's label. A test pins it.
+
+**Table 1 (sandbox-app):** PASS. 20 equal with `itest:bcdev`'s frozen table (verdict and killing test); the 6 headless
+no-coverage mutants read survived, as pre-committed; 0 BLOCK.
+
+## Amendment 6 (2026-11-28, page 130455's repeater cannot be paged reliably; the read-back scope)
+**Measured on bcwin** (codeunit 79310, `/coord/handoff/PR-479/smoke/`):
+- **The first viewport:** TotalRowCount 80, offset 0, 20 rows.
+- **After `Scroll(20)`:** offset 60, TotalRowCount 73, 13 rows. Rows 20-59 were never shown.
+- **Reading:** TotalRowCount is an estimate, and the meaning of Scroll's argument is not a plain offset. Paging this repeater
+  rests on undocumented behaviour.
+
+**Change (my call; principles 1, 5, 13), replacing amendment 2 item 5 and amendment 5 item 2:**
+1. **Before the op,** the method-line read-back checks the lines of the FIRST viewport only:
+   - every line read must be a declared method of this codeunit, in declared order, with Run = true;
+   - when the viewport holds the whole codeunit (TotalRowCount within the page), the lines must EQUAL the declared list
+     both ways, as before;
+   - a longer codeunit is not refused for that alone.
+2. **The full proof is the post-run join, which is unchanged and mandatory:** each declared method has exactly one page
+   result and one attestation row; no extra method appears; testMethodRuns runs 1..N in declared order.
+   - A method the page skipped (a filter that did not apply, a stale `Run = false` beyond the first viewport) therefore
+     fails as the named `client-incomplete`, never as a verdict.
+   - That failure comes after a normal End and Deactivate, so it does not wedge the server.
+3. **The driver's paging code is removed,** to keep the driver small. A codeunit longer than one page still runs whole:
+   RunNextTest runs the codeunit, not the viewport.
+4. **A red test:** a fake page whose second viewport would hide a `Run = false` method must end in `client-incomplete`
+   after the op, with End and Deactivate both sent.
