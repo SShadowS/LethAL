@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 1211 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**73 of 1212 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -421,6 +421,7 @@ that ordering is the priority.
 - **R1243** · CI flake: four skip-path tests in scripts/al-runner-v3-update.test.ts read "pass" where "skipped" was expected on one CI attempt (run 46139921525), then passed on the re-run; suspected shared state in the file's setup · [R1243.md](docs/roadmap/R1243.md) · done (ea1e054d9) — cause: a pid collision, not shared state. The four tests wrote a fake live holder with the…
 - **R1244** · bcdev-client: after a client op on bcwin (Windows BC 28.4), every authenticated call to the server hung (OData, the control app, the companies list) while unauthenticated endpoints answered; seen twice in a row on PR-479's forced leg 4 · [R1244.md](docs/roadmap/R1244.md) · open — CAUSE FOUND (kraken, 2026-11-28): bcwin's Docker Desktop port forward stalls a chunked HTTP answer at…
 - **R1246** · Four LethAL Control actions answer in ONE response that grows with the project or the call (RunMutantWithCoverage, RunMutantMany, ObjectOwners/FieldOwners, InstalledDependents); a server or proxy that caps response size would lose them · [R1246.md](docs/roadmap/R1246.md) · open — listed by PR-479's amendment 8, not changed; trigger: a measured answer near a cap, or a real server…
+- **R1249** · bcdev-client: the client-incomplete join (a declared method with no page result) is unit-tested only and has never been seen live · [R1249.md](docs/roadmap/R1249.md) · open — trigger: the first real client run that ends client-incomplete; check it by hand
 
 ## Product gaps a real project hits
 
