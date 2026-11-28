@@ -1307,7 +1307,7 @@ RUN — cost and recovery
   --experimental-client-mode  opens --backend bcdev-client, an experimental backend that runs each
                              test codeunit in a /cs client session with coverage OFF (a survivor
                              may be a mutant no test reached; the client-no-coverage caveat is on
-                             every report). Needs LethAL Control 1.0.0.31 and "webClientBaseUrl"
+                             every report). Needs LethAL Control 1.0.0.32 and "webClientBaseUrl"
                              in the config's bcdev section. Refuses --stop-hung-sessions, --workers
                              above 1 and a run whose tests write the Company table (unless
                              --keep-company-tests). Round 1 has no driver yet

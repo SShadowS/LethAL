@@ -8,7 +8,7 @@ import { compareAppVersions } from "./app-version";
  */
 
 /** A bcdev-client run needs this LethAL Control or newer (headless stays at `MIN_CONTROL_VERSION`). */
-export const CLIENT_MIN_CONTROL_VERSION = "1.0.0.31";
+export const CLIENT_MIN_CONTROL_VERSION = "1.0.0.32";
 
 /**
  * The short form of the `client-no-coverage` caveat, written beside every survivor of a bcdev-client run

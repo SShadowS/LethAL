@@ -1,5 +1,5 @@
 /**
- * PR-479 (479a) round 3a: the shapes of the three fenced client actions of LethAL Control 1.0.0.31
+ * PR-479 (479a) round 3a: the shapes of the three fenced client actions of LethAL Control 1.0.0.31 (1.0.0.32 pages the read)
  * (`ActivateForClient`, `DeactivateForClient`, `ReadClientAttestation`) and their strict readers.
  * Each reader fails loudly on anything unexpected: a wrong type, a missing field, a field that must not be there.
  * The calls themselves are `RunMutantTransport`'s (`postAction` is private to it).
@@ -48,8 +48,14 @@ export interface ClientAttestationRow {
   readonly databaseId: string;
 }
 
+/** 1.0.0.32 (PR-479 amendment 8): ONE page of the op's rows; `total` is the op's row count, `from` the page's start. */
 export type ReadClientAttestationAnswer =
-  | { readonly read: true; readonly rows: readonly ClientAttestationRow[] }
+  | {
+      readonly read: true;
+      readonly total: number;
+      readonly from: number;
+      readonly rows: readonly ClientAttestationRow[];
+    }
   | { readonly read: false; readonly reason: string };
 
 type Obj = Record<string, unknown>;
@@ -160,15 +166,25 @@ function parseRow(i: number, raw: unknown): ClientAttestationRow {
   };
 }
 
-/** `{read, rows?, reason?}`: a valid read carries `rows` (possibly empty) and no reason; an invalid one a reason. */
+/**
+ * `{read, total?, from?, rows?, reason?}`: a valid read carries `total`, `from` and `rows` (possibly empty) and no
+ * reason; an invalid one only a reason.
+ */
 export function parseReadClientAttestation(o: Obj): ReadClientAttestationAnswer {
   const a = "ReadClientAttestation";
-  only(a, o, ["read", "rows", "reason"]);
+  only(a, o, ["read", "total", "from", "rows", "reason"]);
   if (bool(a, o, "read")) {
     if ("reason" in o) throw new ClientAnswerShapeError(a, "a read carries a reason");
     if (!Array.isArray(o.rows)) throw new ClientAnswerShapeError(a, "a read carries no rows array");
-    return { read: true, rows: o.rows.map((r, i) => parseRow(i, r)) };
+    return {
+      read: true,
+      total: int(a, o, "total"),
+      from: int(a, o, "from"),
+      rows: o.rows.map((r, i) => parseRow(i, r)),
+    };
   }
-  if ("rows" in o) throw new ClientAnswerShapeError(a, "a failed read carries rows");
+  for (const k of ["rows", "total", "from"]) {
+    if (k in o) throw new ClientAnswerShapeError(a, `a failed read carries ${k}`);
+  }
   return { read: false, reason: str(a, o, "reason") };
 }

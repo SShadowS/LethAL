@@ -1060,16 +1060,22 @@ export class RunMutantTransport {
     );
   }
 
-  /** PR-479: `ReadClientAttestation` (fenced, read-only): every row of this op. */
+  /** PR-479: `ReadClientAttestation` (fenced, read-only): ONE page of this op's rows (1.0.0.32, amendment 8). */
   async readClientAttestation(req: {
     readonly attemptId: string;
     readonly lease: LeaseTuple & { readonly opSeq: number };
+    readonly fromIndex: number;
+    readonly maxRows: number;
     readonly timeoutMs: number;
   }): Promise<ReadClientAttestationAnswer> {
     return parseReadClientAttestation(
       await this.postAction(
         "ReadClientAttestation",
-        this.clientFence(req.attemptId, req.lease),
+        {
+          ...this.clientFence(req.attemptId, req.lease),
+          fromIndex: req.fromIndex,
+          maxRows: req.maxRows,
+        },
         req.timeoutMs,
       ),
     );

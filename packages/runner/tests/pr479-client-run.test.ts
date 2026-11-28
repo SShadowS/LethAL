@@ -15,6 +15,7 @@ import {
   type ClientRunFailureReason,
   checkClientRun,
   parsePageResults,
+  readAllAttestationPages,
 } from "../src/client-run";
 import {
   ClientAnswerShapeError,
@@ -358,26 +359,145 @@ describe("PR-479 round 3a: the answer readers fail loudly", () => {
     );
   });
   test("ReadClientAttestation", () => {
-    expect(parseReadClientAttestation({ read: true, rows: [row()] })).toEqual({
+    expect(parseReadClientAttestation({ read: true, total: 1, from: 0, rows: [row()] })).toEqual({
       read: true,
+      total: 1,
+      from: 0,
       rows: [row()],
     });
-    expect(parseReadClientAttestation({ read: true, rows: [] })).toEqual({ read: true, rows: [] });
+    expect(parseReadClientAttestation({ read: true, total: 0, from: 0, rows: [] })).toEqual({
+      read: true,
+      total: 0,
+      from: 0,
+      rows: [],
+    });
+    // Amendment 8: a read without total or from is a 1.0.0.31 answer, refused by shape
+    expect(() => parseReadClientAttestation({ read: true, rows: [] })).toThrow(
+      ClientAnswerShapeError,
+    );
+    expect(() => parseReadClientAttestation({ read: true, total: 0, rows: [] })).toThrow(
+      ClientAnswerShapeError,
+    );
+    expect(() =>
+      parseReadClientAttestation({ read: false, reason: "lease-invalid", total: 0 }),
+    ).toThrow(ClientAnswerShapeError);
     expect(parseReadClientAttestation({ read: false, reason: "lease-invalid" })).toEqual({
       read: false,
       reason: "lease-invalid",
     });
     expect(() => parseReadClientAttestation({ read: true })).toThrow(ClientAnswerShapeError);
     const { databaseId: _drop, ...short } = row();
-    expect(() => parseReadClientAttestation({ read: true, rows: [short] })).toThrow(
+    // total and from are valid here, so only the row's own shape can refuse
+    const page = { read: true, total: 1, from: 0 };
+    expect(() => parseReadClientAttestation({ ...page, rows: [short] })).toThrow(
       ClientAnswerShapeError,
     );
     expect(() =>
-      parseReadClientAttestation({ read: true, rows: [{ ...row(), success: "true" }] }),
+      parseReadClientAttestation({ ...page, rows: [{ ...row(), success: "true" }] }),
     ).toThrow(ClientAnswerShapeError);
-    expect(() =>
-      parseReadClientAttestation({ read: true, rows: [{ ...row(), stray: 1 }] }),
-    ).toThrow(ClientAnswerShapeError);
+    expect(() => parseReadClientAttestation({ ...page, rows: [{ ...row(), stray: 1 }] })).toThrow(
+      ClientAnswerShapeError,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Amendment 8 (R1244): the paged attestation read
+// ---------------------------------------------------------------------------------------------
+
+describe("PR-479 amendment 8: readAllAttestationPages", () => {
+  const rowsN = (n: number) => Array.from({ length: n }, (_, i) => row({ method: `M${i + 1}` }));
+  // A correct 1.0.0.32 server over `all`, with one page answer replaceable per call (0-based call number).
+  const server = (all: ClientAttestationRow[], over: Record<number, unknown> = {}) => {
+    const asks: [number, number][] = [];
+    const page = async (fromIndex: number, maxRows: number) => {
+      const n = asks.length;
+      asks.push([fromIndex, maxRows]);
+      if (n in over)
+        return over[n] as Awaited<ReturnType<Parameters<typeof readAllAttestationPages>[0]>>;
+      return {
+        read: true as const,
+        total: all.length,
+        from: fromIndex,
+        rows: all.slice(fromIndex, fromIndex + maxRows),
+      };
+    };
+    return { page, asks };
+  };
+  const reason = async (p: Promise<unknown>) => {
+    const e = await p.catch((x: unknown) => x);
+    if (!(e instanceof ClientRunFailure)) throw new Error(`not a ClientRunFailure: ${String(e)}`);
+    return [e.reason, e.inFlight];
+  };
+
+  test("25 rows come in pages of 10, 10 and 5, each asked from the rows held so far", async () => {
+    const s = server(rowsN(25));
+    const r = await readAllAttestationPages(s.page);
+    expect(r.read && r.rows.map((x) => x.method)).toEqual(rowsN(25).map((x) => x.method));
+    expect(s.asks).toEqual([
+      [0, 10],
+      [10, 10],
+      [20, 10],
+    ]);
+  });
+
+  test("an exact multiple stops at total; total 0 is one page and an empty read", async () => {
+    const s = server(rowsN(20));
+    await readAllAttestationPages(s.page);
+    expect(s.asks.length).toBe(2);
+    const z = server([]);
+    expect(await readAllAttestationPages(z.page)).toEqual({ read: true, rows: [] });
+    expect(z.asks.length).toBe(1);
+  });
+
+  test("a first page that is refused is returned as it is (the caller names it unreadable)", async () => {
+    const s = server(rowsN(5), { 0: { read: false, reason: "lease-invalid" } });
+    expect(await readAllAttestationPages(s.page)).toEqual({ read: false, reason: "lease-invalid" });
+  });
+
+  // Each case is its own test, so a red check names the one that went red. Every scripted page is wrong in ONE way.
+  const all = rowsN(25);
+  const again = [...all.slice(10, 19), all[0] ?? row()];
+  const cases: [string, Record<number, unknown>][] = [
+    ["a refusal after an earlier read", { 1: { read: false, reason: "lease-invalid" } }],
+    [
+      "the total moves between pages",
+      { 1: { read: true, total: 26, from: 10, rows: all.slice(10, 20) } },
+    ],
+    [
+      "the page says it starts elsewhere (right rows)",
+      { 1: { read: true, total: 25, from: 11, rows: all.slice(10, 20) } },
+    ],
+    [
+      "a short page before total",
+      { 1: { read: true, total: 25, from: 10, rows: all.slice(10, 19) } },
+    ],
+    ["an empty page before total", { 1: { read: true, total: 25, from: 10, rows: [] } }],
+    [
+      "a page of 11 rows for a page of 10",
+      { 0: { read: true, total: 25, from: 0, rows: all.slice(0, 11) } },
+    ],
+    [
+      "a row repeated across pages (right count)",
+      { 1: { read: true, total: 25, from: 10, rows: again } },
+    ],
+  ];
+  for (const [what, over] of cases) {
+    test(`client-attestation-pages, never in flight: ${what}`, async () => {
+      expect(await reason(readAllAttestationPages(server(all, over).page))).toEqual([
+        "client-attestation-pages",
+        false,
+      ]);
+    });
+  }
+
+  test("a lost page answer propagates as it is (the backend names it unreadable)", async () => {
+    const s = server(rowsN(25));
+    const lost = async (f: number, m: number) => {
+      if (f === 10) throw new Error("ReadClientAttestation gave no answer within 30000 ms");
+      return s.page(f, m);
+    };
+    await expect(readAllAttestationPages(lost)).rejects.toThrow("gave no answer");
   });
 });
 
@@ -452,6 +572,17 @@ function rig(mode: string, sc: Scenario = {}, cfgOver: Partial<BcDevConfig> = {}
               }),
             ],
           };
+      // Amendment 8: a whole read (no `total`) is paged as 1.0.0.32 does; an answer with `total` is a scripted page.
+      const a = answer as { read?: boolean; total?: unknown; rows?: unknown[] };
+      if (a.read === true && !("total" in a) && Array.isArray(a.rows)) {
+        const from = Number(body.fromIndex);
+        answer = {
+          read: true,
+          total: a.rows.length,
+          from,
+          rows: a.rows.slice(from, from + Number(body.maxRows)),
+        };
+      }
     } else {
       throw new Error(`unexpected action ${action}`);
     }
@@ -817,7 +948,7 @@ describe("PR-479 round 3a: one client codeunit op", () => {
     );
     const lease = { epoch: 1, token: "t", serverGeneration: "g", opSeq: 1 };
     const e = await t
-      .readClientAttestation({ attemptId: "a1", lease, timeoutMs: 20 })
+      .readClientAttestation({ attemptId: "a1", lease, fromIndex: 0, maxRows: 10, timeoutMs: 20 })
       .catch((x: unknown) => x);
     expect(String(e)).toContain("ReadClientAttestation gave no answer within 20 ms");
   });

@@ -164,5 +164,9 @@ unchanged, and so is the minimum (1.0.0.29). It adds:
 - the self-marked end (`EndCallerSession`, `LC Ended Session`);
 - gated attestation rows (`LC Client Attestation`, read by `ReadClientAttestation`).
 
+From 1.0.0.32 (R1244, PR-479 amendment 8) `ReadClientAttestation` is paged: `FromIndex` and `MaxRows` (1-10) pick one page,
+and the answer is `{read, total, from, rows}`. A client run needs 1.0.0.32 (`CLIENT_MIN_CONTROL_VERSION`); the headless
+path and its minimum (1.0.0.29) are unchanged.
+
 No `client-run` op is ever opened on `bc1`-`bc5`: an op bound from an OData session could never be ended there (the PR-478
 pre-commitment, amendment 6). `bc4`, `bc5` and `bc-demo` stay on 1.0.0.29.

@@ -963,19 +963,24 @@ codeunit 91003 "LC Control API"
     /// <summary>OData action (1.0.0.31, PR-478 amendment 1): fenced, read-only. Every "LC Client Attestation" row of
     /// (attemptId, opSeq). JSON: {read, rows?, reason?}; rows is an array of objects with every field
     /// (attemptId, opSeq, codeunitId, method, loaded, loadedGeneration, loadedMutantId, observedAny,
-    /// observedIdentityMismatch, observedActive, success, testMethodRuns, sessionId, serverGeneration, databaseId).</summary>
-    procedure ReadClientAttestation(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    /// observedIdentityMismatch, observedActive, success, testMethodRuns, sessionId, serverGeneration, databaseId).
+    /// 1.0.0.32 (PR-479 amendment 8, R1244): PAGED. FromIndex (0-based) and MaxRows (1-10) pick one page in
+    /// primary-key order; the answer is {read, total, from, rows}. The client reads pages until it holds `total`.</summary>
+    procedure ReadClientAttestation(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; FromIndex: Integer; MaxRows: Integer) ResultJson: Text
     var
         State: Codeunit "LC Control State";
         Valid: Boolean;
+        Total: Integer;
         Rows: JsonArray;
         Obj: JsonObject;
     begin
-        State.TryReadClientAttestation(Epoch, Token, Generation, AttemptId, OpSeq, Valid, Rows);
+        State.TryReadClientAttestation(Epoch, Token, Generation, AttemptId, OpSeq, FromIndex, MaxRows, Valid, Total, Rows);
         Obj.Add('read', Valid);
-        if Valid then
-            Obj.Add('rows', Rows)
-        else
+        if Valid then begin
+            Obj.Add('total', Total);
+            Obj.Add('from', FromIndex);
+            Obj.Add('rows', Rows);
+        end else
             Obj.Add('reason', 'lease-invalid');
         Obj.WriteTo(ResultJson);
     end;

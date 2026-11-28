@@ -18,6 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { CLIENT_ATTESTATION_PAGE_ROWS } from "../src/client-run";
 
 const SRC = join(import.meta.dir, "..", "..", "..", "extensions", "lethal-control", "src");
 const read = (file: string): string => readFileSync(join(SRC, file), "utf8");
@@ -983,7 +984,21 @@ describe("1.0.0.31 client sessions (PR-478)", () => {
     }
     const wrapper = codeOnly(procedureBody(api, "ReadClientAttestation")).replace(/\s+/g, " ");
     expect(wrapper).toContain(
-      "if Valid then Obj.Add('rows', Rows) else Obj.Add('reason', 'lease-invalid');",
+      "if Valid then begin Obj.Add('total', Total); Obj.Add('from', FromIndex); Obj.Add('rows', Rows); end else Obj.Add('reason', 'lease-invalid');",
+    );
+    // Amendment 8 (1.0.0.32): ONE page. The bound is refused before any read; the total is the Count() of the
+    // filtered rows; the loop stops at MaxRows; and the server's page limit is the client's page size.
+    expect(
+      flat.indexOf("if (MaxRows < 1) or (MaxRows > MaxAttestationPageRows()) then"),
+    ).toBeGreaterThan(flat.indexOf("ValidateFenceCredentials("));
+    expect(flat.indexOf("if FromIndex < 0 then")).toBeLessThan(flat.indexOf("Lease.Get("));
+    expect(flat.indexOf("Total := Attestation.Count();")).toBeGreaterThan(
+      flat.indexOf('Attestation.SetRange("Op Seq", OpSeq);'),
+    );
+    expect(flat).toContain("if Attestation.Next(FromIndex) <> FromIndex then exit;");
+    expect(flat).toContain("until (Taken >= MaxRows) or (Attestation.Next() = 0);");
+    expect(codeOnly(procedureBody(state, "MaxAttestationPageRows")).replace(/\s+/g, " ")).toContain(
+      `exit(${CLIENT_ATTESTATION_PAGE_ROWS});`,
     );
     expect(wrapper).toContain("Obj.Add('read', Valid);");
     expect(codeOnly(procedureBody(api, "ReadClientAttestation"))).toContain(

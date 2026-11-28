@@ -264,7 +264,7 @@ function deployment(version: string, log: string[]): BcDevDeployment {
   };
 }
 
-function backendOf(over: Partial<BcDevConfig>, version = "1.0.0.31", log: string[] = []) {
+function backendOf(over: Partial<BcDevConfig>, version = "1.0.0.32", log: string[] = []) {
   return new BcDevMcpBackend(
     {
       mcpCommand: ["unused"],
@@ -309,40 +309,42 @@ describe("PR-479: the built backend", () => {
     );
   });
 
-  test("MIN_CONTROL_VERSION stays 1.0.0.29; a client run needs 1.0.0.31", () => {
+  test("MIN_CONTROL_VERSION stays 1.0.0.29; a client run needs 1.0.0.32 (amendment 8's paged read)", () => {
     expect(MIN_CONTROL_VERSION).toBe("1.0.0.29");
-    expect(CLIENT_MIN_CONTROL_VERSION).toBe("1.0.0.31");
+    expect(CLIENT_MIN_CONTROL_VERSION).toBe("1.0.0.32");
   });
 });
 
 describe("PR-479: the version gate", () => {
-  test("a control app older than 1.0.0.31 is refused by name; 1.0.0.31 and newer pass", () => {
+  test("a control app older than 1.0.0.32 is refused by name; 1.0.0.32 and newer pass", () => {
+    // 1.0.0.31 answers the unpaged read, which a capping server never delivers (R1244)
+    expect(() => assertClientControlVersion("1.0.0.31")).toThrow(ClientControlTooOldError);
     expect(() => assertClientControlVersion("1.0.0.30")).toThrow(ClientControlTooOldError);
     expect(() => assertClientControlVersion("1.0.0.29")).toThrow(ClientControlTooOldError);
     expect(() => assertClientControlVersion("not a version")).toThrow(ClientControlTooOldError);
-    expect(() => assertClientControlVersion("1.0.0.31")).not.toThrow();
     expect(() => assertClientControlVersion("1.0.0.32")).not.toThrow();
+    expect(() => assertClientControlVersion("1.0.0.33")).not.toThrow();
     expect(() => assertClientControlVersion("1.0.1.0")).not.toThrow();
   });
 
-  test("clientPreflight refuses 1.0.0.30 on a client backend, and the same server passes a headless run", async () => {
+  test("clientPreflight refuses 1.0.0.31 on a client backend, and the same server passes a headless run", async () => {
     const probe = async () => 405;
     const client = backendOf(
       { clientMode: true, webClientBaseUrl: "https://web/BC", clientSessionProbe: probe },
-      "1.0.0.30",
+      "1.0.0.31",
     );
     const err = await client.clientPreflight().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ClientControlTooOldError);
     expect((err as ClientControlTooOldError).reason).toBe("client-control-too-old");
     // Headless: no preflight at all, so the old control app is not this gate's business.
     const log: string[] = [];
-    await backendOf({}, "1.0.0.30", log).clientPreflight();
+    await backendOf({}, "1.0.0.31", log).clientPreflight();
     expect(log).toEqual([]);
-    // 1.0.0.31 passes on the client backend (with what a run needs).
+    // 1.0.0.32 passes on the client backend (with what a run needs).
     const ready = readyClientConfig();
     await backendOf(
       { ...ready, clientMode: true, webClientBaseUrl: "https://web/BC", clientSessionProbe: probe },
-      "1.0.0.31",
+      "1.0.0.32",
     ).clientPreflight();
   });
 
@@ -368,7 +370,7 @@ describe("PR-479: the version gate", () => {
       clientSessionProbe: async () => 405,
     } as const;
     const refused = async (over: Partial<BcDevConfig>) =>
-      backendOf({ ...base, ...over }, "1.0.0.31")
+      backendOf({ ...base, ...over }, "1.0.0.32")
         .clientPreflight()
         .catch((e: unknown) => e);
     const ok = readyClientConfig();
@@ -435,7 +437,7 @@ describe("PR-479: the /cs probe", () => {
     const log: string[] = [];
     const backend = backendOf(
       { clientMode: true, webClientBaseUrl: "https://web/BC", clientSessionProbe: async () => 404 },
-      "1.0.0.31",
+      "1.0.0.32",
       log,
     );
     await expect(backend.clientPreflight()).rejects.toBeInstanceOf(ClientSessionUnavailableError);

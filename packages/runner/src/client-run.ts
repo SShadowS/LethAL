@@ -8,7 +8,50 @@ import {
   ClientDriverSequenceError,
   ClientDriverSessionError,
 } from "./client-driver";
-import type { ClientAttestationRow } from "./client-transport";
+import type { ClientAttestationRow, ReadClientAttestationAnswer } from "./client-transport";
+
+/** Amendment 8: rows asked per `ReadClientAttestation` page; the control (1.0.0.32) refuses more than 10. */
+export const CLIENT_ATTESTATION_PAGE_ROWS = 10;
+
+/**
+ * PR-479 amendment 8 (R1244): reads every page of one op's attestation rows, each `fromIndex` the rows held so far,
+ * until `total` rows are held. A first page that says `read: false` is returned as it is (the caller names it
+ * `client-attestation-unreadable`). Anything inconsistent is `client-attestation-pages`, by name. A thrown page call
+ * propagates as it is (a lost answer).
+ */
+export async function readAllAttestationPages(
+  page: (fromIndex: number, maxRows: number) => Promise<ReadClientAttestationAnswer>,
+  maxRows = CLIENT_ATTESTATION_PAGE_ROWS,
+): Promise<{ read: true; rows: ClientAttestationRow[] } | { read: false; reason: string }> {
+  const rows: ClientAttestationRow[] = [];
+  const seen = new Set<string>();
+  let total: number | undefined;
+  const bad = (why: string): never => {
+    throw new ClientRunFailure("client-attestation-pages", why);
+  };
+  for (;;) {
+    const from = rows.length;
+    const p = await page(from, maxRows);
+    if (!p.read) {
+      if (total === undefined) return p;
+      return bad(`page from ${from} refused (${p.reason}) after an earlier page was read`);
+    }
+    if (total !== undefined && p.total !== total)
+      bad(`total moved from ${total} to ${p.total} at page from ${from}`);
+    total = p.total;
+    if (p.from !== from) bad(`asked for the page from ${from}, got the page from ${p.from}`);
+    const want = Math.max(0, Math.min(maxRows, total - from));
+    if (p.rows.length !== want)
+      bad(`the page from ${from} holds ${p.rows.length} row(s), not ${want} (total ${total})`);
+    for (const r of p.rows) {
+      const k = `${r.codeunitId}\u0000${r.method}`;
+      if (seen.has(k)) bad(`row ${r.codeunitId}/${r.method} repeats across pages`);
+      seen.add(k);
+      rows.push(r);
+    }
+    if (rows.length >= total) return { read: true, rows };
+  }
+}
 
 /**
  * PR-479 (479a) round 3a: what one client codeunit run returns, and every check on its rows.
@@ -24,6 +67,9 @@ export type ClientRunFailureReason =
   | "client-deactivate-before-end"
   | "client-final-deactivate"
   | "client-attestation-unreadable"
+  /** Amendment 8: the paged attestation read is incomplete or out of order (a moving total, a wrong page start or
+   *  size, a repeated row, a refusal after a read). The op ended; it is never in flight. */
+  | "client-attestation-pages"
   | "client-page-result-unreadable"
   | "client-run-empty"
   | "client-incomplete"

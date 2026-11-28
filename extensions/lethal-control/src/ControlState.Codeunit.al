@@ -1705,19 +1705,28 @@ codeunit 91002 "LC Control State"
         Attestation.Modify();
     end;
 
-    /// <summary>1.0.0.31 (PR-478, amendment 1): the fenced, READ-ONLY read of every attestation row of one op.
+    /// <summary>1.0.0.31 (PR-478, amendment 1): the fenced, READ-ONLY read of the attestation rows of one op.
     /// The same fence as the other actions (blank credentials fail loud; a tuple mismatch answers
-    /// `lease-invalid` and no rows). It writes nothing and takes no lock: both records read ReadCommitted.</summary>
-    procedure TryReadClientAttestation(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; var Valid: Boolean; var Rows: JsonArray)
+    /// `lease-invalid` and no rows). It writes nothing and takes no lock: both records read ReadCommitted.
+    /// 1.0.0.32 (PR-479 amendment 8, R1244): ONE PAGE of at most MaxRows (1-10) rows in primary-key order,
+    /// from the 0-based FromIndex, and Total, the op's row count. A page stays far below the ~30 KB answer
+    /// that a capping server (bcwin, 2026-11-28) never delivers.</summary>
+    procedure TryReadClientAttestation(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; FromIndex: Integer; MaxRows: Integer; var Valid: Boolean; var Total: Integer; var Rows: JsonArray)
     var
         Lease: Record "LC Lease";
         Attestation: Record "LC Client Attestation";
         Row: JsonObject;
+        Taken: Integer;
     begin
         Valid := false;
+        Total := 0;
         Clear(Rows);
 
         ValidateFenceCredentials(Epoch, Token, Generation, AttemptId);
+        if (MaxRows < 1) or (MaxRows > MaxAttestationPageRows()) then
+            Error(AttestationPageSizeErr(MaxRows));
+        if FromIndex < 0 then
+            Error(AttestationFromIndexErr(FromIndex));
 
         Lease.ReadIsolation := IsolationLevel::ReadCommitted;
         Attestation.ReadIsolation := IsolationLevel::ReadCommitted;
@@ -1729,26 +1738,51 @@ codeunit 91002 "LC Control State"
 
         Attestation.SetRange("Attempt Id", AttemptId);
         Attestation.SetRange("Op Seq", OpSeq);
-        if Attestation.FindSet() then
-            repeat
-                Clear(Row);
-                Row.Add('attemptId', Attestation."Attempt Id");
-                Row.Add('opSeq', Attestation."Op Seq");
-                Row.Add('codeunitId', Attestation."Codeunit Id");
-                Row.Add('method', Attestation.Method);
-                Row.Add('loaded', Attestation.Loaded);
-                Row.Add('loadedGeneration', Attestation."Loaded Generation");
-                Row.Add('loadedMutantId', Attestation."Loaded Mutant Id");
-                Row.Add('observedAny', Attestation."Observed Any");
-                Row.Add('observedIdentityMismatch', Attestation."Observed Identity Mismatch");
-                Row.Add('observedActive', Attestation."Observed Active");
-                Row.Add('success', Attestation.Success);
-                Row.Add('testMethodRuns', Attestation."Test Method Runs");
-                Row.Add('sessionId', Attestation."Session Id");
-                Row.Add('serverGeneration', Attestation."Server Generation");
-                Row.Add('databaseId', Attestation."Database Id");
-                Rows.Add(Row);
-            until Attestation.Next() = 0;
+        Total := Attestation.Count();
+        if FromIndex >= Total then
+            exit;
+        if not Attestation.FindSet() then
+            exit;
+        if FromIndex > 0 then
+            if Attestation.Next(FromIndex) <> FromIndex then
+                exit;
+        repeat
+            Clear(Row);
+            Row.Add('attemptId', Attestation."Attempt Id");
+            Row.Add('opSeq', Attestation."Op Seq");
+            Row.Add('codeunitId', Attestation."Codeunit Id");
+            Row.Add('method', Attestation.Method);
+            Row.Add('loaded', Attestation.Loaded);
+            Row.Add('loadedGeneration', Attestation."Loaded Generation");
+            Row.Add('loadedMutantId', Attestation."Loaded Mutant Id");
+            Row.Add('observedAny', Attestation."Observed Any");
+            Row.Add('observedIdentityMismatch', Attestation."Observed Identity Mismatch");
+            Row.Add('observedActive', Attestation."Observed Active");
+            Row.Add('success', Attestation.Success);
+            Row.Add('testMethodRuns', Attestation."Test Method Runs");
+            Row.Add('sessionId', Attestation."Session Id");
+            Row.Add('serverGeneration', Attestation."Server Generation");
+            Row.Add('databaseId', Attestation."Database Id");
+            Rows.Add(Row);
+            Taken += 1;
+        until (Taken >= MaxRows) or (Attestation.Next() = 0);
+    end;
+
+    /// <summary>1.0.0.32 (PR-479 amendment 8): most rows one ReadClientAttestation page holds. A row is at most
+    /// about 1.5 KB (every text field full, a non-ASCII method name escaped twice), so a page stays under ~15 KB.</summary>
+    procedure MaxAttestationPageRows(): Integer
+    begin
+        exit(10);
+    end;
+
+    local procedure AttestationPageSizeErr(MaxRows: Integer): Text
+    begin
+        exit(StrSubstNo('ReadClientAttestation: MaxRows must be 1 to %1, got %2. A page is bounded so its answer stays far below a server''s answer-size cap (R1244).', MaxAttestationPageRows(), MaxRows));
+    end;
+
+    local procedure AttestationFromIndexErr(FromIndex: Integer): Text
+    begin
+        exit(StrSubstNo('ReadClientAttestation: FromIndex must be 0 or more, got %1.', FromIndex));
     end;
 
     local procedure RecordStoppedOp(var Lease: Record "LC Lease"; AttemptId: Text; OpSeq: BigInteger)

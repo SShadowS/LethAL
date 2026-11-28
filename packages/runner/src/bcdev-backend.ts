@@ -57,6 +57,7 @@ import {
   checkClientRun,
   classifyClientFailure,
   parsePageResults,
+  readAllAttestationPages,
 } from "./client-run";
 import { monoNow } from "./clock";
 import { decidePublishOutcome } from "./deployment-verifier";
@@ -1759,14 +1760,22 @@ export class BcDevMcpBackend implements ExecutionBackend {
       closed = true;
 
       // PR-479 leg 4: End and the final Deactivate are done, so a lost read is named but never in flight.
-      const att = await transport
-        .readClientAttestation({ attemptId, lease: fenceLease, timeoutMs: CLIENT_CALL_TIMEOUT_MS })
-        .catch((err: unknown) => {
-          throw new ClientRunFailure(
-            "client-attestation-unreadable",
-            `ReadClientAttestation: ${describeThrown(err)}`,
-          );
-        });
+      // Amendment 8 (R1244): read in pages of 10 rows; an inconsistent page sequence is client-attestation-pages.
+      const att = await readAllAttestationPages((fromIndex, maxRows) =>
+        transport.readClientAttestation({
+          attemptId,
+          lease: fenceLease,
+          fromIndex,
+          maxRows,
+          timeoutMs: CLIENT_CALL_TIMEOUT_MS,
+        }),
+      ).catch((err: unknown) => {
+        if (err instanceof ClientRunFailure) throw err;
+        throw new ClientRunFailure(
+          "client-attestation-unreadable",
+          `ReadClientAttestation: ${describeThrown(err)}`,
+        );
+      });
       if (!att.read) {
         throw new ClientRunFailure(
           "client-attestation-unreadable",

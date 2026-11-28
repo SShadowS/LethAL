@@ -119,11 +119,13 @@ export {
 const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
 export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
-// PR-478 (R1170): the 1.0.0.31 build (the client-run op, the self-marked End and the attestation rows;
+// PR-478 (R1170): 1.0.0.31 added the client-run op, the self-marked End and the attestation rows (headless
+// unchanged). PR-479 amendment 8 (R1244): the 1.0.0.32 build pages ReadClientAttestation (10 rows a page;
 // headless unchanged), compiled clean (errors 0, warnings 0). No client-run op is ever opened on bc1-bc3
 // (PR-478 pre-commitment, amendment 6).
-export const CONTROL_APP = "/coord/handoff/PR-478/control/pinned/LethAL_LethAL Control_1.0.0.31.app";
-export const CONTROL_SHA256 = "cf0c059f31c1a0e922ca1a4ef76b1c7eaae94f4e2465356eb93a6822551b1616";
+export const CONTROL_APP =
+  "/coord/handoff/PR-479/control/pinned/LethAL_LethAL Control_1.0.0.32.app";
+export const CONTROL_SHA256 = "82750155aca7392d60bb829128e7c7d3c473d7ab676b195f916d552e0cba23c8";
 /**
  * PR-462: servers kept on another build. bc4 stays on PR-309's 1.0.0.29 (R1138) while lethal-bugs'
  * DOTests pinned series (PR-427) runs there: it records "LethAL Control: 1.0.0.29" as a pin. Remove
@@ -142,7 +144,7 @@ export const CONTROL_PINS: Partial<
 };
 /**
  * PR-462: bc-demo (the owner's demo server, `bc-demo-setup.ts`, kraken and laptop mode) stays on
- * PR-309's 1.0.0.29 too: 1.0.0.30 and 1.0.0.31 add nothing without a client session, and moving it would make the
+ * PR-309's 1.0.0.29 too: 1.0.0.30 to 1.0.0.32 add nothing without a client session, and moving it would make the
  * owner's laptop mode refuse until a new build is copied there. Move it with bc4.
  */
 export const DEMO_CONTROL: { readonly path: string; readonly sha256: string } = {
