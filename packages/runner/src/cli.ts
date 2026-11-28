@@ -1301,7 +1301,7 @@ RUN — cost and recovery
                              you restart the tier yourself (exit code 7). Without the flag the monitor
                              only SHADOWS: a tier-slowdown-would-stop event and a report field, nothing
                              stopped. A first cut (R1228). A resume must use the same setting
-  --workers <n>             parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
+  --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
                              backend, with serve-entries and a build whose pin retires the §6
                              Sleep rule (else refused by name). The first latch or stop ends the
                              session with an error naming the mutants it discarded. bcdev is

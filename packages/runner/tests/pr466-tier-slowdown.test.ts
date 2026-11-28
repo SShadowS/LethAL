@@ -135,6 +135,45 @@ describe("PR-466 r5 constants", () => {
   });
 });
 
+// Review S2/S3: the row floor at exactly 50, and an EVEN median whose average and middle values fall on different
+// sides of 2.5. Rows 1.22 min apart leave 50 rows in the 60-min window at the row-100 check; 1.24 min leaves 49.
+describe("PR-466 r5 rule: |W| = 50 exactly, and the median of an even |W|", () => {
+  const STEP50 = 1.22 * MIN;
+  const STEP49 = 1.24 * MIN;
+  // Red: `w.length <= MIN_ROWS` (50 rows no longer trigger).
+  test("|W| = 50 triggers, with rows = 50", () => {
+    const r = monitorRig();
+    r.rows(100, 6, 1, STEP50);
+    expect(r.triggers).toHaveLength(1);
+    expect(r.triggers[0]?.rows).toBe(50);
+  });
+  // Red: the row floor removed (49 rows trigger).
+  test("|W| = 49 does not trigger", () => {
+    const r = monitorRig();
+    r.rows(100, 6, 1, STEP49);
+    expect(r.triggers).toHaveLength(0);
+  });
+  // W at the row-100 check = rows 51-100: 25 at the first ratio, 25 at the second.
+  const evenMedian = (low: number, high: number) => {
+    const r = monitorRig();
+    r.rows(75, low, 1, STEP50);
+    r.rows(25, high, 76, STEP50);
+    return r;
+  };
+  // Red: the upper middle value instead of the average (2.6 >= 2.5 triggers).
+  test("25 rows at 2.3 and 25 at 2.6: the median is 2.45, no trigger", () => {
+    const r = evenMedian(2.3, 2.6);
+    expect(r.triggers).toHaveLength(0);
+    expect(r.mon.highestMedian).toBeCloseTo(2.45, 10);
+  });
+  // Red: the lower middle value instead of the average (2.4 < 2.5 does not trigger).
+  test("25 rows at 2.4 and 25 at 2.7: the median is 2.55, a trigger", () => {
+    const r = evenMedian(2.4, 2.7);
+    expect(r.triggers).toHaveLength(1);
+    expect(r.triggers[0]?.median).toBeCloseTo(2.55, 10);
+  });
+});
+
 describe("PR-466 r5 rule: the trigger", () => {
   test("a trigger needs the 100th row here: not at row 99, and the figures and the onset mark are the window's", () => {
     const r = monitorRig();
@@ -652,6 +691,25 @@ describe("PR-466 test 5: non-feeding rows", () => {
     expect(r.mon.fed).toBe(1);
     // and no monitor at all is no error (an al-runner session, a probe)
     feedTierSlowdown(undefined, row(), 0, 1);
+  });
+
+  // Review S1. Red: drop the try/catch in feedTierSlowdown (the shadow error escapes), or catch in stop mode too.
+  test("SHADOW: an error in the monitor is caught, counted and named on the arming line; STOP mode rethrows it", () => {
+    const boom = () => {
+      throw new Error("store read failed");
+    };
+    const shadow = monitorRig({ reference: boom, stopMode: false });
+    expect(() => feedTierSlowdown(shadow.mon, row(), 0, 1)).not.toThrow();
+    expect(() => feedTierSlowdown(shadow.mon, row(), 0, 2)).not.toThrow();
+    expect(shadow.mon.shadowErrors).toBe(2);
+    expect(shadow.mon.armingLine()).toContain(
+      "2 monitor error(s) caught in shadow mode (first: Error: store read failed)",
+    );
+    const stop = monitorRig({ reference: boom, stopMode: true });
+    expect(() => feedTierSlowdown(stop.mon, row(), 0, 1)).toThrow("store read failed");
+    expect(stop.mon.shadowErrors).toBe(0);
+    // no error: the arming line names none
+    expect(monitorRig({ stopMode: false }).mon.armingLine()).not.toContain("monitor error");
   });
 
   test("a missing reference and a reference under 50 ms are skipped and counted apart", () => {

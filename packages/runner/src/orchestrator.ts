@@ -6314,8 +6314,10 @@ export function budgetCutsWalk(b: TimeBudget | undefined): boolean {
 
 /**
  * PR-466 (R1228): one stored test row, offered to the monitor. Only a PASSING row that carries a mutant code and an
- * own duration counts: failed, timed-out and unmutated confirmation rows (no mutant code) never move a block.
+ * own duration counts: failed, timed-out and unmutated confirmation rows (no mutant code) never feed the window.
  * The caller records the row first, so a mutant's rows reach the monitor contiguously, in recording order.
+ * Review S1: in SHADOW mode (the default) an error in the monitor, its store reads or its trigger is caught and
+ * counted (`noteShadowError`), never rethrown, so the default mode cannot fail a session. The opt-in stop rethrows.
  */
 export function feedTierSlowdown(
   monitor: TierSlowdownMonitor | undefined,
@@ -6330,10 +6332,21 @@ export function feedTierSlowdown(
 ): void {
   if (monitor === undefined || t.mutantCode === null || t.outcome !== "pass") return;
   if (t.ownDurationMs === undefined) return;
-  monitor.feed(
-    { codeunitId: t.ref.codeunitId, method: t.ref.method, batchIndex, ownMs: t.ownDurationMs },
-    mutantRowId,
-  );
+  const row = {
+    codeunitId: t.ref.codeunitId,
+    method: t.ref.method,
+    batchIndex,
+    ownMs: t.ownDurationMs,
+  };
+  if (monitor.stopMode) {
+    monitor.feed(row, mutantRowId);
+    return;
+  }
+  try {
+    monitor.feed(row, mutantRowId);
+  } catch (e) {
+    monitor.noteShadowError(e);
+  }
 }
 
 /** PR-466: the `time-budget-reached` field a slowdown stop adds (nothing when none fired). */

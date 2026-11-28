@@ -156,6 +156,17 @@ export class TierSlowdownMonitor {
   highestMedian: number | undefined;
   /** The PSI read when the baseline ended (`undefined` when never read, `null` when unreadable). */
   baselinePsi: number | null | undefined;
+  /**
+   * PR-466 review S1: errors caught in SHADOW mode (a store read, the trigger's emit, the console line). Shadow changes
+   * nothing, a failure of the monitor included: it is counted here and printed on the arming line, never rethrown.
+   */
+  shadowErrors = 0;
+  firstShadowError: string | undefined;
+
+  noteShadowError(e: unknown): void {
+    this.shadowErrors += 1;
+    this.firstShadowError ??= e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  }
   #rows: FedRow[] = [];
   #firstT: number | undefined;
   #trigger: TierSlowdownStop | undefined;
@@ -258,7 +269,11 @@ export class TierSlowdownMonitor {
       this.baselinePsi === undefined || this.baselinePsi === null
         ? "unread"
         : `${this.baselinePsi.toFixed(1)}%`;
-    return `[lethal] tier-slowdown monitor: mode ${this.d.stopMode ? "stop" : "shadow"}; fed ${this.fed} passing rows, skipped ${skipped} (no reference ${this.skippedNoReference}, under ${TIER_SLOWDOWN_MIN_REF_MS} ms ${this.skippedUnderMin}); ${this.checks} check(s), highest window median ${high}, PSI unreadable ${this.psiUnreadable} time(s), baseline PSI ${base}; ${this.#trigger === undefined ? "not triggered" : "TRIGGERED"}`;
+    const errors =
+      this.shadowErrors === 0
+        ? ""
+        : `; ${this.shadowErrors} monitor error(s) caught in shadow mode (first: ${this.firstShadowError ?? "?"})`;
+    return `[lethal] tier-slowdown monitor: mode ${this.d.stopMode ? "stop" : "shadow"}; fed ${this.fed} passing rows, skipped ${skipped} (no reference ${this.skippedNoReference}, under ${TIER_SLOWDOWN_MIN_REF_MS} ms ${this.skippedUnderMin}); ${this.checks} check(s), highest window median ${high}, PSI unreadable ${this.psiUnreadable} time(s), baseline PSI ${base}; ${this.#trigger === undefined ? "not triggered" : "TRIGGERED"}${errors}`;
   }
 }
 
