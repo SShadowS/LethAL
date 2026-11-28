@@ -2418,7 +2418,7 @@ describe("PR-500: the errors-temp-2 family", () => {
   // PR-500 review: the writers are found in the support code too (a Run target or helper procedure that Inserts, Modifies,
   // Deletes, Renames or Validates a non-temporary record), and every cell that reaches one must declare its own range.
   // Red: plant `Rec.Insert();` in "E2 Run Probe" or "E2 Run Nest" (a cell then writes with no range).
-  test("no real-table DeleteAll; every cell that writes a real table (directly or through support code) declares its own key range and keeps every 4-digit key in it", () => {
+  const checkKeyRanges = (f: typeof ERRORS_TEMP_2): void => {
     const WRITE = /\b(\w+)\.(Insert|Modify|ModifyAll|Delete|DeleteAll|Rename|Validate)\(/g;
     const recVars = (text: string, base: string[]): Map<string, string> => {
       const m = new Map<string, string>(base.map((n) => [n, "E2 Row"]));
@@ -2518,25 +2518,75 @@ describe("PR-500: the errors-temp-2 family", () => {
     expect(writers).toHaveLength(7);
     expect(ranges).toHaveLength(8);
     expect(new Set(ranges).size).toBe(ranges.length);
+  };
+  test("no real-table DeleteAll; every cell that writes a real table (directly or through support code) declares its own key range and keeps every 4-digit key in it", () => {
+    checkKeyRanges(f);
   });
 
-  // Red (each separately): `Format(R)` without `, 0, 9`; `R` or a bare Boolean as a V:[...] argument.
-  test("every Format is Format(x, 0, 9) and no Boolean or enum is printed bare", () => {
+  // Red: plant an Insert in "E2 Run Last" (a Run target no cell writes through today): a cell then writes with no range.
+  test("planted copy: an Insert in a Run target with no range is caught", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    const at = "Rec.Val := CopyStr(GetLastErrorText(), 1, 30);";
+    expect(bad.support).toContain(at);
+    bad.support = bad.support.replace(at, `Rec.Insert(); ${at}`);
+    // the same copy without the fault passes, so the planted line alone is what the check rejects
+    expect(() => checkKeyRanges(structuredClone(f))).not.toThrow();
+    expect(() => checkKeyRanges(bad)).toThrow();
+  });
+
+  /** The Format scan over cells plus support code: every Format is format 9, no Boolean, enum or Integer-cast is printed bare. */
+  const checkFormatScan = (f: typeof ERRORS_TEMP_2): void => {
     for (const c of f.cells) expect(c.depends).toBeUndefined();
     // the cells and the support code (the E2 Helper procedures and Run targets, where most of the answers are built)
-    const cellsText = f.cells.map(stmts).join("\n");
-    const all = `${cellsText}\n${f.support}`;
-    const args = formatArgList(all);
-    // every Format the 45 cells and the support code hold (a scan that finds none would make the check below vacuous)
-    expect(formatArgList(cellsText).length).toBe(25);
-    expect(args.length).toBe(40); // 25 in the cells, 15 in the support code
-    expect(args.filter((a) => !a.endsWith(", 0, 9"))).toEqual([]);
+    const all = `${f.cells.map(stmts).join("\n")}\n${f.support}`;
+    expect(formatArgList(all).filter((a) => !a.endsWith(", 0, 9"))).toEqual([]);
     expect(all).not.toMatch(/Error\('V:\[[^']*'(, [^,;]+)*, R[,)]/);
     expect(all).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
     expect(all).not.toMatch(
       /(?<!Format\()\b\w+\.(IsTemporary|Collectible|ErrorType|Verbosity)\b(?!\()/,
     );
     expect(all).not.toContain("AsInteger");
+  };
+  /** Every Format the 45 cells and the support code hold (a scan that finds none would make the scan above vacuous). */
+  const checkFormatCount = (f: typeof ERRORS_TEMP_2): void => {
+    const cellsText = f.cells.map(stmts).join("\n");
+    expect(formatArgList(cellsText).length).toBe(25);
+    expect(formatArgList(`${cellsText}\n${f.support}`).length).toBe(40); // 25 in the cells, 15 in the support code
+  };
+
+  // Red (each separately): `Format(R)` without `, 0, 9`; `R` or a bare Boolean as a V:[...] argument.
+  test("every Format is Format(x, 0, 9) and no Boolean or enum is printed bare", () => {
+    checkFormatScan(f);
+    checkFormatCount(f);
+  });
+
+  test("planted copy: a bare HasCollectedErrors() print in a helper is caught", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    const at = "Rec.Val := CopyStr(GetLastErrorText(), 1, 30);";
+    expect(bad.support).toContain(at);
+    bad.support = bad.support.replace(at, "Rec.Val := CopyStr(HasCollectedErrors(), 1, 30);");
+    expect(() => checkFormatScan(structuredClone(f))).not.toThrow();
+    expect(() => checkFormatScan(bad)).toThrow();
+  });
+
+  test("planted copy: an AsInteger in a helper is caught", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    const at = "Rec.Val := CopyStr(GetLastErrorText(), 1, 30);";
+    expect(bad.support).toContain(at);
+    bad.support = bad.support.replace(at, "Rec.Val := Format(Rec.Val.AsInteger(), 0, 9);");
+    expect(() => checkFormatScan(structuredClone(f))).not.toThrow();
+    expect(() => checkFormatScan(bad)).toThrow();
+  });
+
+  test("planted copy: one extra Format(x, 0, 9) in a cell moves the exact count", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    // the cell table is declared read-only; this is a test-local copy, so plant the fault through a mutable view of it
+    const c = bad.cells[0] as { call: string } | undefined;
+    if (!c) throw new Error("no cell");
+    c.call += " Error('V:[%1]', Format(1, 0, 9));";
+    expect(() => checkFormatScan(bad)).not.toThrow();
+    expect(() => checkFormatCount(structuredClone(f))).not.toThrow();
+    expect(() => checkFormatCount(bad)).toThrow();
   });
 });
 
@@ -2573,10 +2623,25 @@ describe("PR-500: the io-streams-2 family", () => {
     ]);
   });
 
+  /** Every Format the 36 cells hold: exactly 52 (a scan that finds fewer or more is no longer the scan that was measured). */
+  const checkFormatCount = (f: typeof IO_STREAMS_2): void => {
+    expect(f.cells.flatMap((c) => formatArgList(stmts(c)))).toHaveLength(52);
+  };
+
+  // Red: one extra `n9(...)` in a cell: the count moves though every Format is still format 9.
+  test("planted copy: one extra n9(...) in a cell moves the exact Format count", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    // the cell table is declared read-only; this is a test-local copy, so plant the fault through a mutable view of it
+    const c = bad.cells[0] as { call: string } | undefined;
+    if (!c) throw new Error("no cell");
+    c.call += " Error('V:[%1]', Format(1, 0, 9));";
+    expect(() => checkFormatCount(structuredClone(f))).not.toThrow();
+    expect(() => checkFormatCount(bad)).toThrow();
+  });
+
   // Red: a real-table DeleteAll, a reused key, or a Format without `, 0, 9`.
   test("no real-table DeleteAll, every real key its own, every Format is format 9", () => {
     const byKey = new Map<string, Set<string>>();
-    let formats = 0;
     for (const c of f.cells) {
       const s = stmts(c);
       expect({ cell: c.method, del: /\b(B|Item)\.DeleteAll/.test(s) }).toEqual({
@@ -2587,12 +2652,10 @@ describe("PR-500: the io-streams-2 family", () => {
         const key = m[1] ?? "";
         byKey.set(key, (byKey.get(key) ?? new Set()).add(c.method));
       }
-      for (const a of formatArgList(s)) {
-        formats++;
+      for (const a of formatArgList(s))
         expect({ cell: c.method, f9: a.endsWith(", 0, 9") }).toEqual({ cell: c.method, f9: true });
-      }
     }
-    expect(formats).toBe(52);
+    checkFormatCount(f);
     // 3 Temp Blob cells and 13 XMLport cells take a key each
     expect(byKey.size).toBe(16);
     for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });
