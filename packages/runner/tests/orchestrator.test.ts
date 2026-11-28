@@ -14427,7 +14427,7 @@ describe("R504: a lease answer whose body never finishes, through a real LeaseCl
           first = false;
           throw new Error("disk full");
         }
-        real(...a);
+        return real(...a);
       };
     });
     expect(report).not.toBeInstanceOf(Error);

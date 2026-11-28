@@ -1903,6 +1903,29 @@
             }
           }
         },
+        "stoppedByTierSlowdown": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "medians",
+            "afterMutantId",
+            "afterSeq"
+          ],
+          "properties": {
+            "medians": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "afterMutantId": {
+              "type": "number"
+            },
+            "afterSeq": {
+              "type": "number"
+            }
+          }
+        },
         "afterMainPass": {
           "const": true
         }

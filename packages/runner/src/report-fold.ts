@@ -27,6 +27,7 @@ import {
   withheldKillOf,
 } from "./report";
 import type { BatchArtifact, CarryHidden } from "./store";
+import { TIER_SLOWDOWN_REASON_PREFIX } from "./tier-slowdown";
 import { describeRequestPageRefusal, describeTestPageUnsupported } from "./testpage-unsupported";
 
 /** R443: this run's numbering facts, from `mutation-set-generated`. All three or none. */
@@ -283,6 +284,11 @@ export interface FoldedReport {
       readonly source: string;
     };
     readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
+    readonly stoppedByTierSlowdown?: {
+      readonly medians: readonly number[];
+      readonly afterMutantId: number;
+      readonly afterSeq: number;
+    };
     readonly afterMainPass?: true;
   };
   readonly permissionCanary?: PermissionCanaryResult;
@@ -333,14 +339,26 @@ interface DegradedWindow {
  * R1227: every outcome a `mutant-scored` event with a `seq` after the window's `afterSeq` made
  * becomes an `error` carrying the window's reason, under the rule `applyBatchInvalidations` has: an
  * error that already has a cause, and a known survivor, are kept. A kill scored before the window
- * stays a kill. The FIRST window wins, like the store's.
+ * stays a kill. The EARLIER window wins, like the store's (PR-466): the smallest `afterSeq`; on a tie the
+ * renew note (one not beginning `TIER_SLOWDOWN_REASON_PREFIX`) wins, else the first.
  */
 export function applyDegradedWindows(
   outcomes: SessionOutcome[],
   scoredSeq: WeakMap<SessionOutcome, number>,
   windows: readonly DegradedWindow[],
 ): void {
-  const [w] = windows;
+  let w: DegradedWindow | undefined;
+  for (const c of windows) {
+    if (
+      w === undefined ||
+      c.afterSeq < w.afterSeq ||
+      (c.afterSeq === w.afterSeq &&
+        w.reason.startsWith(TIER_SLOWDOWN_REASON_PREFIX) &&
+        !c.reason.startsWith(TIER_SLOWDOWN_REASON_PREFIX))
+    ) {
+      w = c;
+    }
+  }
   if (w === undefined) return;
   for (let i = 0; i < outcomes.length; i++) {
     const o = outcomes[i];
@@ -539,6 +557,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         stoppedBySignal?: true;
         stoppedByMemory?: { usedBytes: number; boundBytes: number; source: string };
         stoppedByDaemonChurn?: { lane: number; closes: number };
+        stoppedByTierSlowdown?: {
+          medians: readonly number[];
+          afterMutantId: number;
+          afterSeq: number;
+        };
         afterMainPass?: true;
       }
     | undefined;
@@ -670,6 +693,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           ...(e.stoppedByMemory !== undefined ? { stoppedByMemory: e.stoppedByMemory } : {}),
           ...(e.stoppedByDaemonChurn !== undefined
             ? { stoppedByDaemonChurn: e.stoppedByDaemonChurn }
+            : {}),
+          ...(e.stoppedByTierSlowdown !== undefined
+            ? { stoppedByTierSlowdown: e.stoppedByTierSlowdown }
             : {}),
           ...(e.afterMainPass === true ? { afterMainPass: true as const } : {}),
         };

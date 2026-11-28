@@ -366,10 +366,12 @@ export function stopNameOf(b: {
   readonly signalled: boolean;
   readonly memory?: unknown;
   readonly churn?: unknown;
+  readonly slowdown?: unknown;
 }): string | undefined {
   if (b.memory !== undefined) return "the memory guard (R948)";
   if (b.signalled) return "a SIGTERM or SIGINT (R955)";
   if (b.churn !== undefined) return "the daemon-churn guard (PR-250)";
+  if (b.slowdown !== undefined) return "the tier slowdown (PR-466)";
   if (b.reached !== undefined) return "the --time-budget (R912)";
   return undefined;
 }

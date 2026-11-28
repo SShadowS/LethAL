@@ -170,9 +170,11 @@ export function createProgressRenderer(
             ? "STOPPED BY THE MEMORY GUARD"
             : event.stoppedByDaemonChurn !== undefined
               ? "STOPPED BY THE DAEMON-CHURN GUARD"
-              : event.stoppedBySignal === true
-                ? "STOPPED BY SIGNAL (SIGTERM or SIGINT)"
-                : "TIME BUDGET REACHED";
+              : event.stoppedByTierSlowdown !== undefined
+                ? "STOPPED BY THE TIER-SLOWDOWN STOP"
+                : event.stoppedBySignal === true
+                  ? "STOPPED BY SIGNAL (SIGTERM or SIGINT)"
+                  : "TIME BUDGET REACHED";
         if (event.baselineStopped !== undefined) {
           write(
             `${head} IN THE ${event.baselineStopped.inAutoRebaseline === true ? "AUTO ISOLATION RE-" : ""}BASELINE: ${event.baselineStopped.testsRun} of ${event.baselineStopped.testsTotal} test(s) ran.`,
@@ -180,6 +182,13 @@ export function createProgressRenderer(
         }
         const why =
           head === "TIME BUDGET REACHED" ? `--time-budget ${event.budgetSeconds} s used up; ` : "";
+        if (event.stoppedByTierSlowdown !== undefined) {
+          // PR-466: never finished by it, and nothing left over for a time budget to explain.
+          write(
+            `${head}: the BC tier slowed down (first cut, R1228). ${event.unscheduledCount} mutant(s) left out of this report, and ${event.batchesNotStarted} later batch(es) never started; the rows after row ${event.stoppedByTierSlowdown.afterMutantId} are dropped. Run with --resume to continue.`,
+          );
+          break;
+        }
         write(
           event.afterMainPass === true
             ? `${head} AFTER THE MAIN PASS: every mutant was scored; the run is finished and there is nothing to resume (PR-277).`

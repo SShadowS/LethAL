@@ -750,6 +750,16 @@ export type RunEventInput =
       };
       /** PR-250: present when the daemon-churn guard stopped the session: the lane, and its daemon closes in a row with no mutant scored. */
       readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
+      /**
+       * PR-466 (R1228): present when the tier-slowdown stop stopped the session: the three block medians (ratio of a passing
+       * mutant row's own duration to its baseline own duration), and where the dropped window starts. The run is never
+       * finished by it: `--resume` re-runs the window.
+       */
+      readonly stoppedByTierSlowdown?: {
+        readonly medians: readonly number[];
+        readonly afterMutantId: number;
+        readonly afterSeq: number;
+      };
       /** PR-277: the stop came after the main pass scored every mutant: nothing left out, the run finished, nothing to resume. */
       readonly afterMainPass?: true;
     }
