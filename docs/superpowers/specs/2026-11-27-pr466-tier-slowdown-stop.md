@@ -321,3 +321,29 @@ the window semantics, the stop mechanism, the ripple.
 - **If A1 and A2 pass:** the orchestrator decides whether DOTests' configs turn the stop on. Nothing changes a default
   by itself.
 - **If either fails:** a new pre-commitment.
+
+### r5 amendment 1 (2026-11-28, the orchestrator's ruling): `tier-slowdown-guarded`, so A2 can tell "not slow" from "guarded out"
+
+- **Why:** the gate runs of r5 read a baseline PSI of 19.0% and 22.1% on bc1, right at the 20% guard. A window that is
+  hot while the host's PSI is high is suppressed today without a trace, so a quiet shadow could mean "not slow" or
+  "guarded out", and bugs' `ratio-watch.sh` cannot tell which.
+- **The event.** At a check where every OTHER trigger condition holds (the window is full, |W| ≥ 50, median ≥ 2.5) but
+  the PSI is ≥ 20% or unreadable, record `tier-slowdown-guarded`, with:
+  - atMs, the window median, |W|, the window's span;
+  - the PSI (`null` when unreadable) and load1.
+- **Once per session:** the first guarded check only, so a long guarded stretch cannot flood the stream. The arming
+  line counts every guarded check.
+- **In BOTH modes it changes nothing:** no stop, no window, no verdict, no exit code. It is not a `warning` (no gate's
+  warning set moves) and not a report field. A guarded check never blocks a later trigger: when the PSI drops, the
+  next check can still trigger.
+- **The 20% stays** until the new data says otherwise.
+- **Tests (red each way):**
+  - a hot window with high PSI writes `guarded` and no `would-stop`;
+  - a hot window with low PSI writes `would-stop` and no `guarded`;
+  - an unreadable PSI writes `guarded` with `psi: null`;
+  - a window that is not hot (median 2.49) writes neither;
+  - `guarded` once per session, and a later low-PSI check still triggers;
+  - opt-in stop mode: `guarded` stops nothing.
+- **Acceptance:** A2 is judged on both events. A degraded run with no would-stop but with a `guarded` is reported as
+  "guarded out", with its PSI. It is not counted as a detection, nor as a miss of the rule's figures.
+- **No gate may move:** the event is new and fires only on a full hot window. The gate runs are checked for it.
