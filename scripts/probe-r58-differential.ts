@@ -140,9 +140,9 @@ function entryKeys(coverage: CoverageMap | undefined): string[] {
  *
  * A decorator rather than a change to `BcDevMcpBackend`: the thing under test is what the real
  * backend produces, and a probe that reaches into it to read a private field would drift from the
- * production path the moment the field moved. A baseline run is identified as one whose last
- * `activate()` was `null` — the same invariant the fenced-coverage assertion inside the backend
- * relies on. (A baseline always takes the single-method `run`; `runMany` is for mutant runs and the
+ * production path the moment the field moved. A baseline run is one made inside runSession's
+ * `baselinePhase` bracket while the last `activate()` was `null` (R1245: `null` alone also matches
+ * the unmutated confirms and reruns of the mutant phase). (A baseline always takes the single-method `run`; `runMany` is for mutant runs and the
  * warm confirmation only, `bcdev-backend.ts`.)
  *
  * R1245 (PR-507): every OTHER member is the real backend's, through a Proxy. This class used to forward
@@ -157,7 +157,13 @@ export class CoverageRecordingBackend {
   /** Kept because a baseline that stops after one `error` verdict says nothing about WHY. */
   readonly baselineFailure = new Map<string, string>();
   private active: string | null = null;
-  /** What `runSession` drives: the real backend, with `activate` and `run` recorded on the way. */
+  /**
+   * R1245: inside runSession's `baselinePhase(true)` ... `(false)` bracket. Unmutated runs OUTSIDE it (the cold kill
+   * confirm, confirmFoundNone, the decision-11 reruns, all run with coverage "none") are not baselines: recording them
+   * overwrote a killing test's baseline set with [] in both modes, so the per-test oracle compared empty with empty.
+   */
+  private inBaseline = false;
+  /** What `runSession` drives: the real backend, with `baselinePhase`, `activate` and `run` recorded on the way. */
   readonly backend: ExecutionBackend;
 
   constructor(private readonly inner: ExecutionBackend) {
@@ -166,6 +172,12 @@ export class CoverageRecordingBackend {
         if (prop === "activate") return (id: string | null) => this.activate(id);
         if (prop === "run") return (ref: TestMethodRef, opts: RunOpts) => this.run(ref, opts);
         const v: unknown = Reflect.get(target, prop, target);
+        if (prop === "baselinePhase" && typeof v === "function") {
+          return (on: boolean, ...rest: unknown[]) => {
+            this.inBaseline = on;
+            return v.call(target, on, ...rest);
+          };
+        }
         return typeof v === "function" ? v.bind(target) : v;
       },
     });
@@ -177,7 +189,7 @@ export class CoverageRecordingBackend {
   }
   private async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const v = await this.inner.run(ref, opts);
-    if (this.active === null) {
+    if (this.inBaseline && this.active === null) {
       this.baselineCoverage.set(testKey(ref), entryKeys(v.coverage));
       this.baselineOutcome.set(testKey(ref), v.outcome);
       if (v.failureMessage !== undefined) this.baselineFailure.set(testKey(ref), v.failureMessage);
