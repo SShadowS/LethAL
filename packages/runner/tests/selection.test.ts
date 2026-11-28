@@ -31,6 +31,9 @@ describe("PR-505: numberingUnchanged", () => {
       [facts({ digest: null }), facts({ digest: null })],
       [facts({ hidden: null }), facts()],
       [facts(), facts({ twins: null })],
+      // Review: null on BOTH sides, so dropping a null check reads `true` (not a size mismatch, not a crash).
+      [facts({ hidden: null }), facts({ hidden: null })],
+      [facts({ twins: null }), facts({ twins: null })],
     ] as const)
       expect(numberingUnchanged(prior, current)).toBe(false);
   });

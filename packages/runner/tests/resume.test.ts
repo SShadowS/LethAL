@@ -42,6 +42,7 @@ import {
   buildResumeIndex,
   carriedVerdictFor,
   isStrandedNote,
+  recordedVerdictOf,
   sessionFingerprint,
   wasStranded,
 } from "../src/resume";
@@ -384,6 +385,32 @@ function manifestEntry(astHash: string): MutantManifestEntry {
  * and resuming is the natural recovery from a stranded run and must keep working; only the OFF
  * direction drops.
  */
+// PR-505 (review): `resume-recorded-not-carried` must name a mutant whose record is reachable only through rule 2's
+// member site (its key moved). Red: drop the by-site branch of `recordedVerdictOf`: the second expect reads
+// undefined.
+describe("PR-505: recordedVerdictOf finds a recorded verdict by key or by rule 2's member site", () => {
+  test("by key; by member site when the key moved; nothing without a member hash", () => {
+    const index = buildResumeIndex(
+      [row({ astHash: "h1", identityOrdinal: 5, memberHash: "mh" })],
+      true,
+    );
+    const atKey = {
+      ...manifestEntry("h1"),
+      identityOrdinal: 5,
+      memberHash: "mh",
+    } as MutantManifestEntry;
+    expect(recordedVerdictOf(index, atKey)).toBe("survived");
+    const moved = {
+      ...manifestEntry("h1"),
+      identityOrdinal: 0,
+      memberHash: "mh",
+    } as MutantManifestEntry;
+    expect(recordedVerdictOf(index, moved)).toBe("survived");
+    const noMember = { ...manifestEntry("h1"), identityOrdinal: 0 } as MutantManifestEntry;
+    expect(recordedVerdictOf(index, noMember)).toBeUndefined();
+  });
+});
+
 describe("buildResumeIndex — timeout-killed across the stop flag (R53)", () => {
   const timeoutRow = row({ verdict: "timeout-killed", astHash: "hash-timeout" });
 

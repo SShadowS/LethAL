@@ -880,8 +880,9 @@ describe("R442: a site hidden from numbering in one run poisons no key in the ne
 
   // PR-505, the other direction: the numbering CHANGED (Bad-X repaired gives its sites ordinals), so the twins still
   // must not carry (R442 holds), and every one of them is named with its reason, not re-run in silence.
-  // Red: let `numberingUnchanged` pass on a different hidden set: Compute's twins read `carried`. Red: drop
-  // `rerunBecause` at the not-carried branch: no warning.
+  // Red: make `numberingUnchanged` return true (the repair changes the digest too, so dropping only the hidden-set
+  // comparison stays green here; that comparison is pinned by selection.test.ts): Compute's twins read `carried`.
+  // Red: drop `rerunBecause` at the not-carried branch: no warning.
   test("PR-505: a resume whose numbering changed still re-runs the twins, and names each one with its reason", async () => {
     const w = await r442World({
       "src/BadX.al": obj(REFUSED_TABLE, X()),

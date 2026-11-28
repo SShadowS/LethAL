@@ -320,6 +320,7 @@ import {
   STRANDED_SKIP_NOTE,
   buildResumeIndex,
   carriedVerdictFor,
+  recordedVerdictOf,
   sessionFingerprint,
   testDiscoveryMarker,
   wasStranded,
@@ -344,7 +345,6 @@ import {
   numberingDigestOf,
   numberingUnchanged,
   objectKeyOf,
-  serializeKey,
   testKeyOf,
   twinSitesOf,
 } from "./selection";
@@ -10351,9 +10351,9 @@ async function runSessionBody(
             // R53's stranded skips were recorded at step 1b', before coverage (R-646c).
             const carried = carriedVerdictFor(resumeState.index, m);
             if (carried === undefined) {
-              // PR-505: a recorded verdict exists for this key, yet it is not carried: say why. (A recorded
-              // `no-coverage` is never carried by design, R621, and is not counted.)
-              const rec = resumeState.index.carryable.get(serializeKey(identityKeyOf(m)))?.verdict;
+              // PR-505: a recorded verdict exists for this mutant, by key or by rule 2's member site, yet it is not
+              // carried: say why. (A recorded `no-coverage` is never carried by design, R621, and is not counted.)
+              const rec = recordedVerdictOf(resumeState.index, m);
               if (rec !== undefined && rec !== "no-coverage")
                 rerunBecause(
                   isCarryDisabled(m, resumeState.index.carryDisabled)
