@@ -66,6 +66,27 @@ test("PR-499: every ledger cause with a specific issue is costed under it; an um
     return [];
   });
   expect(wrong).toEqual([]);
+  // The causes an OLDER family costs under an issue the ledger does not give them, pinned (R1248 names them): a new
+  // one goes red here instead of hiding an open issue as another one.
+  const older = mine.flatMap((e) => {
+    const id = familyOf(e.key) ?? "";
+    const fam = FAMILIES.find((f) => f.id === id);
+    const specific = nums(e.issue ?? "");
+    return fam !== undefined &&
+      !PR499_FAMILIES.has(id) &&
+      specific.length > 0 &&
+      !nums(fam.issue).some((n) => specific.includes(n))
+      ? [id]
+      : [];
+  });
+  expect(older.sort()).toEqual([
+    "unpinned-error-text",
+    "untouched-handle",
+    "untouched-handle",
+    "untouched-handle",
+    "zip-archive",
+    "zip-archive",
+  ]);
 });
 
 // PR-499: the families read al-runner's raw text too, not only the ledger's normalised key (numbers as N, names <x>).

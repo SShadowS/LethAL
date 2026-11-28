@@ -1586,7 +1586,7 @@
   {
     "key": "NotRun: out-of-scope: relation target <x> is not declared in the workspace",
     "state": "fixed",
-    "note": "PR-499: gone on edge e5176a9fd: 9 tests it refused in two BC.History projects pass, and no re-swept store holds it (103 projects). PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-499: gone on edge e5176a9fd: 9 tests it refused in two BC.History projects pass, and no re-swept store holds it (103 projects); the kept repro u7819-refusals has no relation-target test, so it does not back this state. PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
     "issue": "#7819",
     "repro": "scripts/upstream-repros/u7819-refusals"
   },
