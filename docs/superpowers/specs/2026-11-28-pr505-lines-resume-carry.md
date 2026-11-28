@@ -70,3 +70,29 @@ Each test is red-checked: revert the specific change and see the test go red.
     that is pre-committed here by name: `resume-recorded-not-carried`, in `itest:lend` only, and only if its resume
     re-runs a recorded verdict. Any verdict move is a BLOCK.
 - **Unit:** VERIFY full PASS. CI is green on the submitted head.
+
+## Amendment r2 (after the build review, 2026-11-28; before any gate)
+
+An Opus review of the build found nothing blocking. It confirmed that `numberingDigestOf` hashes every numbered entry's
+file, span, operator, tuple and ordinal, and that the lift is confined to resume. These points change the text above.
+Where r1 and r2 differ, r2 holds.
+
+- **Scope of change 1:** the lift covers every hidden tuple, not only the ones `--lines` makes. A header-refused file
+  outside the range is the other source. The soundness argument is the same: a hidden site has no key in either run.
+- **Change 2: one warning per BATCH**, as its sibling warnings (`resume-tests-not-faced`, `resume-survivor-no-record`)
+  already are. Not one per session.
+- **Change 2's reasons, as built:**
+  - `carry-disabled` (R307), `carry-refused` (R391);
+  - `restart-batch` (PR-456: the batch's fresh baseline did not equal the prior run's);
+  - `restart-not-carryable` (PR-456).
+  - `not-faced` and `no-record` keep their own warnings and are not repeated.
+  - A restart's prior kills are re-run by design (PR-456) and stay counted in `resume-across-restart`, not named here.
+  - `no-coverage-now` is dropped: such a mutant is not executed at all.
+- **Change 2's record:** "recorded" means a row found by key, or by rule 2's member site when the mutant has a member
+  hash. A recorded `known-survivor` counts like `survived`; a recorded `no-coverage` never counts (R621).
+- **A second new warning, pre-committed by name:** `resume-numbering-unchanged`. It is emitted once per resume when
+  the hidden set is non-empty and change 1 lifts the refusal. Like `resume-recorded-not-carried`, it may appear only in
+  a gate whose resume has hidden tuples: of the gates above, `itest:lend` at most. No verdict moves.
+- **Tests added after the review:** null-on-both-sides rows for `hidden` and `twins` in the unit table, each
+  red-checked, and a direct test that `recordedVerdictOf` finds a rule-2 site match, red-checked.
+  - Case (b)'s three facts are pinned by the unit table; the integration test covers the digest-and-hidden case.
