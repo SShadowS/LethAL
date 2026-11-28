@@ -374,3 +374,61 @@ Evidence: `/coord/handoff/PR-479/table/result-sandbox-data.md`.
    the proof.
 4. **Counting (ruling):** every later client run records how many codeunits are longer than the first viewport, and how
    many end `client-incomplete`.
+
+## Amendment 8 (2026-11-28, a paged attestation read in LethAL Control 1.0.0.32; orchestrator ruling)
+Evidence: R1244, `/coord/handoff/PR-479/smoke/diag-att.*.out`, `/coord/handoff/PR-479/forced/subset-dtcopy.ts`.
+- **Measured:** since about 12:22Z, bcwin's OData service (port 7048) never delivers an answer over about 29.7 KB,
+  LethAL's or not (two `$metadata` GETs hung too), and a few such calls wedge the server.
+  - 1.0.0.31's `ReadClientAttestation` returns every row of an op in ONE answer, about 437 bytes per method. A 67-method
+    codeunit (29,256 bytes) read at once; 68 never did.
+  - The server is the cause (kraken, q-20261128T141440-00939943). But an answer that grows with the suite breaks under
+    any proxy or server that caps response size, and a 300-method codeunit is about 130 KB.
+- **Ruling:** page the read, inside PR-479, before submit.
+
+**The 1.0.0.32 change (the control app):**
+1. `ReadClientAttestation` gains `FromIndex: Integer` (0-based) and `MaxRows: Integer`. In the read-only body, after the
+   unchanged fence and lease checks:
+   - it refuses by name a `MaxRows` outside 1-10 and a negative `FromIndex` (an AL `Error`);
+   - `total` is the `Count()` of the op's rows, under the same ReadCommitted isolation and filter;
+   - it skips `FromIndex` rows in primary-key order, then returns at most `MaxRows` rows;
+   - the answer is `{read, total, from, rows}` (`from` echoes `FromIndex`). A tuple mismatch still answers
+     `{read: false, reason: "lease-invalid"}`.
+   - The isolation stays ReadCommitted (never looser: an uncommitted row may be rolled back, and a verdict built on it
+     would be false).
+2. **Why 10:** a row is at most about 700 bytes with every text field at its maximum and an ASCII method name, and about
+   1.5 KB with a 128-character non-ASCII method name escaped twice (`\uXXXX`, then inside OData's string value). So a
+   page is at most about 15 KB, well under 30 KB, and Data Tests (71 rows) takes 8 calls.
+3. Version 1.0.0.32. `CLIENT_MIN_CONTROL_VERSION` moves to 1.0.0.32, so a client run on 1.0.0.31 is refused by name
+   (`client-control-too-old`). `MIN_CONTROL_VERSION` (headless) does not move, and no headless action changes.
+
+**The client:**
+4. It reads pages from 0, each `FromIndex` = the rows collected so far, `MaxRows` 10, until it holds `total` rows.
+5. **Refused by name, `client-attestation-pages`** (an op that ended, so NOT in flight; the run stops), when:
+   - `total` differs between two pages;
+   - `from` is not the `FromIndex` asked;
+   - a page holds a number of rows other than `min(10, total - from)`, so an empty page before `total` is also refused;
+   - a row's (codeunit, method) repeats across pages;
+   - or a page says `read: false` after an earlier page said `read: true`.
+   - `total` 0 is not refused here: the existing row checks name it (`client-run-empty`).
+6. A page that gets no answer is `client-attestation-unreadable` (as now), and the run sends no further control call
+   except the teardown's (ruling 2, below).
+
+**Ruling 2 (stop after a lost answer):** after `client-attestation-unreadable` or `client-attestation-pages`, the run
+stops; it sends no further op and no second read. On bcwin a second call after a lost answer wedged the server.
+
+**Other actions whose answer grows without a bound (listed, not changed here; R1246):**
+- `RunMutantWithCoverage`: one coverage row per covered line (headless coverage path).
+- `RunMutantMany`: one result per method in the call (bounded only by the batch the client sends).
+- `ObjectOwners` and `FieldOwners`: up to 200 rows (`OWNERS_MAX_ITEMS`); their size is unmeasured.
+- `InstalledDependents`: one row per installed dependent app.
+- `HarnessInfo`'s arrays are fixed and small: not listed.
+
+**The proof (before submit):**
+7. An offline alc compile, 0 errors and 0 warnings; the build pinned (sha256) and the setup script's `CONTROL_APP` and
+   `CONTROL_SHA256` moved to it.
+8. Red tests both ways for each refusal in item 5, plus one for the page-size bound (a page of 11 rows is refused).
+9. **Headless 0-move proof on bc1-bc3:** with 1.0.0.32 published, each server's proven gates reproduce their frozen
+   figures per mutant (the R806 proof table). Any difference is a BLOCK.
+10. **Client legs on bcwin:** table 1 and table 2 (amendment 7's per-key rule), plus one op on the 71-method Data Tests
+    copy that reads in 8 pages. Each page is far below the measured 29.7 KB line, so these legs need no fix on bcwin
+    first. If kraken has not fixed it yet, they also show that the paged read works on a server that caps answers.
