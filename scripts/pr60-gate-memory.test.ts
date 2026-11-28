@@ -22,6 +22,9 @@ const sample = (usedGiB: number) => ({
   source: "test",
 });
 const PS_HEAD = "PID PPID PGID COMMAND\n1 0 1 init\n";
+// R1243 (PR-506): fake pids are offsets from this process's pid, so none can equal it (a literal could, on CI).
+const WRAP = process.pid + 100; // a heavy-slot wrapper; WRAP + n are its siblings or children
+const JOB = process.pid + 7; // an unslotted job
 
 const dirs: string[] = [];
 const holders: ReturnType<typeof Bun.spawn>[] = [];
@@ -97,7 +100,7 @@ describe("PR-60 gateMemoryVerdict", () => {
   test("the ps text reaches heldInputs: an unslotted BaseApp job's default peak (12) is in the held sum", async () => {
     const dir = mk();
     await hold(dir, 1, `other ${process.pid} 8\n`);
-    const ps = `${PS_HEAD}200 1 200 bun scripts/corpus-snapshot.ts snapshot --root /work/src/BC.History/BaseApp\n`;
+    const ps = `${PS_HEAD}${JOB} 1 ${JOB} bun scripts/corpus-snapshot.ts snapshot --root /work/src/BC.History/BaseApp\n`;
     expect(heldInputs(dir, process.pid, PS_HEAD).heldPeaks).toEqual([8]);
     expect(heldInputs(dir, process.pid, ps).heldPeaks).toEqual([8, 12]);
     expect(run(dir, 3, ps).v?.message).toContain("held slots' peaks 20.0 (2)");
@@ -107,7 +110,7 @@ describe("PR-60 gateMemoryVerdict", () => {
     const dir = mk();
     await hold(dir, 1, `other ${process.pid} 8 small\n`);
     await hold(dir, 2, `other ${process.pid} 8 small\n`);
-    const ps = `${PS_HEAD}200 1 200 bun scripts/corpus-snapshot.ts snapshot --root /work/src/BC.History/BaseApp\n`;
+    const ps = `${PS_HEAD}${JOB} 1 ${JOB} bun scripts/corpus-snapshot.ts snapshot --root /work/src/BC.History/BaseApp\n`;
     // 16 + 2 + 4 = 22 fits; with the unslotted 12, 28 + 6 = 34 > 32 and 2 small are held: no allowance.
     expect(run(dir, 3).v?.message).toContain("admitted");
     expect(run(dir, 3).v?.refuse).toBe(false);
@@ -119,10 +122,10 @@ describe("PR-60 gateMemoryVerdict", () => {
     const dir = mk();
     await hold(dir, 1, `other ${process.pid} 8\n`); // the gate's own slot
     await hold(dir, 2, `other ${process.pid} 8\n`); // someone else's
-    // The slot file names the wrapper (pid 900); this process runs under it.
-    writeFileSync(join(dir, "heavy.1"), "900\n");
-    writeFileSync(join(dir, "heavy.2"), "902\n"); // another job's wrapper, not above this process
-    const ps = `${PS_HEAD}900 1 900 scripts/heavy-slot.sh --peak gate bun scripts/al-runner-v3-update.ts --root /x --local-candidate /y\n${process.pid} 900 900 bun scripts/al-runner-v3-update.ts --root /x --local-candidate /y\n901 ${process.pid} 900 bun run itest:alrunner-v3\n`;
+    // The slot file names the wrapper (pid WRAP); this process runs under it.
+    writeFileSync(join(dir, "heavy.1"), `${WRAP}\n`);
+    writeFileSync(join(dir, "heavy.2"), `${WRAP + 2}\n`); // another job's wrapper, not above this process
+    const ps = `${PS_HEAD}${WRAP} 1 ${WRAP} scripts/heavy-slot.sh --peak gate bun scripts/al-runner-v3-update.ts --root /x --local-candidate /y\n${process.pid} ${WRAP} ${WRAP} bun scripts/al-runner-v3-update.ts --root /x --local-candidate /y\n${WRAP + 1} ${process.pid} ${WRAP} bun run itest:alrunner-v3\n`;
     const ledger: string[] = [];
     const seams = {
       readSample: () => sample(8.2),
@@ -150,9 +153,9 @@ describe("PR-60 gateMemoryVerdict", () => {
     await hold(dir, 2, `other ${process.pid} 12\n`);
     await hold(dir, 3, `other ${process.pid} 8\n`);
     await hold(dir, 4, `other ${process.pid} 8\n`);
-    writeFileSync(join(dir, "heavy.1"), "900\n");
-    for (const n of [2, 3, 4]) writeFileSync(join(dir, `heavy.${n}`), `${900 + n}\n`);
-    const ps = `${PS_HEAD}900 1 900 scripts/heavy-slot.sh --peak gate bun scripts/al-runner-v3-update.ts\n${process.pid} 900 900 bun scripts/al-runner-v3-update.ts\n`;
+    writeFileSync(join(dir, "heavy.1"), `${WRAP}\n`);
+    for (const n of [2, 3, 4]) writeFileSync(join(dir, `heavy.${n}`), `${WRAP + n}\n`);
+    const ps = `${PS_HEAD}${WRAP} 1 ${WRAP} scripts/heavy-slot.sh --peak gate bun scripts/al-runner-v3-update.ts\n${process.pid} ${WRAP} ${WRAP} bun scripts/al-runner-v3-update.ts\n`;
     const rows: string[] = [];
     const seams = (psText: string) => ({
       readSample: () => sample(8.2),

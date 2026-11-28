@@ -1339,19 +1339,21 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
       expect(seen.gates).toEqual([]);
     } finally {
       if (real !== undefined) Object.defineProperty(process, "pid", real);
+      else Reflect.deleteProperty(process, "pid"); // pid was inherited: drop the forced own property
     }
     expect(process.pid).toBe(realPid); // restored
   });
 
-  // R1243 guard (PR-506). Red: write a live update holder with a literal pid again.
-  test("R1243: no test in this file writes a fake live update holder with a literal pid", async () => {
+  // R1243 guard (PR-506). Red: write a fake holder with a literal pid again, on one line or as the formatter wraps it.
+  test("R1243: no test in this file writes a fake holder or lock with a literal pid", async () => {
     const src = await readFile(join(import.meta.dir, "al-runner-v3-update.test.ts"), "utf8");
-    expect(src.match(/procs: \{ \d+: "[^"]*al-runner-v3-update/g) ?? []).toEqual([]);
+    expect(src.match(/procs:\s*\{\s*"?\d+"?\s*:/g) ?? []).toEqual([]);
+    expect(src.match(/holder\(\d+\)|\bpid:\s*\d+\s*,\s*startedAt/g) ?? []).toEqual([]);
   });
 
   test("L2: a dead holder AND a process with its cwd under the gate worktree: skipped, the orphan named", async () => {
     await setup();
-    await holder(4242);
+    await holder(otherPid());
     const { deps, seen } = regate({ orphans: [777] });
     expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["skipped"]);
     expect(seen.gates).toEqual([]);
@@ -1360,7 +1362,7 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
 
   test("L3: a dead holder, no orphan: taken over (renamed, then linked), gated, and released", async () => {
     await setup();
-    await holder(4242);
+    await holder(otherPid());
     const { deps, seen } = regate({});
     expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
     expect(seen.gates).toEqual([REGATE_COMMIT]);
@@ -1380,8 +1382,8 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
 
   test("L5: a live pid running ANOTHER program (pid reuse) is stale: gated", async () => {
     await setup();
-    await holder(4242);
-    const { deps, seen } = regate({ procs: { 4242: "/usr/bin/vim notes.txt" } });
+    await holder(otherPid());
+    const { deps, seen } = regate({ procs: { [otherPid()]: "/usr/bin/vim notes.txt" } });
     expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
     expect(seen.gates).toEqual([REGATE_COMMIT]);
   });
@@ -1398,7 +1400,7 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
 
   test("L6: a lock that is no longer ours is left alone at release; our own is removed", async () => {
     await setup();
-    const other = JSON.stringify({ pid: 99, startedAt: "x", argv: [] });
+    const other = JSON.stringify({ pid: otherPid(), startedAt: "x", argv: [] });
     const { deps } = regate({ onGate: () => writeFile(lockPath(), other) });
     await updateOnce(deps, { regateAt: REGATE_COMMIT });
     expect(await readFile(lockPath(), "utf8")).toBe(other);
@@ -4138,7 +4140,7 @@ linuxOnly("PR-226: privateGateOnce", () => {
     await mkdir(priv, { recursive: true });
     await writeFile(
       join(priv, ".gate.lock"),
-      JSON.stringify({ pid: 4242, startedAt: "2026-10-20T00:00:00Z", argv: [] }),
+      JSON.stringify({ pid: otherPid(), startedAt: "2026-10-20T00:00:00Z", argv: [] }),
     );
     expect((await w.run()).outcome).toBe("skipped");
     expect(w.calls.cwd).toEqual([join(priv, "gate-worktree")]);
@@ -4155,7 +4157,7 @@ linuxOnly("PR-226: privateGateOnce", () => {
     const f = fake({ outcome: "pass" });
     await writeFile(
       join(root, ".gate.lock"),
-      JSON.stringify({ pid: 4242, startedAt: "2026-10-20T00:00:00Z", argv: [] }),
+      JSON.stringify({ pid: otherPid(), startedAt: "2026-10-20T00:00:00Z", argv: [] }),
     );
     const deps = {
       ...f.deps,
