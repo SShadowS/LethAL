@@ -162,6 +162,18 @@ export function createProgressRenderer(
       case "quarantined":
         write(`QUARANTINED: ${event.reason}`);
         break;
+      case "tier-slowdown-would-stop":
+        // PR-466 (r5): shadow mode; nothing was stopped.
+        write(
+          `TIER SLOWDOWN (shadow, nothing stopped): passing tests at ${event.median.toFixed(1)}x their baseline over ${Math.round(event.spanMs / 60_000)} min, host CPU pressure ${event.psi.toFixed(1)}%.`,
+        );
+        break;
+      case "tier-slowdown-guarded":
+        // PR-466 r5 amendment 1: a hot window the CPU-pressure guard suppressed; nothing was stopped.
+        write(
+          `TIER SLOWDOWN GUARDED OUT (nothing stopped): passing tests at ${event.median.toFixed(1)}x their baseline over ${Math.round(event.spanMs / 60_000)} min, but host CPU pressure ${event.psi === null ? "unreadable" : `${event.psi.toFixed(1)}%`}.`,
+        );
+        break;
       case "time-budget-reached": {
         // R966: say what stopped the run. A signal or the memory guard spends the budget to stop
         // through R955's path, but the budget itself was not used up.
@@ -170,9 +182,11 @@ export function createProgressRenderer(
             ? "STOPPED BY THE MEMORY GUARD"
             : event.stoppedByDaemonChurn !== undefined
               ? "STOPPED BY THE DAEMON-CHURN GUARD"
-              : event.stoppedBySignal === true
-                ? "STOPPED BY SIGNAL (SIGTERM or SIGINT)"
-                : "TIME BUDGET REACHED";
+              : event.stoppedByTierSlowdown !== undefined
+                ? "STOPPED BY THE TIER-SLOWDOWN STOP"
+                : event.stoppedBySignal === true
+                  ? "STOPPED BY SIGNAL (SIGTERM or SIGINT)"
+                  : "TIME BUDGET REACHED";
         if (event.baselineStopped !== undefined) {
           write(
             `${head} IN THE ${event.baselineStopped.inAutoRebaseline === true ? "AUTO ISOLATION RE-" : ""}BASELINE: ${event.baselineStopped.testsRun} of ${event.baselineStopped.testsTotal} test(s) ran.`,
@@ -180,6 +194,13 @@ export function createProgressRenderer(
         }
         const why =
           head === "TIME BUDGET REACHED" ? `--time-budget ${event.budgetSeconds} s used up; ` : "";
+        if (event.stoppedByTierSlowdown !== undefined) {
+          // PR-466: never finished by it, and nothing left over for a time budget to explain.
+          write(
+            `${head}: the BC tier slowed down (first cut, R1228). ${event.unscheduledCount} mutant(s) left out of this report, and ${event.batchesNotStarted} later batch(es) never started; the rows after row ${event.stoppedByTierSlowdown.afterMutantId} are dropped. Run with --resume to continue.`,
+          );
+          break;
+        }
         write(
           event.afterMainPass === true
             ? `${head} AFTER THE MAIN PASS: every mutant was scored; the run is finished and there is nothing to resume (PR-277).`
