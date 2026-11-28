@@ -1,10 +1,112 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionReport } from "../packages/runner/src/report";
-import { baselineRefusals, costOf, familyOf, render, unmappedTexts } from "./v3-refusal-cost";
+import {
+  FAMILIES,
+  baselineRefusals,
+  costOf,
+  familyOf,
+  render,
+  unmappedTexts,
+} from "./v3-refusal-cost";
+
+// PR-499: each NEW cause the BC.History re-sweep put in the refusal ledger is costed under an issue. A cause with a
+// specific issue lands in a family (never unmapped, never `testpage`'s "LethAL"), and a PR-499 family it lands in names
+// that issue; a cause with only the #7775 umbrella stays unmapped. (An older family keeps its own issue: e.g.
+// `untouched-handle` says #7760 where the ledger's BinaryReader rows say #7997; that predates PR-499.)
+// Red: drop or reorder a PR-499 family, give one another issue, or map an umbrella-only cause.
+const PR499_FAMILIES = new Set([
+  "no-client-login-events",
+  "no-client-session",
+  "current-transaction-type",
+  "xrec-table-procedure",
+  "geturl-web-service",
+  "option-member-list",
+  "relation-platform-field",
+  "request-page",
+  "guarded-run-consistent",
+  "worksheet-caption",
+  "timezone-policy",
+  "dotnet-exception-text",
+  "dotnet-null-instance",
+  "dotnet-registry-member",
+  "dotnet-platform-type",
+  "autoformat-type",
+  "fieldref-blob-setview",
+  "report-layout-file",
+  "tenant-permission-delete",
+  "permissions-property-read",
+  "descending-deleteall",
+  "setvalue-text-relation",
+]);
+test("PR-499: every ledger cause with a specific issue is costed under it; an umbrella-only cause stays unmapped", () => {
+  const ledger = JSON.parse(
+    readFileSync(
+      join(import.meta.dir, "..", "docs", "measurements", "refusal-ledger.json"),
+      "utf8",
+    ),
+  ) as { key: string; state: string; issue?: string; note?: string }[];
+  // the causes PR-499 added (its two `fixed` updates carry a "PR-499: gone on ..." note instead)
+  const mine = ledger.filter((e) => /^PR-499: \d+ on the BC\.History re-sweep/.test(e.note ?? ""));
+  expect(mine.length).toBe(92);
+  expect(FAMILIES.filter((f) => PR499_FAMILIES.has(f.id)).length).toBe(PR499_FAMILIES.size);
+  const nums = (s: string) => (s.match(/#\d+/g) ?? []).filter((n) => n !== "#7775");
+  const wrong = mine.flatMap((e) => {
+    const id = familyOf(e.key) ?? "";
+    const fam = FAMILIES.find((f) => f.id === id);
+    const specific = nums(e.issue ?? "");
+    if (specific.length === 0)
+      return id.startsWith("unmapped:") ? [] : [`${e.key} -> ${id}, but no specific issue`];
+    if (fam === undefined || id === "testpage") return [`${e.key} -> ${id}`];
+    if (PR499_FAMILIES.has(id) && !nums(fam.issue).some((n) => specific.includes(n)))
+      return [`${e.key} -> ${id} (${fam.issue}) vs ${e.issue}`];
+    return [];
+  });
+  expect(wrong).toEqual([]);
+  // The causes an OLDER family costs under an issue the ledger does not give them, pinned (R1248 names them): a new
+  // one goes red here instead of hiding an open issue as another one.
+  const older = mine.flatMap((e) => {
+    const id = familyOf(e.key) ?? "";
+    const fam = FAMILIES.find((f) => f.id === id);
+    const specific = nums(e.issue ?? "");
+    return fam !== undefined &&
+      !PR499_FAMILIES.has(id) &&
+      specific.length > 0 &&
+      !nums(fam.issue).some((n) => specific.includes(n))
+      ? [id]
+      : [];
+  });
+  expect(older.sort()).toEqual([
+    "unpinned-error-text",
+    "untouched-handle",
+    "untouched-handle",
+    "untouched-handle",
+    "zip-archive",
+    "zip-archive",
+  ]);
+});
+
+// PR-499: the families read al-runner's raw text too, not only the ledger's normalised key (numbers as N, names <x>).
+test("PR-499: the raw forms of a numbered and a named cause find their family", () => {
+  expect(
+    familyOf(
+      "NotRun: out-of-scope: AutoFormatType 132584 (a type outside the pinned ones; BC resolves it through the AutoFormatTranslate event)",
+    ),
+  ).toBe("autoformat-type");
+  expect(
+    familyOf(
+      "NotRun: out-of-scope: store error the value of field 'Code' of platform table 'Probe Row' is not known for field 'Ref' of table 'Probe Line', a TableRelation without a field of a shape not measured",
+    ),
+  ).toBe("relation-platform-field");
+  expect(
+    familyOf(
+      "NotRun: out-of-scope: the login: which login events BC raises in a session without a client (--no-client) is not pinned",
+    ),
+  ).toBe("no-client-login-events");
+});
 
 // PR-492: synthetic reports and refusal texts, invented names.
 type M = {

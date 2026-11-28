@@ -270,6 +270,143 @@ export const FAMILIES: readonly Family[] = [
     label: "a cascade: part of a test's reach is not known",
     pattern: /reach is not known|reach not known/,
   },
+  // PR-499: the families of the NEW causes of the BC.History re-sweep on edge e5176a9fd, each with the issue the
+  // refusal ledger gives it. Causes the ledger holds as unexamined (no issue) stay unmapped on purpose.
+  // Before `testpage`: al-runner's --no-client refusals name TestPage too, and they are #8028, not the fenced session.
+  {
+    id: "no-client-login-events",
+    issue: "#8273",
+    label: "which login events BC raises in a session without a client",
+    pattern: /the login: which login events BC raises/,
+  },
+  {
+    id: "no-client-session",
+    issue: "#8028",
+    label:
+      "a TestPage, a page handler, a Notification or CurrentClientType in a session without a client (--no-client)",
+    pattern: /in a session without a client \(--no-client\)/,
+  },
+  {
+    id: "current-transaction-type",
+    issue: "#8800",
+    label: "CurrentTransactionType after a test method that did not run to its end",
+    pattern: /CurrentTransactionType after a test method/,
+  },
+  {
+    id: "xrec-table-procedure",
+    issue: "#9498",
+    label: "xRec in a table procedure called through other code",
+    pattern: /xRec in a table procedure called through other code/,
+  },
+  {
+    id: "geturl-web-service",
+    issue: "#7586",
+    label: "GetUrl of an object published as a web service",
+    pattern: /GetUrl\(ClientType::OData\w*\) of an object published as a web service/,
+  },
+  {
+    id: "option-member-list",
+    issue: "#9458",
+    label: "an Option variable handed to an Option parameter with another member list",
+    pattern: /an Option variable handed (directly )?to .*Option parameter with another member list/,
+  },
+  {
+    id: "relation-platform-field",
+    issue: "#8592",
+    label: "a platform table's field value for a TableRelation without a field",
+    pattern: /is not known for field .+ of table .+, a TableRelation without a field/,
+  },
+  {
+    id: "request-page",
+    issue: "#8976",
+    label: "a processing-only report's request page; an Update report run without it",
+    pattern: /the request page of report|TransactionType = Update report/,
+  },
+  {
+    id: "guarded-run-consistent",
+    issue: "#9469",
+    label: "a guarded Codeunit.Run ending a transaction under Consistent(false)",
+    pattern: /A guarded Codeunit\.Run ends a transaction while Consistent\(false\)/,
+  },
+  {
+    id: "worksheet-caption",
+    issue: "#9508",
+    label: "a Worksheet with DataCaptionExpression opened by AL code",
+    pattern: /a Worksheet with DataCaptionExpression/,
+  },
+  {
+    id: "timezone-policy",
+    issue: "#9480",
+    label: "TimeZoneInfo zone data or an undefined date handed to it",
+    pattern: /TimeZoneInfo\.\w+: (refused by policy|an undefined Date)/,
+  },
+  {
+    id: "dotnet-exception-text",
+    issue: "#7924",
+    label: "a .NET exception whose AL text is not pinned",
+    pattern: /raised the \.NET exception/,
+  },
+  {
+    id: "dotnet-null-instance",
+    issue: "#8036",
+    label: "a DotNet instance member on a variable that holds no object",
+    pattern: /is an instance member and the variable holds no object|on an unassigned DotNet value/,
+  },
+  {
+    id: "dotnet-registry-member",
+    issue: "#7997",
+    label: "a registry-type DotNet member the runtime does not implement; GZipStream.CopyTo",
+    pattern: /a member the runtime does not implement for a registry type|GZipStream\.CopyTo/,
+  },
+  {
+    id: "dotnet-platform-type",
+    issue: "#7934",
+    label: "a platform DotNet type (business chart, client capabilities); Blob to BigInteger",
+    pattern:
+      /BusinessChart\.BusinessChartData member|Capabilities\.Location\.Status|conversion of Blob to BigInteger/,
+  },
+  {
+    id: "autoformat-type",
+    issue: "#8011",
+    label: "an AutoFormatType resolved through AutoFormatTranslate",
+    pattern: /AutoFormatType (N|\d+) (\(a type outside|while codeunit)/,
+  },
+  {
+    id: "fieldref-blob-setview",
+    issue: "#8213",
+    label: "a FieldRef value into a Blob; SetView with no value after ..",
+    pattern: /into a Blob \(not pinned\)|SetView: value expected after/,
+  },
+  {
+    id: "report-layout-file",
+    issue: "#5712",
+    label: "a built-in report layout file the app does not hold",
+    pattern: /Media\.ExportStream of the Layout of a Report Layout List row/,
+  },
+  {
+    id: "tenant-permission-delete",
+    issue: "#7854",
+    label: "the delete of a Tenant Permission Set with App ID zero",
+    pattern: /the delete of a Tenant Permission Set with App ID zero/,
+  },
+  {
+    id: "permissions-property-read",
+    issue: "#8093",
+    label: "a denied read by code whose Permissions property grants it",
+    pattern: /a denied read .* by code whose Permissions property grants it/,
+  },
+  {
+    id: "descending-deleteall",
+    issue: "#9439",
+    label: "DeleteAll with row code over a record sorted descending",
+    pattern: /over two or more rows of a record sorted descending/,
+  },
+  {
+    id: "setvalue-text-relation",
+    issue: "#9336",
+    label: "SetValue of a text into a Text page variable with a TableRelation",
+    pattern: /SetValue of a text into a Text page variable with a TableRelation/,
+  },
   {
     id: "testpage",
     issue: "LethAL",
