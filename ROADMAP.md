@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 1210 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**72 of 1211 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1255,6 +1255,7 @@ that ordering is the priority.
 - **R1242** · BC.History Base Application 28.6 x Tests-Fixed Asset on al-runner e5176a9fd (#8191 fixed): 255 of 460 tests pass (PR-75: 53), 5 fail, 200 refused by 20 causes; three causes hold 156 of the 200 (#8011, #8066, #9336 filed), so the scored run waits for those three fixes · [R1242.md](docs/roadmap/R1242.md) · open — baseline measured 2026-11-28 (coord PR-498); trigger: #8011 step 2, #8066 and #9336 fixed upstream…
 - **R1245** · The coverage-differential gate cannot run: probe-r58-differential.ts --mode fenced throws NoBaselineWorkDateError (R1131) on the first mutant call, on master too; the gate table selects this leg for every orchestrator.ts change · [R1245.md](docs/roadmap/R1245.md) · done (79728328c) — the probe's recording wrapper forwarded a hand-picked member list that never got PR-196's…
 - **R1247** · Every instrumented publish logs 'COMMIT called and skipped in extension upgrade context': the emitted Mutation Upgrade codeunit calls LethAL Control's RegisterArtifact, which commits · [R1247.md](docs/roadmap/R1247.md) · open — routine and harmless as measured (a warning only); trigger: a BC that makes a Commit in upgrade…
+- **R1248** · BC.History on al-runner edge e5176a9fd (103 projects): 277 tests lost, every one a refusal under an issue already filed (none a wrong result); 125 gained (100 by LethAL's isolation auto, 16 by two causes now gone upstream); 92 new causes in the refusal ledger · [R1248.md](docs/roadmap/R1248.md) · closed 2026-11-28 — measured; every new cause is in the refusal ledger with its issue, or unexamined under…
 
 ---
 

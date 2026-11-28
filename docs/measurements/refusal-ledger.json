@@ -1585,8 +1585,8 @@
   },
   {
     "key": "NotRun: out-of-scope: relation target <x> is not declared in the workspace",
-    "state": "open",
-    "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "state": "fixed",
+    "note": "PR-499: gone on edge e5176a9fd: 9 tests it refused in two BC.History projects pass, and no re-swept store holds it (103 projects). PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
     "issue": "#7819",
     "repro": "scripts/upstream-repros/u7819-refusals"
   },
@@ -1682,8 +1682,8 @@
   },
   {
     "key": "NotRun: out-of-scope: store error Field: field <x> of table <x>: the related table <x> is not compiled",
-    "state": "open",
-    "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "state": "fixed",
+    "note": "PR-499: gone on edge e5176a9fd: 7 tests it refused in two BC.History projects pass, and no re-swept store holds it (103 projects). PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
     "issue": "#8001, #8013"
   },
   {
@@ -2839,5 +2839,557 @@
     "key": "NotRun: out-of-scope: report column Maintenance_Ledger_Entry__Amount: column Maintenance_Ledger_Entry__Amount reads a field of the data item Maintenance Ledger Entry nested below its own (when BC reads it is not implemen",
     "state": "unexamined",
     "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (1: (test 1)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.GetTable of a record: a record handed by value whose view the probe did not measure (a filter in filter group N or in a group other than -N, N, N and N, the caller standing in a group othe",
+    "state": "open",
+    "issue": "#8596",
+    "note": "PR-499: 83 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'Record.SetFilter(): a record handed by value whose view the probe did not measure'"
+  },
+  {
+    "key": "NotRun: out-of-scope: Database.CurrentTransactionType after a test method of the codeunit that did not run to its end and could set it (the type it left is not known)",
+    "state": "open",
+    "issue": "#8800, #9491",
+    "note": "PR-499: 74 on the BC.History re-sweep (edge e5176a9fd); nearest: issue #8800 'CurrentTransactionType: probe the write paths that still refuse' and #9491 'CurrentTransactionType saved and set back'; exact shape not named (confirm)"
+  },
+  {
+    "key": "NotRun: out-of-scope: xRec in a table procedure called through other code on a record whose trigger or procedure runs: real BC hands it the running call's xRec in the shapes XRecTableProcThroughCodeunit.al and XRecTableP",
+    "state": "open",
+    "issue": "#9498",
+    "note": "PR-499: 66 on the BC.History re-sweep (edge e5176a9fd); issue #9498"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetUrl(ClientType::ODataVN) of an object published as a web service: the address with its service name is not built",
+    "state": "open",
+    "issue": "#7586",
+    "note": "PR-499: 41 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'GetUrl(ClientType::ODataVN; the call had N arguments)'; cause differs (web-service object), no exact issue found"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetRange or SetFilter of Integer N into a Code[N] field in a shape no cell measures (assumption setrange-other-type-convert)",
+    "state": "unexamined",
+    "issue": "#7775",
+    "note": "PR-499: 35 on the BC.History re-sweep (edge e5176a9fd); nearest #9263 is the other direction (a Code value on a BigInteger or Integer field)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an Option variable handed directly to an event publisher's <x> Option parameter with another member list, which a subscriber hears, from a place the probe does not measure (assumption var-option-hea",
+    "state": "open",
+    "issue": "#9458",
+    "note": "PR-499: 31 on the BC.History re-sweep (edge e5176a9fd); issue #9458 title 'Carried Option member lists: open shapes, probes and cleanups after the var Option fix' (closed relatives #8384, #8971)"
+  },
+  {
+    "key": "NotRun: out-of-scope: store error the value of field <x> of platform table <x> is not known for field <x> of table <x>, a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.",
+    "state": "open",
+    "issue": "#8592",
+    "note": "PR-499: 22 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the value of field <x> of platform table <x> is not known for field <x> of table <x>, a TableRelation without...'"
+  },
+  {
+    "key": "NotRun: out-of-scope: Report <x>: report property maximumdatasetsize is not supported yet",
+    "state": "unexamined",
+    "issue": "#7775",
+    "note": "PR-499: 20 on the BC.History re-sweep (edge e5176a9fd); nearest #8080 is the same catch-all for other report properties (InherentPermissions, InherentEntitlements)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the request page of report <x> (only a static Report.Run or RunModal in a test method of a processing-only report with one empty data item and an empty request page, without a handler or Report.Run",
+    "state": "open",
+    "issue": "#8084, #8976",
+    "note": "PR-499: 19 on the BC.History re-sweep (edge e5176a9fd); nearest: ledger key '[ReportHandler] for report <x>, which is not a processing-only report' (#8084) and issue #8976 (processing-only report, no request page)"
+  },
+  {
+    "key": "NotRun: out-of-scope: install routine codeunit <x>.OnInstallAppPerCompany could not run: a raw control character inside a JSON string where it was not measured (not pinned) [in codeunit N <x>.ParseDataInputsJsonl at Test",
+    "state": "unexamined",
+    "issue": "#7775",
+    "note": "PR-499: 18 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'install routine codeunit <x>.OnInstallAppPerCompany could not run: a raw control character inside a JSON string' (ledger row exists, open, no issue number)"
+  },
+  {
+    "key": "NotRun: out-of-scope: A guarded Codeunit.Run ends a transaction while Consistent(false) marks table Sequence No. Preview State (only Commit() is pinned)",
+    "state": "open",
+    "issue": "#7586, #9469",
+    "note": "PR-499: 15 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'A guarded Codeunit.Run ends a transaction while Consistent(false) marks table G/L Entry'; also issue #9469 'Guarded Codeunit.Run with Consistent(false): open mark and filter shapes'"
+  },
+  {
+    "key": "NotRun: out-of-scope: a Worksheet with DataCaptionExpression that AL code opened with a handler or a Trap, outside the measured cells: AL code handed no record; BC runs the expression at the open, main does not (the expr",
+    "state": "open",
+    "issue": "#9508",
+    "note": "PR-499: 15 on the BC.History re-sweep (edge e5176a9fd); issue #9508"
+  },
+  {
+    "key": "NotRun: out-of-scope: OnRegisterAssistedSetup raised to the login subscribers of the apps under test before the first test: CurrentClientType outside a test method in a session without a client (--no-client): what BC doe",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 14 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: TestPage.Trap in a session without a client (--no-client): BC fails it there (al-runner issue N), and its error is not measured",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 14 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteEndElement raised the .NET exception System.InvalidOperationException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 12 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Validate raised the .NET exception System.InvalidOperationException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 10 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SystemRowVersion of a row of Sustainability Jnl. Batch that the open transaction inserted before a row version sent ahead of it: BC gives the row its row version when it sends it, this runtime the I",
+    "state": "open",
+    "issue": "#8993",
+    "note": "PR-499: 10 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'SystemRowVersion of a row of Service Header that the open transaction inserted before a row version sent ahead'"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.GetUtcOffset: refused by policy: member <x> (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host); off Windows it runs only for one DateTi",
+    "state": "open",
+    "issue": "#9480, #8012",
+    "note": "PR-499: 9 on the BC.History re-sweep (edge e5176a9fd); nearest: issue #9480 'DotNet DateTime kind, TimeZoneInfo and AM/PM text: open shapes' and #8012 'TimeZoneInfo.SupportsDaylightSavingTime is true on Linux for Windows time zones that have none'; ledger TimeZoneInfo.Local is by-design but its policy text differs"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.FindSystemTimeZoneById raised the .NET exception System.TimeZoneNotFoundException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 7 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the <x> field); <x> needs test data (ADR-N decision Na)",
+    "state": "open",
+    "issue": "#7775",
+    "note": "PR-499: 6 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'FindSet on the Company table: the database may hold companies this runtime does not know'"
+  },
+  {
+    "key": "NotRun: out-of-scope: a page opened on a record: a record handed by value whose view the probe did not measure (a filter in filter group N or in a group other than -N, N, N and N, the caller standing in a group other tha",
+    "state": "open",
+    "issue": "#8596",
+    "note": "PR-499: 6 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'Record.SetFilter(): a record handed by value whose view the probe did not measure'"
+  },
+  {
+    "key": "NotRun: out-of-scope: Record.SetCurrentKey(): a record handed by value whose view the probe did not measure (a filter in filter group N or in a group other than -N, N, N and N, the caller standing in a group other than N",
+    "state": "open",
+    "issue": "#8596",
+    "note": "PR-499: 5 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'Record.SetFilter(): a record handed by value whose view the probe did not measure'"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.DateTimeOffset.Parse raised the .NET exception System.FormatException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 4 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Notification.Send without a SendNotificationHandler in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>)",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 4 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Record.SetRecFilter(): a record handed by value whose view the probe did not measure (a filter in filter group N or in a group other than -N, N, N and N, the caller standing in a group other than N",
+    "state": "open",
+    "issue": "#8596",
+    "note": "PR-499: 4 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'Record.SetFilter(): a record handed by value whose view the probe did not measure'"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataTable.Columns: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 3 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.EncryptedXml.EncryptData raised the .NET exception System.ArgumentNullException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 3 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.IsDaylightSavingTime: refused by policy: member <x> (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host)",
+    "state": "open",
+    "issue": "#9480, #8012",
+    "note": "PR-499: 3 on the BC.History re-sweep (edge e5176a9fd); nearest: issue #9480 'DotNet DateTime kind, TimeZoneInfo and AM/PM text: open shapes' and #8012 'TimeZoneInfo.SupportsDaylightSavingTime is true on Linux for Windows time zones that have none'; ledger TimeZoneInfo.Local is by-design but its policy text differs"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteProcessingInstruction: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 3 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: FieldRef.Value of BigInteger N into a Blob (not pinned)",
+    "state": "open",
+    "issue": "#8213",
+    "note": "PR-499: 3 on the BC.History re-sweep (edge e5176a9fd); nearest: ledger key 'conversion of Text <x> to Blob' (#8213, FieldRef into a Blob); no exact issue found"
+  },
+  {
+    "key": "NotRun: out-of-scope: Record.SetRange(): a record handed by value whose view the probe did not measure (a filter in filter group N or in a group other than -N, N, N and N, the caller standing in a group other than N and",
+    "state": "open",
+    "issue": "#8596",
+    "note": "PR-499: 3 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'Record.SetFilter(): a record handed by value whose view the probe did not measure'"
+  },
+  {
+    "key": "NotRun: out-of-scope: call <x>: an Option variable handed to a <x> Option parameter with another member list, from a caller the probe does not measure (not pinned)",
+    "state": "open",
+    "issue": "#9458",
+    "note": "PR-499: 3 on the BC.History re-sweep (edge e5176a9fd); issue #9458 title 'Carried Option member lists: open shapes, probes and cleanups after the var Option fix' (closed relatives #8384, #8971)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the ModalPageHandler DimensionSetEntriesPageHandler, which takes a TestPage or TestRequestPage, in a session without a client (--no-client): BC fails a TestPage open there (al-runner issue N), and w",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 3 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: AutoFormatType N (a type outside the pinned ones; BC resolves it through the AutoFormatTranslate event of UI Helper Triggers, which the runtime does not raise; only types N, N, N, N, N, N and N are",
+    "state": "open",
+    "issue": "#8011",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); issue #8011"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet <no last error>.InnerException: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
+    "state": "open",
+    "issue": "#7997",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); nearest: ledger key 'DotNet ...NavUserAccountHelper.GetAllowedCompanies: a member the runtime do[es not implement]' (#7997)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Platform.Integration.Office.FilterCollectionNode.Collection: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataTable.Clear: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.Compression.ZipArchiveEntry.Open: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.GetUtcOffset: an undefined Date or DateTime passed to .NET (what BC sends is not pinned)",
+    "state": "open",
+    "issue": "#9480",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); issue #9480"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.SupportsDaylightSavingTime: refused by policy: member <x> (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host)",
+    "state": "open",
+    "issue": "#9480, #8012",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); nearest: issue #9480 'DotNet DateTime kind, TimeZoneInfo and AM/PM text: open shapes' and #8012 'TimeZoneInfo.SupportsDaylightSavingTime is true on Linux for Windows time zones that have none'; ledger TimeZoneInfo.Local is by-design but its policy text differs"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.Schema.XmlSchemaSet.Add raised the .NET exception System.Xml.Schema.XmlSchemaException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.Schema.XmlSchemaSet.Add raised the .NET exception System.Xml.XmlException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Load: an AL library value (an untouched handle) passed to .NET",
+    "state": "open",
+    "issue": "#7997",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet new System.IO.BinaryReader: an AL library value (an untouched handle) passed to .NET'"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlNode.InnerXml: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlReader.Create: an AL library value (an untouched handle) passed to .NET",
+    "state": "open",
+    "issue": "#7997",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet new System.IO.BinaryReader: an AL library value (an untouched handle) passed to .NET'"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteStartElement raised the .NET exception System.IndexOutOfRangeException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive: new System.IO.Compression.ZipArchive has no overload taking N argument(s) of the given types (Bridge, null, Boolean, UTFNEncodingSealed)",
+    "state": "open",
+    "issue": "#8268",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet new ...XNCertificates.CertificateRequest: new ... has no overload taking N argument(s)' (#8268)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetBySystemId of Upgrade Tags while the error of an Insert into it is deferred (a duplicate key, or a value its SQL column cannot hold): whether the read raises it is not pinned (docs/probes-needed.",
+    "state": "unexamined",
+    "issue": "#7775",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); none found; nearest closed #8288 'Reads that do not send the insert queue: GetBySystemId...' is a different cause"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetLastErrorText of an error whose text is not pinned (probe wanted: the missing-object text: it ends with the emit version of the run's BC build, which is not known (the run has no BC build to read",
+    "state": "open",
+    "issue": "#8578, #7924",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); issue #8578 title 'Emit version from the artifact: XmlPort cell, failed-read cache key, flag only on a text read'; ledger key 'GetLastErrorText of an error whose text is not pinned' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetUrl(ClientType::OData) of an object published as a web service: the address with its service name is not built",
+    "state": "open",
+    "issue": "#7586",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'GetUrl(ClientType::OData; the call had N arguments)'; cause differs (web-service object), no exact issue found"
+  },
+  {
+    "key": "NotRun: out-of-scope: Media.ExportStream of the Layout of a Report Layout List row: the layout file src/Reports/StandardESGSalesInvoice.docx of layout <x> is not held by its app (the runner read no file at the path as wr",
+    "state": "open",
+    "issue": "#5712",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'Media.ExportStream of the Layout of a Report Layout List row: the layout file src/Reports/StandardESGSalesInvoice.docx'"
+  },
+  {
+    "key": "NotRun: out-of-scope: Media.ExportStream of the Layout of a Report Layout List row: the layout file src/Reports/StandardESGSalesQuote.docx of layout <x> is not held by its app (the runner read no file at the path as writ",
+    "state": "open",
+    "issue": "#5712",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'Media.ExportStream of the Layout of a Report Layout List row: the layout file src/Reports/StandardESGSalesInvoice.docx'"
+  },
+  {
+    "key": "NotRun: out-of-scope: an Insert of a valid row into Statistical Ledger Entry that sends the insert queue (its Nth row) while a duplicate-key Insert is pending: not pinned (docs/probes-needed.md)",
+    "state": "unexamined",
+    "issue": "#7775",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); none found (insert queue with a pending duplicate-key Insert)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the ModalPageHandler ApplyCustEntriesOKPageHandler, which takes a TestPage or TestRequestPage, in a session without a client (--no-client): BC fails a TestPage open there (al-runner issue N), and wh",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the ModalPageHandler EditDimensionSetEntriesPageHandler, which takes a TestPage or TestRequestPage, in a session without a client (--no-client): BC fails a TestPage open there (al-runner issue N), a",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the ModalPageHandler GeneralJournalTemplateListPageHandler, which takes a TestPage or TestRequestPage, in a session without a client (--no-client): BC fails a TestPage open there (al-runner issue N)",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the delete of a Tenant Permission Set with App ID zero that Tenant Permission or Tenant Permission Set Rel. rows name, while one of its Rel. rows is not an Include relation between tenant sets with",
+    "state": "open",
+    "issue": "#7854",
+    "note": "PR-499: 2 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the delete of a Tenant Permission Set with App ID zero that Tenant Permission or Tenant Permission Set Rel. rows name'"
+  },
+  {
+    "key": "NotRun: out-of-scope: AutoFormatType N while codeunit <x>.DoResolveAutoFormat subscribes to AutoFormatTranslate of UI Helper Triggers and can set its result (BC resolves the format through that event, which the runtime d",
+    "state": "open",
+    "issue": "#8011",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); issue #8011"
+  },
+  {
+    "key": "NotRun: out-of-scope: DeleteAll with delete events, database triggers or OnDelete over two or more rows of a record sorted descending: the order of the row code is not pinned",
+    "state": "open",
+    "issue": "#9439",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); issue #9439 title 'Descending DeleteAll: row code that reads a table is refused; probe the read cells' (closed relative #9401)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Client.BusinessChart.BusinessChartData member on something that is not a Microsoft.Dynamics.Nav.Client.BusinessChart.BusinessChartData the runtime made",
+    "state": "open",
+    "issue": "#7934",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet Microsoft.Dynamics.Nav.AzureKeyVault.AzureKeyVaultClientHelper member on something the runtime did not make'"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Client.Capabilities.Location.Status: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "open",
+    "issue": "#7934",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet Microsoft.Dynamics.Nav.Client.Capabilities.Location.Coordinate: refused by policy'"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Platform.Integration.Office.FilterBinaryNode.Left: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Platform.Integration.Office.FilterCollectionNode.ToString raised the .NET exception System.NullReferenceException: <message>; the text AL would see is not pinned (ADR-N sec",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Platform.Integration.Office.FilterLeftOperand.Field: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataTable.Locale: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.Compression.ZipArchive.CreateEntry raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.Compression.ZipArchiveEntry.Delete raised the .NET exception System.NotSupportedException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.Stream.CopyTo: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSA.Create raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RfcNDeriveBytes.GetBytes raised the .NET exception System.ArgumentOutOfRangeException: <message>",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Text.Encoding.CodePage: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Text.StringBuilder.ToString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Uri raised the .NET exception System.UriFormatException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.Schema.XmlSchemaSet.Add raised the .NET exception System.ArgumentNullException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Load: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteProcessingInstruction raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteStartDocument: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlNode.InnerXml: ... instance member and the variable holds no object' (#8036 §1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet member <x> on an unassigned DotNet value (the error BC raises is not pinned)",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); issue #8036"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive: an AL library value (an untouched handle) passed to .NET",
+    "state": "open",
+    "issue": "#7997",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet new System.IO.BinaryReader: an AL library value (an untouched handle) passed to .NET'"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Xml.XmlTextWriter raised the .NET exception System.NullReferenceException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception' (#7924)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GZipStream.CopyTo on a stream that compresses (not pinned)",
+    "state": "open",
+    "issue": "#7997",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); issue #7997 title mentions GZip ('Refusals from Microsoft System Application module tests (R-961): ... GZi...'); nearest only"
+  },
+  {
+    "key": "NotRun: out-of-scope: Modify(true) of a stale committed-read Usage Data Import buffer from a Find (not pinned)",
+    "state": "unexamined",
+    "issue": "#7775",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); none found"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetView: value expected after ..",
+    "state": "open",
+    "issue": "#8213",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'SetFilter: value expected after ..'"
+  },
+  {
+    "key": "NotRun: out-of-scope: TestPage.OpenEdit in a session without a client (--no-client): BC fails it there (al-runner issue N), and its error is not measured",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: TransactionType = Update report <x> run without its request page at a moment no corpus cell measures (they run it at the test method's start, or after a Commit with at most one CurrentTransactionTyp",
+    "state": "open",
+    "issue": "#8976",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); issue #8976"
+  },
+  {
+    "key": "NotRun: out-of-scope: a denied read (read permission on object type N id N) by code whose Permissions property grants it: YNInherentAttrIndirect.al measures <x> for Get and FindFirst in one shape only",
+    "state": "open",
+    "issue": "#8093",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); nearest: issue #8093 'A table extension trigger ... which Permissions property applies is not pinned'; exact shape not found"
+  },
+  {
+    "key": "NotRun: out-of-scope: an error in OnClosePage at a close by an action or a handler while the page closes (not pinned)",
+    "state": "unexamined",
+    "issue": "#7775",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); none found; nearest #7480 (Confirm in OnClosePage) is a different cause"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of Blob to BigInteger",
+    "state": "open",
+    "issue": "#7934",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'conversion of Blob to Integer'"
+  },
+  {
+    "key": "NotRun: out-of-scope: the ModalPageHandler ApplyCustomerEntriesPageHandler, which takes a TestPage or TestRequestPage, in a session without a client (--no-client): BC fails a TestPage open there (al-runner issue N), and",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the PageHandler BankDepositHandler, which takes a TestPage or TestRequestPage, in a session without a client (--no-client): BC fails a TestPage open there (al-runner issue N), and what it does with",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); same family as ledger key 'the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage ... in a session without a client (--no-client)'; issue #8028 (--no-client)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a Worksheet with DataCaptionExpression that AL code opened with a handler or a Trap, outside the measured cells: the handed record's fields hold values (the probe handed a fresh record); the express",
+    "state": "open",
+    "issue": "#9508",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); issue #9508 (its second open item: a record whose fields hold values)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a stale Audit File Export Line buffer from its own write, after a rollback of a transaction that held a lock (not pinned)",
+    "state": "unexamined",
+    "issue": "#7775",
+    "note": "PR-499: 1 on the BC.History re-sweep (edge e5176a9fd); none found (a stale buffer after a rollback, as the Usage Data Import key)"
   }
 ]
