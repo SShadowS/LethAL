@@ -1,4 +1,4 @@
-import { test as bunTest, expect } from "bun:test";
+import { test as bunTest, describe, expect } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -38,9 +38,22 @@ function setup(): { root: string; bin: string; wt: string; src: string; calls: s
       { mode: 0o755 },
     );
   // clone <url> <dest>: make <dest>/.git so the second run takes the pull branch
+  // PR-484: `ls-files [-z] [--error-unmatch] <paths>` answers from .git/tracked (one path per line), sorted like git.
   fake(
     "git",
-    'if [ "$1" = clone ]; then mkdir -p "$4/.git"; fi\nif [ "$1" = rev-parse ]; then echo "$FAKE_TOP"; fi',
+    [
+      'if [ "$1" = clone ]; then mkdir -p "$4/.git"; fi',
+      'if [ "$1" = rev-parse ]; then echo "$FAKE_TOP"; fi',
+      'if [ "$1" = ls-files ]; then',
+      "  shift; z=; um=",
+      '  [ "$1" = -z ] && { z=1; shift; }',
+      '  [ "$1" = --error-unmatch ] && { um=1; shift; }',
+      "  for f in $(printf '%s\\n' \"$@\" | sort); do",
+      '    if grep -qx "$f" .git/tracked 2>/dev/null; then if [ -n "$z" ]; then printf "%s\\0" "$f"; else echo "$f"; fi',
+      '    elif [ -n "$um" ]; then exit 1; fi',
+      "  done",
+      "fi",
+    ].join("\n"),
   );
   // alc /project:<p> /packagecachepath:<p> /out:<file>: writes the out file, as the real one does
   fake("alc", 'for a in "$@"; do case "$a" in /out:*) echo built > "${a#/out:}" ;; esac; done');
@@ -185,6 +198,190 @@ test("a sibling with no build script does not fail setup (build runs with --if-p
   } finally {
     rmSync(t.root, { recursive: true, force: true });
   }
+});
+
+// PR-484 (spec r2): a sibling's dependencies are reinstalled when its TRACKED dependency files (package.json,
+// package-lock.json, bun.lock) differ from the stamp in node_modules: `npm ci` for a tracked package-lock.json, else
+// `npm install`. Every failure fails setup by name and writes no stamp.
+describe("PR-484: reinstall on a dependency change", () => {
+  const LOCK = "business-central-mcp"; // tracks package-lock.json
+  const BUN = "pi-mcp"; // tracks bun.lock; its package-lock.json is an untracked npm leftover
+  const STAMP = ".kraken-deps.sha256";
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  /** A fake npm: logs the call; `ci` recreates node_modules (failing when FAIL_CI=1); `install` creates it. */
+  const npmFake = (t: ReturnType<typeof setup>) =>
+    writeFileSync(
+      join(t.bin, "npm"),
+      `#!/bin/bash\necho "npm $* @$(basename "$PWD")" >> "${t.calls.replaceAll("\\", "/")}"\nif [ "$1" = ci ]; then [ "$FAIL_CI" = 1 ] && exit 1; rm -rf node_modules; mkdir node_modules; fi\nif [ "$1" = install ]; then mkdir -p node_modules; fi\n`,
+      { mode: 0o755 },
+    );
+  /** One sibling: its files, which of them git tracks, node_modules (unless `noModules`) and an optional stamp. */
+  const repo = (
+    t: ReturnType<typeof setup>,
+    name: string,
+    o: { files?: Record<string, string>; tracked?: string[]; stamp?: string; noModules?: true },
+  ) => {
+    const dir = join(t.src, name);
+    mkdirSync(join(dir, ".git"), { recursive: true });
+    for (const [f, text] of Object.entries(o.files ?? {})) writeFileSync(join(dir, f), text);
+    writeFileSync(join(dir, ".git", "tracked"), `${(o.tracked ?? []).join("\n")}\n`);
+    if (o.noModules === undefined) mkdirSync(join(dir, "node_modules"), { recursive: true });
+    if (o.stamp !== undefined) writeFileSync(join(dir, "node_modules", STAMP), `${o.stamp}\n`);
+  };
+  /** The stamp setup computes: the tracked files' contents, concatenated in git's (sorted) order. */
+  const depsSha = (files: Record<string, string>, tracked: string[]) =>
+    sha(
+      [...tracked]
+        .sort()
+        .map((f) => files[f] ?? "")
+        .join(""),
+    );
+  const calls = (t: ReturnType<typeof setup>, verb: string) =>
+    (existsSync(t.calls) ? readFileSync(t.calls, "utf8") : "")
+      .split("\n")
+      .filter((l) => l.startsWith(`npm ${verb} `));
+  const stampOf = (t: ReturnType<typeof setup>, name: string) =>
+    readFileSync(join(t.src, name, "node_modules", STAMP), "utf8").trim();
+  const runFail = (t: ReturnType<typeof setup>, env: Record<string, string>) =>
+    Bun.spawnSync(["bash", script], {
+      cwd: t.wt,
+      env: {
+        ...process.env,
+        PATH: t.bin + delimiter + process.env.PATH,
+        KRAKEN_SETUP_SRC: t.src,
+        ...env,
+      },
+    });
+  const LOCKED = { "package.json": "pkg-v1", "package-lock.json": "lock-v1" };
+  const LOCKED_TRACKED = ["package.json", "package-lock.json"];
+  /** bc-dev-mcp and pi-mcp with no tracked dependency file and node_modules present: they install nothing. */
+  const quiet = (t: ReturnType<typeof setup>, but: string) => {
+    for (const r of ["bc-dev-mcp", LOCK, BUN]) if (r !== but) repo(t, r, {});
+  };
+
+  test("(1) tracked lockfile and a MATCHING stamp: nothing installed", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      quiet(t, LOCK);
+      repo(t, LOCK, {
+        files: LOCKED,
+        tracked: LOCKED_TRACKED,
+        stamp: depsSha(LOCKED, LOCKED_TRACKED),
+      });
+      run(t);
+      expect(calls(t, "ci")).toEqual([]);
+      expect(calls(t, "install")).toEqual([]);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(2) the tracked lockfile changed: exactly one npm ci, in that repo, and the stamp is the new sha", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      quiet(t, LOCK);
+      const now = { ...LOCKED, "package-lock.json": "lock-v2" };
+      repo(t, LOCK, {
+        files: now,
+        tracked: LOCKED_TRACKED,
+        stamp: depsSha(LOCKED, LOCKED_TRACKED),
+      });
+      run(t);
+      expect(calls(t, "ci")).toEqual([`npm ci --loglevel=error @${LOCK}`]);
+      expect(calls(t, "install")).toEqual([]);
+      expect(stampOf(t, LOCK)).toBe(depsSha(now, LOCKED_TRACKED));
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(3) node_modules with no stamp: npm ci once; a second run installs nothing", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      quiet(t, LOCK);
+      repo(t, LOCK, { files: LOCKED, tracked: LOCKED_TRACKED });
+      run(t);
+      expect(calls(t, "ci")).toHaveLength(1);
+      run(t);
+      expect(calls(t, "ci")).toHaveLength(1);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(4) a failing npm ci fails setup by name, writes no stamp, and stops before the build and the next repo", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      quiet(t, LOCK);
+      const now = { ...LOCKED, "package-lock.json": "lock-v2" };
+      repo(t, LOCK, {
+        files: now,
+        tracked: LOCKED_TRACKED,
+        stamp: depsSha(LOCKED, LOCKED_TRACKED),
+      });
+      const r = runFail(t, { FAIL_CI: "1" });
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr.toString()).toContain("kraken-setup: npm ci failed in");
+      expect(stampOf(t, LOCK)).toBe(depsSha(LOCKED, LOCKED_TRACKED));
+      const log = readFileSync(t.calls, "utf8");
+      expect(log).not.toContain(`build @${LOCK}`);
+      expect(log).not.toContain(`@${BUN}`);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(5) no tracked dependency file: npm install only when node_modules is missing", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      repo(t, "bc-dev-mcp", { noModules: true });
+      repo(t, LOCK, { noModules: true });
+      repo(t, BUN, {});
+      run(t);
+      expect(calls(t, "install").sort()).toEqual(
+        [
+          `npm install --loglevel=error @${LOCK}`,
+          "npm install --loglevel=error @bc-dev-mcp",
+        ].sort(),
+      );
+      expect(calls(t, "ci")).toEqual([]);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(6) bun.lock tracked, package-lock.json UNTRACKED, package.json bumped: npm install (not ci), new stamp", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      quiet(t, BUN);
+      const was = { "package.json": "pkg-v1", "bun.lock": "bun-v1", "package-lock.json": "stale" };
+      const now = { ...was, "package.json": "pkg-v2", "bun.lock": "bun-v2" };
+      const tracked = ["package.json", "bun.lock"];
+      repo(t, BUN, { files: now, tracked, stamp: depsSha(was, tracked) });
+      run(t);
+      expect(calls(t, "ci")).toEqual([]);
+      expect(calls(t, "install")).toEqual([`npm install --loglevel=error @${BUN}`]);
+      expect(stampOf(t, BUN)).toBe(depsSha(now, tracked));
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+  test("(7) a failing hash fails setup by name and installs nothing (never an empty-equals-empty match)", () => {
+    const t = setup();
+    try {
+      npmFake(t);
+      writeFileSync(join(t.bin, "sha256sum"), "#!/bin/bash\nexit 1\n", { mode: 0o755 });
+      quiet(t, LOCK);
+      repo(t, LOCK, { files: LOCKED, tracked: LOCKED_TRACKED });
+      const r = runFail(t, {});
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr.toString()).toContain("kraken-setup: hashing the dependency files failed in");
+      expect(calls(t, "ci")).toEqual([]);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
 });
 
 test("siblings default to /work/src, on the work volume", () => {

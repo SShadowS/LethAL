@@ -73,7 +73,7 @@ import {
   printObserved,
   settleThrown,
 } from "./gate-warnings";
-import { assertKillsReproduced } from "./kill-reproduction";
+import { assertKillsReproduced, latestRunId } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import { expectedTestAppVersion } from "./test-app-version";
 
@@ -277,7 +277,7 @@ async function main(): Promise<void> {
       throw e;
     });
     // R582: every kill of the full run was re-run under the mutant.
-    assertKillsReproduced("testapp", report, store);
+    assertKillsReproduced("testapp", report, store, latestRunId(store)); // a scratch store (R1241)
     checkGateWarnings("testapp", "run", warnings);
     assert.equal(report.quarantined, undefined, "step 1: the full run must not quarantine");
     const committed = (await readGateBaseline(BASELINE_PATH)).entries;

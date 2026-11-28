@@ -70,7 +70,7 @@ export interface Args {
 }
 
 const USAGE =
-  "usage: bun scripts/bc-continia-publish.ts --server bc1|bc2|bc3|bc4 --lane <lane> --token-dir <dir> --dir <packages dir> [--predict] [--allow-upgrade] [--held-lease <token>] [--ids <appId>...] -- <app file name>...";
+  "usage: bun scripts/bc-continia-publish.ts --server bc1|bc2|bc3|bc4|bc5 --lane <lane> --token-dir <dir> --dir <packages dir> [--predict] [--allow-upgrade] [--held-lease <token>] [--ids <appId>...] -- <app file name>...";
 
 const GUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 

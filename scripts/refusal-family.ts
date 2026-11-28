@@ -132,6 +132,12 @@ const BC4_LINUX = {
   server: "bc4",
   build: "BC 29.0.54011.57673 W1, en-US session",
 } as const;
+/** PR-488: bc1's BC-check runs with culture cells (numbers-text; errors-temp ran on bc1 too but has none). */
+const BC1_LINUX = {
+  os: "linux",
+  server: "bc1",
+  build: "BC 28.4.53241.56590 W1, en-US session",
+} as const;
 
 const untouched = (type: string, method: string, call: string, vars: string[] = []): Cell => ({
   type,
@@ -6594,6 +6600,1990 @@ table 51001 "ER Row B"
   ],
 };
 
+/**
+ * PR-487: error handling, transactions and temporary records, for a per-cell BC differential (a family no earlier one covered).
+ * Each cell makes its calls, then reports through `Error('V:[...]')`, or fails with the runtime's own error (the answer).
+ * Cells that write a real table use their OWN key range (`etKey`), never DeleteAll: a DeleteAll is a write, and a write
+ * before `Codeunit.Run`'s return value is used changes what BC does. So counts hold whether or not BC rolls back between
+ * tests. Booleans are read through Format(x, 0, 9). Two cells Commit (asserterror after Commit, Codeunit.Run after Commit),
+ * as Y2_XML's cells did on bc2. Their committed rows stay, so on BC those two cells answer only on a fresh install: run the
+ * app again only after uninstalling it WITH its data (they would answer "already exists"). Cell i is codeunit BASE_ID + 1 + i;
+ * tables 51000-51002; the support codeunits follow the last cell (`extraIds`: the helper, the failing Run target, the passing
+ * Run target). What the cells do NOT reach (both runtimes stop earlier) is listed in R1236.
+ */
+let etNext = 0;
+/** A fresh key range of 10 for one cell. */
+const etKey = (): number => {
+  etNext += 1;
+  return 1000 + etNext * 10;
+};
+const ET_VARS = [
+  'H: Codeunit "ET Helper";',
+  'Row: Record "ET Row";',
+  'Row2: Record "ET Row";',
+  "R: Boolean;",
+];
+const et = (
+  type: string,
+  method: string,
+  setup: string[],
+  call: string,
+  vars: string[] = [],
+): Cell => ({
+  type: `ET ${type}`,
+  method,
+  state: "et",
+  vars: [...ET_VARS, ...vars],
+  setup,
+  call,
+});
+/** Row2 filtered to a cell's key range, for counting. */
+const etRange = (k: number): string => `Row2.SetRange("Key", ${k}, ${k + 9});`;
+const TMP_VARS = ['Tmp: Record "ET Row" temporary;', 'Tmp2: Record "ET Row" temporary;'];
+const tmpAdd = (rec: string, key: number): string =>
+  `${rec}.Init(); ${rec}."Key" := ${key}; ${rec}.Insert();`;
+const ET_CELLS: readonly Cell[] = (() => {
+  const cells: Cell[] = [];
+  const add = (c: Cell): void => {
+    cells.push(c);
+  };
+  // --- TryFunction ---
+  add(
+    et(
+      "Try",
+      "ReturnError",
+      ["ClearLastError();", "R := H.TryError();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  add(
+    et(
+      "Try",
+      "ReturnOk",
+      ["ClearLastError();", "R := H.TryOk();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  add(et("Try", "UnusedError", [], "H.TryError(); Error('V:[reached]');"));
+  add(et("Try", "UnusedOk", [], "H.TryOk(); Error('V:[reached]');"));
+  {
+    const k = etKey();
+    add(
+      et(
+        "Try",
+        "InsertThenError",
+        [`R := H.TryInsertThenError(${k});`, etRange(k)],
+        "Error('V:[%1|%2|%3]', Format(R, 0, 9), Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Try",
+        "InsertOk",
+        [`R := H.TryInsertOk(${k});`, etRange(k)],
+        "Error('V:[%1|%2]', Format(R, 0, 9), Row2.Count());",
+      ),
+    );
+  }
+  add(et("Try", "LastErrorCode", ["R := H.TryError();"], "Error('V:[%1]', GetLastErrorCode());"));
+  add(
+    et(
+      "Try",
+      "CallStack",
+      ["R := H.TryError();"],
+      "Error('V:[%1]', Format(StrLen(GetLastErrorCallStack()) > 0, 0, 9));",
+    ),
+  );
+  add(
+    et(
+      "Try",
+      "ClearLastError",
+      ["R := H.TryError();", "ClearLastError();"],
+      "Error('V:[%1|%2]', GetLastErrorText(), GetLastErrorCode());",
+    ),
+  );
+  add(
+    et(
+      "Try",
+      "ErrorInfo",
+      ["R := H.TryErrorInfo();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  add(
+    et("Try", "Substituted", ["R := H.TryLabelError();"], "Error('V:[%1]', GetLastErrorText());"),
+  );
+  add(
+    et(
+      "Try",
+      "OkAfterError",
+      ["R := H.TryError();", "R := H.TryOk();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  add(
+    et(
+      "Try",
+      "TempThenError",
+      ["R := H.TryInsertTempThenError(Tmp);"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), Tmp.Count());",
+      TMP_VARS,
+    ),
+  );
+  // --- Codeunit.Run ---
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailReturn",
+        [
+          "ClearLastError();",
+          "Row.Init();",
+          `Row."Key" := ${k};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2|%3]', Format(R, 0, 9), Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "OkReturn",
+        [
+          "Row.Init();",
+          `Row."Key" := ${k};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Ok", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2]', Format(R, 0, 9), Row2.Count());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailUnused",
+        ["Row.Init();", `Row."Key" := ${k};`],
+        "Codeunit.Run(Codeunit::\"ET Run Fail\", Row); Error('V:[reached]');",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "OkAfterWrite",
+        [
+          `H.InsertRow(${k});`,
+          "Row.Init();",
+          `Row."Key" := ${k + 1};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Ok", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2]', Format(R, 0, 9), Row2.Count());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailAfterWrite",
+        [
+          `H.InsertRow(${k});`,
+          "Row.Init();",
+          `Row."Key" := ${k + 1};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2|%3]', Format(R, 0, 9), Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "OkAfterWriteUnused",
+        [
+          `H.InsertRow(${k});`,
+          "Row.Init();",
+          `Row."Key" := ${k + 1};`,
+          'Codeunit.Run(Codeunit::"ET Run Ok", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1]', Row2.Count());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailLastErrorCode",
+        ["Row.Init();", `Row."Key" := ${k};`, 'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);'],
+        "Error('V:[%1]', GetLastErrorCode());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailCallStack",
+        ["Row.Init();", `Row."Key" := ${k};`, 'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);'],
+        "Error('V:[%1]', Format(StrLen(GetLastErrorCallStack()) > 0, 0, 9));",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Run",
+        "FailAfterCommit",
+        [
+          `H.InsertRow(${k});`,
+          "Commit();",
+          "Row.Init();",
+          `Row."Key" := ${k + 1};`,
+          'R := Codeunit.Run(Codeunit::"ET Run Fail", Row);',
+          etRange(k),
+        ],
+        "Error('V:[%1|%2]', Format(R, 0, 9), Row2.Count());",
+      ),
+    );
+  }
+  // --- asserterror ---
+  add(et("Assert", "NoError", [], "asserterror Row.SetRange(\"Key\", 1); Error('V:[reached]');"));
+  add(
+    et(
+      "Assert",
+      "Text",
+      ["asserterror Error('ET asserted');"],
+      "Error('V:[%1]', GetLastErrorText());",
+    ),
+  );
+  add(
+    et(
+      "Assert",
+      "Code",
+      ["asserterror Error('ET asserted');"],
+      "Error('V:[%1]', GetLastErrorCode());",
+    ),
+  );
+  {
+    const k = etKey();
+    add(
+      et(
+        "Assert",
+        "RollbackInside",
+        [`asserterror H.InsertThenError(${k});`, etRange(k)],
+        "Error('V:[%1|%2]', Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Assert",
+        "RollbackBefore",
+        [`H.InsertRow(${k});`, "asserterror Error('ET asserted');", etRange(k)],
+        "Error('V:[%1]', Row2.Count());",
+      ),
+    );
+  }
+  {
+    const k = etKey();
+    add(
+      et(
+        "Assert",
+        "AfterCommit",
+        [`H.InsertRow(${k});`, "Commit();", `asserterror H.InsertThenError(${k + 1});`, etRange(k)],
+        "Error('V:[%1|%2]', Row2.Count(), GetLastErrorText());",
+      ),
+    );
+  }
+  add(
+    et(
+      "Assert",
+      "ErrorInfo",
+      ["asserterror H.RaiseInfo();"],
+      "Error('V:[%1]', GetLastErrorText());",
+    ),
+  );
+  add(
+    et(
+      "Assert",
+      "TempNotRolledBack",
+      ["asserterror H.InsertTempThenError(Tmp);"],
+      "Error('V:[%1]', Tmp.Count());",
+      TMP_VARS,
+    ),
+  );
+  // --- ErrorInfo values ---
+  const EI = ["EI: ErrorInfo;"];
+  add(
+    et(
+      "Info",
+      "Defaults",
+      [],
+      "Error('V:[%1|%2|%3|%4]', Format(EI.Collectible, 0, 9), Format(EI.ErrorType), Format(EI.Verbosity), EI.Message);",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Create",
+      ["EI := ErrorInfo.Create('ET m');"],
+      "Error('V:[%1|%2]', EI.Message, Format(EI.Collectible, 0, 9));",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "CreateCollectible",
+      ["EI := ErrorInfo.Create('ET m', true);"],
+      "Error('V:[%1|%2]', EI.Message, Format(EI.Collectible, 0, 9));",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Title",
+      ["EI.Title('ET title');", "EI.Message('ET body');", "asserterror Error(EI);"],
+      "Error('V:[%1|%2]', GetLastErrorText(), EI.Title);",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Detailed",
+      ["EI.Message('ET body');", "EI.DetailedMessage('ET detail');", "asserterror Error(EI);"],
+      "Error('V:[%1|%2]', GetLastErrorText(), EI.DetailedMessage);",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Dimensions",
+      ["Dims.Add('ET k', 'ET v');", "EI.CustomDimensions(Dims);"],
+      "Error('V:[%1|%2]', EI.CustomDimensions.Count(), EI.CustomDimensions.Get('ET k'));",
+      [...EI, "Dims: Dictionary of [Text, Text];"],
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "ClientType",
+      ["EI.Message('ET client');", "EI.ErrorType(ErrorType::Client);", "asserterror Error(EI);"],
+      "Error('V:[%1]', GetLastErrorText());",
+      EI,
+    ),
+  );
+  add(
+    et(
+      "Info",
+      "Percent",
+      ["asserterror Error(ErrorInfo.Create('ET 100% done'));"],
+      "Error('V:[%1]', GetLastErrorText());",
+    ),
+  );
+  // --- collectible errors ---
+  add(
+    et(
+      "Collect",
+      "AndClear",
+      [],
+      "Error('V:[%1|%2]', H.CollectAndClear(), Format(HasCollectedErrors(), 0, 9));",
+    ),
+  );
+  add(et("Collect", "AndKeep", [], "H.CollectAndKeep(); Error('V:[reached]');"));
+  add(et("Collect", "ThenPlain", [], "H.CollectThenPlain(); Error('V:[reached]');"));
+  add(et("Collect", "KeepGoing", [], "Error('V:[%1]', H.CollectKeepGoing());"));
+  add(
+    et(
+      "Collect",
+      "Outside",
+      ["asserterror H.RaiseCollectibleOutside();"],
+      "Error('V:[%1|%2]', GetLastErrorText(), Format(HasCollectedErrors(), 0, 9));",
+    ),
+  );
+  add(
+    et(
+      "Collect",
+      "NoneYet",
+      [],
+      "Error('V:[%1|%2]', Format(HasCollectedErrors(), 0, 9), GetCollectedErrors().Count());",
+    ),
+  );
+  add(
+    et(
+      "Collect",
+      "KeepInTry",
+      ["R := H.TryCollectKeep();"],
+      "Error('V:[%1|%2]', Format(R, 0, 9), GetLastErrorText());",
+    ),
+  );
+  // --- triggers of a temporary record ---
+  const TRIG = ['T: Record "ET Trig" temporary;'];
+  add(
+    et(
+      "Trig",
+      "TempInsertTrue",
+      ["T.Init();", 'T."Key" := 1;', "T.Val := 'BAD';", "T.Insert(true);"],
+      "Error('V:[%1]', T.Count());",
+      TRIG,
+    ),
+  );
+  add(
+    et(
+      "Trig",
+      "TempInsertFalse",
+      ["T.Init();", 'T."Key" := 1;', "T.Val := 'BAD';", "T.Insert(false);"],
+      "Error('V:[%1]', T.Count());",
+      TRIG,
+    ),
+  );
+  add(
+    et(
+      "Trig",
+      "TempModifyTrue",
+      ["T.Init();", 'T."Key" := 1;', "T.Insert(false);", "T.Val := 'BAD';", "T.Modify(true);"],
+      "Error('V:[%1]', T.Val);",
+      TRIG,
+    ),
+  );
+  add(
+    et(
+      "Trig",
+      "TempDeleteTrue",
+      ["T.Init();", 'T."Key" := 1;', "T.Val := 'BAD';", "T.Insert(false);", "T.Delete(true);"],
+      "Error('V:[%1]', T.Count());",
+      TRIG,
+    ),
+  );
+  {
+    const k = etKey();
+    add(
+      et(
+        "Trig",
+        "RealInsertTrue",
+        ["RT.Init();", `RT."Key" := ${k};`, "RT.Val := 'BAD';", "RT.Insert(true);"],
+        "Error('V:[reached]');",
+        ['RT: Record "ET Trig";'],
+      ),
+    );
+  }
+  // --- temporary records ---
+  add(
+    et(
+      "Temp",
+      "IsTemporary",
+      [],
+      "Error('V:[%1|%2]', Format(Tmp.IsTemporary, 0, 9), Format(Row.IsTemporary, 0, 9));",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "CopyShared",
+      [tmpAdd("Tmp2", 1), "Tmp.Copy(Tmp2, true);", tmpAdd("Tmp2", 2)],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "CopyNotShared",
+      [tmpAdd("Tmp2", 1), "Tmp.Copy(Tmp2);", tmpAdd("Tmp2", 2)],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "CopySharedInsertOther",
+      ["Tmp.Copy(Tmp2, true);", tmpAdd("Tmp", 1)],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "CopySharedDeleteAll",
+      [tmpAdd("Tmp2", 1), tmpAdd("Tmp2", 2), "Tmp.Copy(Tmp2, true);", "Tmp.DeleteAll();"],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "ResetClearsFilter",
+      [
+        tmpAdd("Tmp", 1),
+        tmpAdd("Tmp", 2),
+        tmpAdd("Tmp", 3),
+        'Tmp.SetRange("Key", 2);',
+        "Tmp.Reset();",
+      ],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp.GetFilters());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "FilteredDeleteAll",
+      [
+        tmpAdd("Tmp", 1),
+        tmpAdd("Tmp", 2),
+        tmpAdd("Tmp", 3),
+        'Tmp.SetRange("Key", 2, 3);',
+        "Tmp.DeleteAll();",
+        "Tmp.Reset();",
+      ],
+      "Error('V:[%1]', Tmp.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(et("Temp", "ByVar", ["H.AddByVar(Tmp, 1);"], "Error('V:[%1]', Tmp.Count());", TMP_VARS));
+  add(et("Temp", "ByValue", ["H.AddByValue(Tmp, 1);"], "Error('V:[%1]', Tmp.Count());", TMP_VARS));
+  {
+    const k = etKey();
+    add(
+      et(
+        "Temp",
+        "ByValueToRealParam",
+        [`H.AddByValueReal(Tmp, ${k});`, etRange(k)],
+        "Error('V:[%1|%2]', Tmp.Count(), Row2.Count());",
+        TMP_VARS,
+      ),
+    );
+  }
+  add(
+    et(
+      "Temp",
+      "AutoIncTemp",
+      [
+        "TA.Val := 'a';",
+        "TA.Insert();",
+        "I1 := TA.Id;",
+        "TA.Val := 'b';",
+        "TA.Id := 0;",
+        "TA.Insert();",
+      ],
+      "Error('V:[%1|%2]', I1, TA.Id);",
+      ['TA: Record "ET Auto" temporary;', "I1: Integer;"],
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "AutoIncReal",
+      [
+        "RA.Val := 'a';",
+        "RA.Insert();",
+        "I1 := RA.Id;",
+        "RA.Val := 'b';",
+        "RA.Id := 0;",
+        "RA.Insert();",
+      ],
+      "Error('V:[%1]', RA.Id - I1);",
+      ['RA: Record "ET Auto";', "I1: Integer;"],
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "DuplicateKey",
+      [tmpAdd("Tmp", 1), tmpAdd("Tmp", 1)],
+      "Error('V:[reached]');",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "ClearShared",
+      [tmpAdd("Tmp2", 1), "Tmp.Copy(Tmp2, true);", "Clear(Tmp);"],
+      "Error('V:[%1|%2]', Tmp.Count(), Tmp2.Count());",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "ClearSingle",
+      [tmpAdd("Tmp", 1), "Clear(Tmp);"],
+      "Error('V:[%1|%2]', Tmp.Count(), Format(Tmp.IsTemporary, 0, 9));",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "RealShareTemp",
+      [tmpAdd("Tmp", 1), "Row.Copy(Tmp, true);"],
+      "Error('V:[%1|%2]', Row.Count(), Format(Row.IsTemporary, 0, 9));",
+      TMP_VARS,
+    ),
+  );
+  add(
+    et(
+      "Temp",
+      "ModifyAll",
+      [
+        tmpAdd("Tmp", 1),
+        tmpAdd("Tmp", 2),
+        "Tmp.ModifyAll(Val, 'ET x');",
+        "Tmp.SetRange(Val, 'ET x');",
+      ],
+      "Error('V:[%1]', Tmp.Count());",
+      TMP_VARS,
+    ),
+  );
+  return cells;
+})();
+/** The helper and the two Codeunit.Run targets follow the last cell. */
+const ET_HELPER = 51000 + 1 + ET_CELLS.length;
+export const ERRORS_TEMP: Family = {
+  name: "errors-temp",
+  issue: "",
+  known: [],
+  testPermissions: "Disabled",
+  extraIds: 3,
+  support: `table 51000 "ET Row"
+{
+    fields
+    {
+        field(1; "Key"; Integer) { }
+        field(2; Val; Text[30]) { }
+    }
+    keys { key(PK; "Key") { Clustered = true; } }
+}
+
+table 51001 "ET Auto"
+{
+    fields
+    {
+        field(1; Id; Integer) { AutoIncrement = true; }
+        field(2; Val; Text[30]) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+table 51002 "ET Trig"
+{
+    fields
+    {
+        field(1; "Key"; Integer) { }
+        field(2; Val; Text[30]) { }
+    }
+    keys { key(PK; "Key") { Clustered = true; } }
+
+    trigger OnInsert()
+    begin
+        if Val = 'BAD' then
+            Error('ET insert refused');
+    end;
+
+    trigger OnModify()
+    begin
+        if Val = 'BAD' then
+            Error('ET modify refused');
+    end;
+
+    trigger OnDelete()
+    begin
+        if Val = 'BAD' then
+            Error('ET delete refused');
+    end;
+}
+
+codeunit ${ET_HELPER} "ET Helper"
+{
+    [TryFunction]
+    procedure TryError()
+    begin
+        Error('ET try failed');
+    end;
+
+    [TryFunction]
+    procedure TryOk()
+    begin
+    end;
+
+    [TryFunction]
+    procedure TryInsertThenError(K: Integer)
+    begin
+        InsertRow(K);
+        Error('ET try failed after insert');
+    end;
+
+    [TryFunction]
+    procedure TryInsertOk(K: Integer)
+    begin
+        InsertRow(K);
+    end;
+
+    [TryFunction]
+    procedure TryErrorInfo()
+    begin
+        RaiseInfo();
+    end;
+
+    [TryFunction]
+    procedure TryLabelError()
+    begin
+        Error('ET value %1', 7);
+    end;
+
+    [TryFunction]
+    procedure TryInsertTempThenError(var T: Record "ET Row" temporary)
+    begin
+        InsertTempThenError(T);
+    end;
+
+    [TryFunction]
+    procedure TryCollectKeep()
+    begin
+        CollectAndKeep();
+    end;
+
+    procedure InsertRow(K: Integer)
+    var
+        Row: Record "ET Row";
+    begin
+        Row.Init();
+        Row."Key" := K;
+        Row.Insert();
+    end;
+
+    procedure InsertThenError(K: Integer)
+    begin
+        InsertRow(K);
+        Error('ET after insert');
+    end;
+
+    procedure InsertTempThenError(var T: Record "ET Row" temporary)
+    begin
+        T.Init();
+        T."Key" := 1;
+        T.Insert();
+        Error('ET after temp insert');
+    end;
+
+    procedure RaiseInfo()
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Message('ET info message');
+        EI.DetailedMessage('ET info detail');
+        Error(EI);
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectAndClear(): Text
+    var
+        EI: ErrorInfo;
+        Errs: List of [ErrorInfo];
+        T: Text;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET c1');
+        Error(EI);
+        EI.Message('ET c2');
+        Error(EI);
+        Errs := GetCollectedErrors();
+        T := StrSubstNo('%1|%2|%3|%4', Format(HasCollectedErrors(), 0, 9), Errs.Count(), Errs.Get(1).Message, Errs.Get(2).Message);
+        ClearCollectedErrors();
+        exit(T + '|' + Format(HasCollectedErrors(), 0, 9));
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectAndKeep()
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET k1');
+        Error(EI);
+        EI.Message('ET k2');
+        Error(EI);
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectThenPlain()
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET p1');
+        Error(EI);
+        Error('ET plain stops');
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectKeepGoing(): Text
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET g1');
+        Error(EI);
+        exit('ET reached the end');
+    end;
+
+    procedure RaiseCollectibleOutside()
+    var
+        EI: ErrorInfo;
+    begin
+        EI.Collectible(true);
+        EI.Message('ET outside');
+        Error(EI);
+    end;
+
+    procedure AddByVar(var T: Record "ET Row" temporary; K: Integer)
+    begin
+        T.Init();
+        T."Key" := K;
+        T.Insert();
+    end;
+
+    procedure AddByValue(T: Record "ET Row" temporary; K: Integer)
+    begin
+        T.Init();
+        T."Key" := K;
+        T.Insert();
+    end;
+
+    procedure AddByValueReal(T: Record "ET Row"; K: Integer)
+    begin
+        T.Init();
+        T."Key" := K;
+        T.Insert();
+    end;
+}
+
+codeunit ${ET_HELPER + 1} "ET Run Fail"
+{
+    TableNo = "ET Row";
+
+    trigger OnRun()
+    begin
+        Rec.Insert();
+        Error('ET run failed');
+    end;
+}
+
+codeunit ${ET_HELPER + 2} "ET Run Ok"
+{
+    TableNo = "ET Row";
+
+    trigger OnRun()
+    begin
+        Rec.Insert();
+    end;
+}
+`,
+  handles: {},
+  cells: ET_CELLS,
+};
+
+/**
+ * PR-488: numbers and text builtins, for a per-cell BC differential: Round, Decimal precision, Power, div/mod, divide by
+ * zero, overflow, Duration arithmetic, IncStr, the text functions at 0 / negative / past-the-end positions, SelectStr,
+ * ConvertStr, DelChr, text-length overflow, Code trimming, StrSubstNo forms, case mapping beyond Danish (json-text holds the
+ * Danish cells), and R1236's cheap follow-ups. Each cell reports one value through `Error('V:[%1]', ...)` or fails with the
+ * runtime's own error. Every number is read through Format(x, 0, 9) (R1210: no culture formats); the case cells are
+ * `depends: "locale"`. Operands are variables, so the compiler folds nothing. Cell i is codeunit BASE_ID + 1 + i; the
+ * support codeunits follow the last cell (`extraIds`: the helper, a Codeunit.Run target that does nothing).
+ */
+const NT_VARS = [
+  'H: Codeunit "NT Helper";',
+  "A: Integer;",
+  "B: Integer;",
+  "I: Integer;",
+  "BI: BigInteger;",
+  "D: Decimal;",
+  "Dur: Duration;",
+  "T: Text;",
+  "R: Boolean;",
+];
+const nt = (
+  type: string,
+  method: string,
+  expr: string,
+  setup: string[] = [],
+  extra: { vars?: string[]; locale?: true } = {},
+): Cell => ({
+  type: `NT ${type}`,
+  method,
+  state: "nt",
+  vars: [...NT_VARS, ...(extra.vars ?? [])],
+  setup,
+  call: `Error('V:[%1]', ${expr});`,
+  ...(extra.locale === true ? { depends: "locale" as const } : {}),
+});
+/** A Decimal expression read with format 9. */
+const f9 = (e: string): string => `Format(${e}, 0, 9)`;
+const NT_CELLS: readonly Cell[] = [
+  // --- Round ---
+  ...(
+    [
+      ["half up 1.005", "1.005", "0.01", ""],
+      ["half 2.5", "2.5", "1", ""],
+      ["half -2.5", "-2.5", "1", ""],
+      ["down 2.5", "2.5", "1", "<"],
+      ["up 2.1", "2.1", "1", ">"],
+      ["up -2.1", "-2.1", "1", ">"],
+      ["to 0.05", "1.234", "0.05", ""],
+      ["near -1.25", "-1.25", "0.1", "="],
+      ["to 100", "12345", "100", ""],
+      ["tiny", "0.000000000000000001", "0.00001", ""],
+      ["precision 0", "1.5", "0", ""],
+      ["direction x", "2.5", "1", "x"],
+    ] as const
+  ).map(([m, v, p, dir]) =>
+    nt("Round", m, f9(dir === "" ? `Round(D, ${p})` : `Round(D, ${p}, '${dir}')`), [`D := ${v};`]),
+  ),
+  // --- Decimal and Power ---
+  nt("Decimal", "third times 3", f9("D / 3 * 3"), ["D := 1;"]),
+  nt("Decimal", "third", f9("D / 3"), ["D := 1;"]),
+  nt("Decimal", "0.1 + 0.2", f9("D + 0.2"), ["D := 0.1;"]),
+  nt("Decimal", "divide by zero", f9("1 / D"), ["D := 0;"]),
+  nt("Decimal", "max times 10", f9("D * 10"), ["D := 79228162514264337593543950335.0;"]),
+  nt("Power", "sqrt 2", f9("Power(D, 0.5)"), ["D := 2;"]),
+  nt("Power", "0 ^ 0", f9("Power(D, 0)"), ["D := 0;"]),
+  nt("Power", "negative cube root", f9("Power(D, 1 / 3)"), ["D := -8;"]),
+  nt("Power", "10 ^ 30", f9("Power(D, 30)"), ["D := 10;"]),
+  nt("Power", "2 ^ -1", f9("Power(D, -1)"), ["D := 2;"]),
+  nt("Abs", "negative half", f9("Abs(D)"), ["D := -0.5;"]),
+  nt("Abs", "Integer min", f9("Abs(A)"), ["A := -2147483647 - 1;"]),
+  // --- Integer arithmetic ---
+  nt("Int", "-7 div 2", f9("A div B"), ["A := -7;", "B := 2;"]),
+  nt("Int", "7 mod -2", f9("A mod B"), ["A := 7;", "B := -2;"]),
+  nt("Int", "-7 mod 2", f9("A mod B"), ["A := -7;", "B := 2;"]),
+  nt("Int", "7 / 2", f9("A / B"), ["A := 7;", "B := 2;"]),
+  nt("Int", "div by zero", f9("A div B"), ["A := 7;", "B := 0;"]),
+  nt("Int", "mod by zero", f9("A mod B"), ["A := 7;", "B := 0;"]),
+  nt("Int", "slash by zero", f9("A / B"), ["A := 7;", "B := 0;"]),
+  nt("Int", "max plus 1", f9("I"), ["I := 2147483647;", "I := I + 1;"]),
+  nt("Int", "square overflow", f9("I"), ["I := 100000;", "I := I * I;"]),
+  nt("Int", "BigInteger max plus 1", f9("BI"), ["BI := 9223372036854775807L;", "BI := BI + 1;"]),
+  nt("Int", "Decimal div", f9("D div 2"), ["D := 7.5;"]),
+  // --- Duration ---
+  nt("Duration", "1d1h1m1s1ms", f9("Dur"), ["Dur := 90061001;"]),
+  nt("Duration", "negative", f9("Dur"), ["Dur := -1500;"]),
+  nt("Duration", "times 1.5", f9("Dur * 1.5"), ["Dur := 1001;"]),
+  nt("Duration", "over 3", f9("Dur / 3"), ["Dur := 1000;"]),
+  nt("Duration", "zero", f9("Dur"), ["Dur := 0;"]),
+  // --- IncStr ---
+  ...(
+    [
+      ["empty", "''"],
+      ["no digit", "'ABC'"],
+      ["all nines", "'99'"],
+      ["leading zeros", "'A0099'"],
+      ["digit inside", "'A9B'"],
+      ["minus sign", "'A-9'"],
+      ["spaces", "'A 9 '"],
+    ] as const
+  ).map(([m, v]) => nt("IncStr", m, "'[' + IncStr(T) + ']'", [`T := ${v};`])),
+  nt("IncStr", "by 5", "'[' + IncStr(T, 5) + ']'", ["T := 'A1';"]),
+  nt("IncStr", "by -5", "'[' + IncStr(T, -5) + ']'", ["T := 'A10';"]),
+  nt("IncStr", "by -5 below zero", "'[' + IncStr(T, -5) + ']'", ["T := 'A3';"]),
+  // --- text edges (ASCII) ---
+  ...(
+    [
+      ["CopyStr", "from 0", "CopyStr(T, A)", "0"],
+      ["CopyStr", "from -1", "CopyStr(T, A)", "-1"],
+      ["CopyStr", "length 0", "CopyStr(T, 1, A)", "0"],
+      ["CopyStr", "length -1", "CopyStr(T, 1, A)", "-1"],
+      ["CopyStr", "from past end", "CopyStr(T, A, 2)", "10"],
+      ["CopyStr", "length past end", "CopyStr(T, 2, A)", "100"],
+      ["PadStr", "to 0", "PadStr(T, A)", "0"],
+      ["PadStr", "to -1", "PadStr(T, A)", "-1"],
+      ["PadStr", "empty filler", "PadStr(T, A, '')", "9"],
+      ["DelStr", "2 for 2", "DelStr(T, 2, A)", "2"],
+      ["DelStr", "at 0", "DelStr(T, A, 1)", "0"],
+      ["DelStr", "length past end", "DelStr(T, 5, A)", "100"],
+      ["DelStr", "from past end", "DelStr(T, A)", "7"],
+      ["DelStr", "length 0", "DelStr(T, 1, A)", "0"],
+      ["DelStr", "to the end", "DelStr(T, A)", "2"],
+      ["DelStr", "from -1", "DelStr(T, A)", "-1"],
+      ["InsStr", "at 1", "InsStr(T, 'X', A)", "1"],
+      ["InsStr", "at the end", "InsStr(T, 'X', A)", "7"],
+      ["InsStr", "past the end", "InsStr(T, 'X', A)", "10"],
+      ["InsStr", "at 0", "InsStr(T, 'X', A)", "0"],
+      ["InsStr", "at -1", "InsStr(T, 'X', A)", "-1"],
+    ] as const
+  ).map(([fn, m, e, a]) => nt(fn, m, `'[' + ${e} + ']'`, ["T := 'abcdef';", `A := ${a};`])),
+  nt("CopyStr", "empty text", "'[' + CopyStr(T, 1, 1) + ']'", ["T := '';"]),
+  nt("PadStr", "empty text", "'[' + PadStr(T, 3, '*') + ']'", ["T := '';"]),
+  nt("InsStr", "into empty", "'[' + InsStr(T, 'X', 1) + ']'", ["T := '';"]),
+  ...(
+    [
+      ["0 of 2", "0", "'a,b'"],
+      ["3 of 2", "3", "'a,b'"],
+      ["1 of empty", "1", "''"],
+      ["empty middle", "2", "'a,,b'"],
+      ["after trailing comma", "3", "'a,b,'"],
+      ["-1", "-1", "'a,b'"],
+    ] as const
+  ).map(([m, n, v]) =>
+    nt("SelectStr", m, `'[' + SelectStr(A, T) + ']'`, [`A := ${n};`, `T := ${v};`]),
+  ),
+  nt("ConvertStr", "unequal lengths", "'[' + ConvertStr(T, 'ab', 'b') + ']'", ["T := 'abc';"]),
+  nt("ConvertStr", "empty sets", "'[' + ConvertStr(T, '', '') + ']'", ["T := 'abc';"]),
+  nt("ConvertStr", "repeated from", "'[' + ConvertStr(T, 'aa', 'xy') + ']'", ["T := 'aaa';"]),
+  nt("DelChr", "default", "'[' + DelChr(T) + ']'", ["T := '  a b  ';"]),
+  nt("DelChr", "both ends", "'[' + DelChr(T, '<>', 'x') + ']'", ["T := 'xxaxx';"]),
+  nt("DelChr", "empty set", "'[' + DelChr(T, '=', '') + ']'", ["T := 'abc';"]),
+  nt("DelChr", "leading all", "'[' + DelChr(T, '<', 'a') + ']'", ["T := 'aaa';"]),
+  nt("DelChr", "two chars", "'[' + DelChr(T, '=', 'ba') + ']'", ["T := 'abcab';"]),
+  nt("DelChr", "where x", "'[' + DelChr(T, 'x', 'a') + ']'", ["T := 'abc';"]),
+  nt("DelChr", "where <=>", "'[' + DelChr(T, '<=>', 'a') + ']'", ["T := 'abaca';"]),
+  nt("Length", "Text[5] overflow", "T5", ["T := 'abcdefg';", "T5 := T;"], {
+    vars: ["T5: Text[5];"],
+  }),
+  nt("Length", "Code[5] overflow", "C5", ["T := 'abcdefg';", "C5 := T;"], {
+    vars: ["C5: Code[5];"],
+  }),
+  nt("Length", "Code trims", "'[' + C10 + ']'", ["T := '  ab  ';", "C10 := T;"], {
+    vars: ["C10: Code[10];"],
+  }),
+  nt(
+    "Length",
+    "CopyStr into Text[5]",
+    "T5",
+    ["T := 'abcdefg';", "T5 := CopyStr(T, 1, MaxStrLen(T5));"],
+    { vars: ["T5: Text[5];"] },
+  ),
+  nt("Length", "MaxStrLen Text", f9("MaxStrLen(T)"), []),
+  nt("Length", "surrogate StrLen", f9("StrLen(T)"), ["T := '😀a';"]),
+  nt("Length", "surrogate CopyStr 2", f9("StrLen(CopyStr(T, 2))"), ["T := '😀a';"]),
+  // --- StrSubstNo (Text arguments only) ---
+  ...(
+    [
+      ["missing arg", "'%1 %2', 'a'"],
+      ["extra arg", "'%1', 'a', 'b'"],
+      ["only %3", "'%3', 'a'"],
+      ["%%1", "'%%1', 'a'"],
+      ["percent alone", "'100% done', 'a'"],
+      ["#1### cut", "'#1###', 'abcdefg'"],
+      ["#1##### pad", "'#1#####|', 'ab'"],
+      ["%10", "'%10', 'a'"],
+      ["%1%1", "'%1%1', 'a'"],
+      ["arg holds %1", "'[%1]', 'x%1y'"],
+      ["%1 empty", "'<%1>', ''"],
+    ] as const
+  ).map(([m, args]) => nt("StrSubstNo", m, `'[' + StrSubstNo(${args}) + ']'`)),
+  // --- case mapping beyond Danish (culture data: R1210) ---
+  ...(
+    [
+      ["UpperCase", "sharp s", "ß"],
+      ["LowerCase", "dotted capital I", "İ"],
+      ["UpperCase", "dotless i", "ı"],
+      ["UpperCase", "dz digraph", "ǆ"],
+      ["UpperCase", "fi ligature", "ﬁ"],
+      ["LowerCase", "final sigma", "ΣΑΣ"],
+      ["UpperCase", "n apostrophe", "ŉ"],
+    ] as const
+  ).map(([fn, m, v]) =>
+    nt("Case", `${fn} ${m}`, `'[' + ${fn}(T) + ']' + ${f9(`StrLen(${fn}(T))`)}`, [`T := '${v}';`], {
+      locale: true,
+    }),
+  ),
+  // --- R1236's cheap follow-ups ---
+  nt("Follow", "nested asserterror text", "GetLastErrorText()", ["asserterror H.AssertNothing();"]),
+  nt(
+    "Follow",
+    "ErrorInfo enums format 9",
+    `${f9("EI.ErrorType")} + '|' + ${f9("EI.Verbosity")}`,
+    [],
+    { vars: ["EI: ErrorInfo;"] },
+  ),
+  nt("Follow", "one collected counted", "H.CollectOneCount()"),
+  nt("Follow", "Run ok clears last error", `${f9("R")} + '|' + GetLastErrorText()`, [
+    "asserterror Error('NT before');",
+    'R := Codeunit.Run(Codeunit::"NT Run Ok");',
+  ]),
+  nt("Follow", "HasCollectedErrors in Run", "H.HasCollectedInRun()"),
+];
+const NT_HELPER = 51000 + 1 + NT_CELLS.length;
+export const NUMBERS_TEXT: Family = {
+  name: "numbers-text",
+  // PR-417: the 7 case-mapping cells are culture data; measured on bc1 (Linux BC)
+  bcMeasured: { ...BC1_LINUX, task: "PR-488" },
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/9267",
+  known: [],
+  testPermissions: "Disabled",
+  extraIds: 2,
+  support: `codeunit ${NT_HELPER} "NT Helper"
+{
+    procedure AssertNothing()
+    var
+        X: Integer;
+    begin
+        asserterror X := 1;
+    end;
+
+    [ErrorBehavior(ErrorBehavior::Collect)]
+    procedure CollectOneCount(): Text
+    var
+        EI: ErrorInfo;
+        N: Text;
+    begin
+        EI.Collectible(true);
+        EI.Message('NT one');
+        Error(EI);
+        N := Format(GetCollectedErrors().Count(), 0, 9);
+        ClearCollectedErrors();
+        exit(N);
+    end;
+
+    procedure HasCollectedInRun(): Text
+    var
+        Probe: Codeunit "NT Run Ok";
+    begin
+        Probe.Run();
+        exit(Format(Probe.Seen(), 0, 9) + '|' + Format(Probe.Count(), 0, 9));
+    end;
+}
+
+codeunit ${NT_HELPER + 1} "NT Run Ok"
+{
+    var
+        SeenHas: Boolean;
+        SeenCount: Integer;
+
+    trigger OnRun()
+    begin
+        SeenHas := HasCollectedErrors();
+        SeenCount := GetCollectedErrors().Count();
+    end;
+
+    procedure Seen(): Boolean
+    begin
+        exit(SeenHas);
+    end;
+
+    procedure Count(): Integer
+    begin
+        exit(SeenCount);
+    end;
+}
+`,
+  handles: {},
+  cells: NT_CELLS,
+};
+
+/**
+ * PR-489: I/O, for a per-cell BC differential: WriteText/ReadText, Write/Read, each TextEncoding and its byte-order mark,
+ * EOS, Blob fields with and without CalcFields, CopyStream, the System Application's Temp Blob and Base64 Convert, and
+ * XMLport Export/Import over a stream. Uncreated streams are R1010's (left out). Each cell reports one text through
+ * `Error('V:[%1]', ...)` or fails with the runtime's own error; numbers through Format(x, 0, 9). Cells that write a real
+ * table use their own key (`ioKey`), never DeleteAll. A Windows or MSDos encoding of a non-ASCII letter follows the OS code
+ * page, so those cells are `depends: "locale"` (Linux BC, R1210). Cell i is codeunit BASE_ID + 1 + i; tables 51000-51001,
+ * XMLports 51000-51001; the helper codeunit follows the last cell (`extraIds`).
+ */
+let ioNext = 0;
+/** A fresh key for one cell (a Blob row id, and the stem of its item codes). */
+const ioKey = (): number => {
+  ioNext += 1;
+  return 1000 + ioNext * 10;
+};
+const IO_VARS = [
+  'H: Codeunit "IO Helper";',
+  'TB: Record "IO Blob" temporary;',
+  'TB2: Record "IO Blob" temporary;',
+  "OutS: OutStream;",
+  "OutS2: OutStream;",
+  "InS: InStream;",
+  "InS2: InStream;",
+  "T: Text;",
+  "T2: Text;",
+  "N: Integer;",
+  "R: Boolean;",
+];
+const io = (
+  type: string,
+  method: string,
+  setup: string[],
+  expr: string,
+  extra: { vars?: string[]; locale?: true } = {},
+): Cell => ({
+  type: `IO ${type}`,
+  method,
+  state: "io",
+  vars: [...IO_VARS, ...(extra.vars ?? [])],
+  setup,
+  call: `Error('V:[%1]', ${expr});`,
+  ...(extra.locale === true ? { depends: "locale" as const } : {}),
+});
+// numbers through `n9` (Format(x, 0, 9)), declared with record-filters above
+/** Write lines into TB, then open TB for reading. */
+const ioWrite = (lines: string[], enc?: string): string[] => [
+  enc === undefined
+    ? "TB.Data.CreateOutStream(OutS);"
+    : `TB.Data.CreateOutStream(OutS, TextEncoding::${enc});`,
+  ...lines,
+  enc === undefined
+    ? "TB.Data.CreateInStream(InS);"
+    : `TB.Data.CreateInStream(InS, TextEncoding::${enc});`,
+];
+const IO_ENCODINGS = ["UTF8", "UTF16", "Windows", "MSDos"] as const;
+const IO_CELLS: readonly Cell[] = (() => {
+  const cells: Cell[] = [];
+  const add = (c: Cell): void => {
+    cells.push(c);
+  };
+  // --- WriteText / ReadText / Write / Read ---
+  add(
+    io(
+      "Text",
+      "three lines",
+      ioWrite(["OutS.WriteText('ab');", "OutS.WriteText();", "OutS.WriteText('cd');"]),
+      "H.ReadAll(InS)",
+    ),
+  );
+  add(
+    io("Text", "WriteText length 3", ioWrite(["OutS.WriteText('abcdef', 3);"]), "H.ReadAll(InS)"),
+  );
+  add(
+    io(
+      "Text",
+      "ReadText length 2",
+      [...ioWrite(["OutS.WriteText('abcdef');"]), "N := InS.ReadText(T, 2);"],
+      `T + '|' + ${n9("N")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "ReadText returns",
+      [...ioWrite(["OutS.WriteText('abc');"]), "N := InS.ReadText(T);"],
+      `T + '|' + ${n9("N")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "ReadText at EOS",
+      [
+        ...ioWrite(["OutS.WriteText('a');"]),
+        "InS.ReadText(T);",
+        "T2 := 'x';",
+        "N := InS.ReadText(T2);",
+      ],
+      `'[' + T2 + ']' + ${n9("N")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "Write then ReadAll",
+      ioWrite(["OutS.Write('ab');"]),
+      `H.ReadAll(InS) + ${n9("TB.Data.Length")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "Write twice Read",
+      [...ioWrite(["OutS.Write('ab');", "OutS.Write('cd');"]), "InS.Read(T);", "InS.Read(T2);"],
+      "T + '|' + T2",
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "Integer binary",
+      [...ioWrite(["N := 258;", "OutS.Write(N);"]), "N := 0;", "InS.Read(N);"],
+      `${n9("N")} + '|' + ${n9("TB.Data.Length")}`,
+    ),
+  );
+  add(io("Text", "WriteText length", ioWrite(["OutS.WriteText('abc');"]), n9("TB.Data.Length")));
+  add(
+    io(
+      "Text",
+      "empty WriteText",
+      ioWrite(["OutS.WriteText('');"]),
+      `${n9("TB.Data.Length")} + '|' + ${n9("TB.Data.HasValue")}`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "WriteText newline only",
+      ioWrite(["OutS.WriteText();"]),
+      `${n9("TB.Data.Length")} + '|' + H.ReadAll(InS)`,
+    ),
+  );
+  add(
+    io(
+      "Text",
+      "bytes of two lines",
+      ioWrite(["OutS.WriteText('a');", "OutS.WriteText();", "OutS.WriteText('b');"]),
+      "H.Bytes(InS, 8)",
+    ),
+  );
+  // --- EOS ---
+  add(io("EOS", "new Blob", ["TB.Data.CreateInStream(InS);"], n9("InS.EOS")));
+  add(
+    io(
+      "EOS",
+      "after last line",
+      [...ioWrite(["OutS.WriteText('a');"]), "InS.ReadText(T);"],
+      n9("InS.EOS"),
+    ),
+  );
+  add(
+    io(
+      "EOS",
+      "between lines",
+      [
+        ...ioWrite(["OutS.WriteText('a');", "OutS.WriteText();", "OutS.WriteText('b');"]),
+        "InS.ReadText(T);",
+      ],
+      n9("InS.EOS"),
+    ),
+  );
+  add(io("EOS", "before reading", ioWrite(["OutS.WriteText('a');"]), n9("InS.EOS")));
+  // --- encodings: length, first bytes, read back ---
+  for (const enc of IO_ENCODINGS) {
+    for (const [name, v] of [
+      ["a", "a"],
+      ["ae letter", "æ"],
+    ] as const) {
+      const codePage = (enc === "Windows" || enc === "MSDos") && name !== "a";
+      add(
+        io(
+          "Enc",
+          `${enc} ${name}`,
+          [
+            ...ioWrite([`OutS.WriteText('${v}');`], enc),
+            `TB.Data.CreateInStream(InS2, TextEncoding::${enc});`,
+          ],
+          `${n9("TB.Data.Length")} + '|' + H.Bytes(InS, 6) + '|' + H.ReadAll(InS2)`,
+          codePage ? { locale: true } : {},
+        ),
+      );
+    }
+  }
+  add(
+    io(
+      "Enc",
+      "UTF16 read as UTF8",
+      [
+        ...ioWrite(["OutS.WriteText('a');"], "UTF16"),
+        "TB.Data.CreateInStream(InS2, TextEncoding::UTF8);",
+      ],
+      "H.Bytes(InS2, 6) + '|' + H.ReadAll(InS2)",
+    ),
+  );
+  add(
+    io(
+      "Enc",
+      "UTF8 ae read as UTF16",
+      [
+        ...ioWrite(["OutS.WriteText('æ');"], "UTF8"),
+        "TB.Data.CreateInStream(InS2, TextEncoding::UTF16);",
+      ],
+      n9("StrLen(H.ReadAll(InS2))"),
+    ),
+  );
+  add(
+    io(
+      "Enc",
+      "UTF8 ae read as Windows",
+      [
+        ...ioWrite(["OutS.WriteText('æ');"], "UTF8"),
+        "TB.Data.CreateInStream(InS2, TextEncoding::Windows);",
+      ],
+      "H.ReadAll(InS2)",
+      { locale: true },
+    ),
+  );
+  add(
+    io(
+      "Enc",
+      "UTF8 ae read without encoding",
+      [...ioWrite(["OutS.WriteText('æ');"], "UTF8"), "TB.Data.CreateInStream(InS2);"],
+      "H.ReadAll(InS2)",
+      // no encoding: the default one decodes the non-ASCII bytes by the OS code page
+      { locale: true },
+    ),
+  );
+  add(
+    io(
+      "Enc",
+      "default ae bytes",
+      ioWrite(["OutS.WriteText('æ');"]),
+      `${n9("TB.Data.Length")} + '|' + H.Bytes(InS, 6)`,
+      { locale: true },
+    ),
+  );
+  // --- Blob fields on a real table ---
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "HasValue without CalcFields",
+        [`H.InsertBlob(${k}, 'abc');`, `B.Get(${k});`],
+        `${n9("B.Data.HasValue")} + '|' + ${n9("B.Data.Length")}`,
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "after CalcFields",
+        [
+          `H.InsertBlob(${k}, 'abc');`,
+          `B.Get(${k});`,
+          "B.CalcFields(Data);",
+          "B.Data.CreateInStream(InS);",
+        ],
+        `${n9("B.Data.Length")} + '|' + H.ReadAll(InS)`,
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "Clear then Modify",
+        [
+          `H.InsertBlob(${k}, 'abc');`,
+          `B.Get(${k});`,
+          "Clear(B.Data);",
+          "B.Modify();",
+          `B.Get(${k});`,
+          "B.CalcFields(Data);",
+        ],
+        n9("B.Data.HasValue"),
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "rewrite and Modify",
+        [
+          `H.InsertBlob(${k}, 'a');`,
+          `B.Get(${k});`,
+          "B.Data.CreateOutStream(OutS);",
+          "OutS.WriteText('bb');",
+          "B.Modify();",
+          "Clear(B);",
+          `B.Get(${k});`,
+          "B.CalcFields(Data);",
+          "B.Data.CreateInStream(InS);",
+        ],
+        "H.ReadAll(InS)",
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "never written",
+        ["B.Init();", `B.Id := ${k};`, "B.Insert();", `B.Get(${k});`, "B.CalcFields(Data);"],
+        `${n9("B.Data.HasValue")} + '|' + ${n9("B.Data.Length")}`,
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "empty text written",
+        [`H.InsertBlob(${k}, '');`, `B.Get(${k});`, "B.CalcFields(Data);"],
+        `${n9("B.Data.HasValue")} + '|' + ${n9("B.Data.Length")}`,
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Field",
+        "read without CalcFields",
+        [`H.InsertBlob(${k}, 'abc');`, `B.Get(${k});`, "B.Data.CreateInStream(InS);"],
+        "'[' + H.ReadAll(InS) + ']'",
+        { vars: ['B: Record "IO Blob";'] },
+      ),
+    );
+  }
+  // --- CopyStream ---
+  add(
+    io(
+      "Copy",
+      "whole",
+      [
+        ...ioWrite(["OutS.WriteText('ab');", "OutS.WriteText();", "OutS.WriteText('cd');"]),
+        "TB2.Data.CreateOutStream(OutS2);",
+        "CopyStream(OutS2, InS);",
+        "TB2.Data.CreateInStream(InS2);",
+      ],
+      "H.ReadAll(InS2)",
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "2 bytes",
+      [
+        ...ioWrite(["OutS.WriteText('abcdef');"]),
+        "TB2.Data.CreateOutStream(OutS2);",
+        "CopyStream(OutS2, InS, 2);",
+        "TB2.Data.CreateInStream(InS2);",
+      ],
+      `H.ReadAll(InS2) + '|' + H.ReadAll(InS)`,
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "from empty",
+      [
+        "TB.Data.CreateInStream(InS);",
+        "TB2.Data.CreateOutStream(OutS2);",
+        "R := CopyStream(OutS2, InS);",
+      ],
+      `${n9("R")} + '|' + ${n9("TB2.Data.Length")}`,
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "returns",
+      [
+        ...ioWrite(["OutS.WriteText('ab');"]),
+        "TB2.Data.CreateOutStream(OutS2);",
+        "R := CopyStream(OutS2, InS);",
+      ],
+      `${n9("R")} + '|' + ${n9("TB2.Data.Length")}`,
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "after partial read",
+      [
+        ...ioWrite(["OutS.WriteText('ab');", "OutS.WriteText();", "OutS.WriteText('cd');"]),
+        "InS.ReadText(T);",
+        "TB2.Data.CreateOutStream(OutS2);",
+        "CopyStream(OutS2, InS);",
+        "TB2.Data.CreateInStream(InS2);",
+      ],
+      "H.ReadAll(InS2)",
+    ),
+  );
+  add(
+    io(
+      "Copy",
+      "Temp Blob to Temp Blob",
+      [
+        "Blob1.CreateOutStream(OutS);",
+        "OutS.WriteText('ab');",
+        "Blob1.CreateInStream(InS);",
+        "Blob2.CreateOutStream(OutS2);",
+        "CopyStream(OutS2, InS);",
+        "Blob2.CreateInStream(InS2);",
+      ],
+      `H.ReadAll(InS2) + ${n9("Blob2.Length()")}`,
+      { vars: ['Blob1: Codeunit "Temp Blob";', 'Blob2: Codeunit "Temp Blob";'] },
+    ),
+  );
+  // --- Temp Blob ---
+  const TEMP_BLOB = { vars: ['Blob1: Codeunit "Temp Blob";'] };
+  add(
+    io(
+      "TempBlob",
+      "round trip",
+      ["Blob1.CreateOutStream(OutS);", "OutS.WriteText('ab');", "Blob1.CreateInStream(InS);"],
+      `H.ReadAll(InS) + ${n9("Blob1.Length()")} + '|' + ${n9("Blob1.HasValue()")}`,
+      TEMP_BLOB,
+    ),
+  );
+  add(
+    io(
+      "TempBlob",
+      "empty",
+      [],
+      `${n9("Blob1.Length()")} + '|' + ${n9("Blob1.HasValue()")}`,
+      TEMP_BLOB,
+    ),
+  );
+  add(
+    io(
+      "TempBlob",
+      "UTF16 a",
+      ["Blob1.CreateOutStream(OutS, TextEncoding::UTF16);", "OutS.WriteText('a');"],
+      n9("Blob1.Length()"),
+      TEMP_BLOB,
+    ),
+  );
+  add(
+    io(
+      "TempBlob",
+      "read twice",
+      [
+        "Blob1.CreateOutStream(OutS);",
+        "OutS.WriteText('ab');",
+        "Blob1.CreateInStream(InS);",
+        "T := H.ReadAll(InS);",
+        "Blob1.CreateInStream(InS2);",
+      ],
+      "T + H.ReadAll(InS2)",
+      TEMP_BLOB,
+    ),
+  );
+  // --- Base64 Convert ---
+  const B64 = { vars: ['B64: Codeunit "Base64 Convert";'] };
+  add(io("Base64", "To abc", [], "B64.ToBase64('abc')", B64));
+  add(io("Base64", "From YWJj", [], "B64.FromBase64('YWJj')", B64));
+  add(io("Base64", "To ae", [], "B64.ToBase64('æ')", B64));
+  add(io("Base64", "To ae UTF8", [], "B64.ToBase64('æ', TextEncoding::UTF8)", B64));
+  add(io("Base64", "From w6Y= UTF8", [], "B64.FromBase64('w6Y=', TextEncoding::UTF8)", B64));
+  add(io("Base64", "From invalid", [], "B64.FromBase64('not base64!')", B64));
+  add(io("Base64", "To empty", [], "'[' + B64.ToBase64('') + ']'", B64));
+  add(io("Base64", "From empty", [], "'[' + B64.FromBase64('') + ']'", B64));
+  add(io("Base64", "To stream", ioWrite(["OutS.WriteText('abc');"]), "B64.ToBase64(InS)", B64));
+  add(
+    io(
+      "Base64",
+      "From to stream",
+      [
+        "TB.Data.CreateOutStream(OutS);",
+        "B64.FromBase64('YWJj', OutS);",
+        "TB.Data.CreateInStream(InS);",
+      ],
+      "H.ReadAll(InS)",
+      B64,
+    ),
+  );
+  add(
+    io("Base64", "To ae Windows", [], "B64.ToBase64('æ', TextEncoding::Windows)", {
+      ...B64,
+      locale: true,
+    }),
+  );
+  add(io("Base64", "From padding missing", [], "B64.FromBase64('YWI')", B64));
+  // --- XMLport over a stream ---
+  const XP = (port: string) => ({ vars: [`Xp: XmlPort "${port}";`, 'Item: Record "IO Item";'] });
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Export Xml",
+        [
+          `H.InsertItems('X${k}');`,
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+          "Xp.SetTableView(Item);",
+          "TB.Data.CreateOutStream(OutS);",
+          "Xp.SetDestination(OutS);",
+          "Xp.Export();",
+          "TB.Data.CreateInStream(InS);",
+        ],
+        "H.ReadAll(InS)",
+        // the UTF-16 export read through the default encoding: its byte-order mark and NULs decode by the OS code page
+        { ...XP("IO Items Xml"), locale: true },
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Export Csv",
+        [
+          `H.InsertItems('X${k}');`,
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+          "Xp.SetTableView(Item);",
+          "TB.Data.CreateOutStream(OutS);",
+          "Xp.SetDestination(OutS);",
+          "Xp.Export();",
+          "TB.Data.CreateInStream(InS);",
+        ],
+        "H.ReadAll(InS)",
+        XP("IO Items Csv"),
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Import Xml",
+        [
+          ...ioWrite([
+            `OutS.WriteText('<Items><Item><Code>X${k}1</Code><Name>N1</Name></Item><Item><Code>X${k}2</Code><Name>N2</Name></Item></Items>');`,
+          ]),
+          "Xp.SetSource(InS);",
+          "Xp.Import();",
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+        ],
+        `${n9("Item.Count()")} + '|' + H.ItemNames('X${k}')`,
+        XP("IO Items Xml"),
+      ),
+    );
+  }
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Import Csv",
+        [
+          ...ioWrite([
+            `OutS.WriteText('X${k}1,N1');`,
+            "OutS.WriteText();",
+            `OutS.WriteText('X${k}2,N2');`,
+          ]),
+          "Xp.SetSource(InS);",
+          "Xp.Import();",
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+        ],
+        `${n9("Item.Count()")} + '|' + H.ItemNames('X${k}')`,
+        XP("IO Items Csv"),
+      ),
+    );
+  }
+  add(
+    io(
+      "Xmlport",
+      "Import malformed Xml",
+      [...ioWrite(["OutS.WriteText('<Items><Item>');"]), "Xp.SetSource(InS);", "Xp.Import();"],
+      "'reached'",
+      XP("IO Items Xml"),
+    ),
+  );
+  add(
+    io(
+      "Xmlport",
+      "Import empty stream",
+      ["TB.Data.CreateInStream(InS);", "Xp.SetSource(InS);", "Xp.Import();"],
+      "'reached'",
+      XP("IO Items Xml"),
+    ),
+  );
+  {
+    const k = ioKey();
+    add(
+      io(
+        "Xmlport",
+        "Import Xml with declaration",
+        [
+          ...ioWrite([
+            `OutS.WriteText('<?xml version="1.0" encoding="UTF-8"?><Items><Item><Code>X${k}1</Code><Name>N1</Name></Item></Items>');`,
+          ]),
+          "Xp.SetSource(InS);",
+          "Xp.Import();",
+          `Item.SetRange(Code, 'X${k}1', 'X${k}9');`,
+        ],
+        n9("Item.Count()"),
+        XP("IO Items Xml"),
+      ),
+    );
+  }
+  return cells;
+})();
+const IO_HELPER = 51000 + 1 + IO_CELLS.length;
+export const IO_STREAMS: Family = {
+  name: "io-streams",
+  // PR-417: the 6 code-page cells are culture data; measured on bc1 (Linux BC)
+  bcMeasured: { ...BC1_LINUX, task: "PR-489" },
+  issue: "",
+  known: [],
+  testPermissions: "Disabled",
+  extraIds: 1,
+  dependencies: [
+    {
+      id: "63ca2fa4-4f03-4f2b-a480-172fef340d3f",
+      name: "System Application",
+      publisher: "Microsoft",
+      version: "28.0.0.0",
+    },
+  ],
+  support: `table 51000 "IO Blob"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Data; Blob) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+table 51001 "IO Item"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+        field(2; Name; Text[30]) { }
+    }
+    keys { key(PK; Code) { Clustered = true; } }
+}
+
+xmlport 51000 "IO Items Xml"
+{
+    Format = Xml;
+    Direction = Both;
+    schema
+    {
+        textelement(Items)
+        {
+            tableelement(Item; "IO Item")
+            {
+                fieldelement(Code; Item.Code) { }
+                fieldelement(Name; Item.Name) { }
+            }
+        }
+    }
+}
+
+xmlport 51001 "IO Items Csv"
+{
+    Format = VariableText;
+    Direction = Both;
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(Item; "IO Item")
+            {
+                fieldelement(Code; Item.Code) { }
+                fieldelement(Name; Item.Name) { }
+            }
+        }
+    }
+}
+
+codeunit ${IO_HELPER} "IO Helper"
+{
+    /// Every line to the end, each followed by '|'.
+    procedure ReadAll(var InS: InStream): Text
+    var
+        Line: Text;
+        Result: Text;
+    begin
+        while not InS.EOS do begin
+            InS.ReadText(Line);
+            Result += Line + '|';
+        end;
+        exit(Result);
+    end;
+
+    /// The first N bytes as numbers, space separated.
+    procedure Bytes(var InS: InStream; N: Integer): Text
+    var
+        B: Byte;
+        V: Integer;
+        I: Integer;
+        Result: Text;
+    begin
+        while (I < N) and not InS.EOS do begin
+            InS.Read(B);
+            V := B;
+            Result += Format(V, 0, 9) + ' ';
+            I += 1;
+        end;
+        exit(Result);
+    end;
+
+    procedure InsertBlob(K: Integer; V: Text)
+    var
+        B: Record "IO Blob";
+        OutS: OutStream;
+    begin
+        B.Init();
+        B.Id := K;
+        B.Data.CreateOutStream(OutS);
+        OutS.WriteText(V);
+        B.Insert();
+    end;
+
+    procedure InsertItems(Stem: Text)
+    var
+        Item: Record "IO Item";
+    begin
+        Item.Init();
+        Item.Code := CopyStr(Stem + '1', 1, 20);
+        Item.Name := 'N1';
+        Item.Insert();
+        Item.Init();
+        Item.Code := CopyStr(Stem + '2', 1, 20);
+        Item.Name := 'N2';
+        Item.Insert();
+    end;
+
+    procedure ItemNames(Stem: Text): Text
+    var
+        Item: Record "IO Item";
+        Result: Text;
+    begin
+        Item.SetFilter(Code, '%1', Stem + '*');
+        if Item.FindSet() then
+            repeat
+                Result += Item.Code + '=' + Item.Name + ';';
+            until Item.Next() = 0;
+        exit(Result);
+    end;
+}
+`,
+  handles: {},
+  cells: IO_CELLS,
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -6644,6 +8634,12 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [ZIP_BLOB.name]: ZIP_BLOB,
   // PR-431: appended (BC-check number 28): edge's setrange-other-type-convert and restamped-row texts, for leg C's keep cases
   [EDGE_REFUSALS.name]: EDGE_REFUSALS,
+  // PR-487: appended (BC-check number 29): errors, transactions and temporary records, for a per-cell BC differential
+  [ERRORS_TEMP.name]: ERRORS_TEMP,
+  // PR-488: appended (BC-check number 30): numbers and text builtins, for a per-cell BC differential
+  [NUMBERS_TEXT.name]: NUMBERS_TEXT,
+  // PR-489: appended (BC-check number 31): streams, encodings, Blob fields, Temp Blob, Base64 and XMLport over a stream
+  [IO_STREAMS.name]: IO_STREAMS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */

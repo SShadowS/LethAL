@@ -67,19 +67,25 @@ export const REPRODUCTION_EXPECTED: Readonly<Record<string, ReproductionFigures>
 };
 
 /**
- * R582: `killReproductionFailures` for the run a gate just made (the store's newest), thrown as one
- * error when any fails. Called right after `runSession`, while the store is open.
+ * R582: `killReproductionFailures` for the run a gate just made, thrown as one error when any fails. Called right
+ * after `runSession`, while the store is open. R1241: the caller names the run: `FixtureStore.ownRunId()` for a
+ * fixture's shared store, `latestRunId` only for a process-private scratch store.
  */
 export function assertKillsReproduced(
   leg: string,
   report: SessionReport,
   store: ResultsStore,
+  runId: number,
 ): void {
-  const failures = killReproductionFailures(leg, report, store, latestRunId(store));
+  const failures = killReproductionFailures(leg, report, store, runId);
   if (failures.length > 0) throw new Error(failures.join("; "));
 }
 
-/** The newest run in `store`: the one a gate just made, read right after its `runSession`. */
+/**
+ * The newest run in `store`: the one a gate just made, read right after its `runSession`. R1241: ONLY for a
+ * process-private store (a fresh `mkdtemp` directory). A fixture's shared store goes through `openFixtureStore`,
+ * whose `ownRunId()` cannot read another gate's run.
+ */
 export function latestRunId(store: ResultsStore): number {
   const row = store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number | null };
   if (row.id === null) throw new Error("R582: the store holds no run — caller-contract violation");

@@ -465,6 +465,7 @@ export const DRY_RUN_REFUSED = [
   "no-group-runs",
   "retry-stranded",
   "stop-hung-sessions",
+  "no-kill-ledger",
   "fresh-probe",
   "isolate-tests",
   "fail-on-survivors",
@@ -659,6 +660,8 @@ export interface RunCliConfig {
    * session on the user's server — see `SessionConfig.stopHungSessions`.
    */
   readonly stopHungSessions?: boolean;
+  /** PR-472: `--no-kill-ledger`, bcdev only; see `SessionConfig.killLedger`. */
+  readonly killLedger?: false;
   /** R762: `--fresh-probe`, al-runner-v3 only: run the contract probe instead of replaying a cached pass. */
   readonly freshProbe?: boolean;
   /**
@@ -1279,6 +1282,14 @@ RUN — cost and recovery
                              the lease fence, but that id cannot be independently verified.
                              A baseline test, kill confirm or warm replay with NO mutant active
                              is stopped at its budget regardless of this flag (R658)
+  --no-kill-ledger           bcdev only. Try each mutant's tests in the fixed order (narrowest
+                             first, then by name), not the order that puts earlier killers first.
+                             No second walk of survivors is needed (R1174), but a kill can take
+                             more tests to reach. Verdicts may differ from the default in either
+                             direction: the flag uses one fixed order, the same for every mutant
+                             and free of earlier kills; the default reorders by earlier kills.
+                             killingTest and cost also move. Adds the kill-ledger-off
+                             caveat. A resume must use the same setting
   --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
                              backend, with serve-entries and a build whose pin retires the §6
                              Sleep rule (else refused by name). The first latch or stop ends the
@@ -1581,6 +1592,8 @@ export const RUN_FLAGS = {
   "retry-stranded": { type: "boolean", default: false },
   // R53: see `RunCliConfig.stopHungSessions`.
   "stop-hung-sessions": { type: "boolean", default: false },
+  // PR-472: see `RunCliConfig.killLedger`.
+  "no-kill-ledger": { type: "boolean", default: false },
   // R48: see `RunCliConfig.allowLargeRun`.
   "allow-large-run": { type: "boolean", default: false },
   // R762: see `RunCliConfig.freshProbe`.
@@ -1658,6 +1671,7 @@ const RUN_ONLY_FLAGS = [
   "resume-run",
   "retry-stranded",
   "stop-hung-sessions",
+  "no-kill-ledger",
   "keep-company-tests",
   "ci-session-kind",
   "allow-large-run",
@@ -2670,6 +2684,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
+    ...(values["no-kill-ledger"] === true ? { killLedger: false as const } : {}),
     ...(values["keep-company-tests"] === true ? { keepCompanyTests: true } : {}),
     ...(ciSessionKindFlag !== undefined ? { ciSessionKind: ciSessionKindFlag } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
@@ -5131,6 +5146,7 @@ export async function runFromCliWithAccept(
                     },
                   }
                 : {}),
+              ...(parsed.killLedger === false ? { killLedger: false as const } : {}),
               ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
               ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
               ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),

@@ -335,6 +335,7 @@ function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
     operatorMajor: 1,
     file: "src/SandboxLogic.Codeunit.al",
     identityOrdinal: 0,
+    batchIndex: 0,
     verdict: "survived",
     durationMs: 42,
     memberHash: null,
@@ -1110,6 +1111,7 @@ describe("ResultsStore resume queries (R47)", () => {
         operatorMajor: 2,
         file: "f.al",
         identityOrdinal: 0,
+        batchIndex: 0,
         verdict: "killed",
         killingTest: "T",
         durationMs: 77,
@@ -3971,7 +3973,7 @@ describe("R247: no verdict crosses a test-app change", () => {
         const backend = new PackageBackend(APP_B);
         await expect(again(r, backend, { resume: target(r.runId) })).rejects.toThrow(
           new RegExp(
-            `^${flag(r.runId)}: run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is ${hashOf(APP_B)}\\. .*version stamp.*byte for byte.*\\(R247, R495\\)\\. Drop the resume flag to run from scratch\\.$`,
+            `^${flag(r.runId)}: run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is ${hashOf(APP_B)}\\. .*A recompile that changes only the build timestamp no longer counts.*\\(R247, R495\\)\\. Note: the prior run's test-app identity is the pre-R1234 form.* Drop the resume flag to run from scratch\\.$`,
           ),
         );
         expect(backend.deploys).toBe(0);
@@ -4326,6 +4328,26 @@ describe("R389: no verdict or baseline crosses a closed-world guard flip", () =>
         expect(snapHashes(c.store, resumed).length).toBeGreaterThan(0);
         for (const h of snapHashes(c.store, resumed)) expect(h).toBe(c.base);
         for (const h of snapHashes(c.store, c.prior)) expect(h).toBe(c.h);
+        c.store.close();
+      });
+
+      // PR-476 (S2): the R496 dependency refusal is a TestAppRepublishedError. The pending prior is
+      // `package:<hex>|closed-world:..|pending` (old form, and unequal to this session's string), so
+      // the old-form clause rides on it. Revert: drop `withOldFormClause` at that throw.
+      test("PR-476: the R496 dependency refusal of an old-form pending prior carries the old-form clause", async () => {
+        const c = await crashed();
+        c.store.db.run("UPDATE runs SET test_app_deps = 'other-deps' WHERE id = ?", [c.prior]);
+        const b = new GuardBackend(() => 0);
+        const err = await resume(c, b).then(
+          () => undefined,
+          (e: unknown) => e as Error,
+        );
+        expect(err?.name).toBe("TestAppRepublishedError");
+        expect(err?.message).toContain("the test app's dependencies changed");
+        expect(err?.message).toContain(
+          "the prior run's test-app identity is the pre-R1234 form (package:<hex>), or a package LethAL does not content-hash (signed or of unknown shape)",
+        );
+        expect(nothingRan(b)).toBe(0);
         c.store.close();
       });
 
@@ -5769,7 +5791,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(35);
+    expect(out.explainSchemaVersion).toBe(37);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {

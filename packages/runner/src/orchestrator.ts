@@ -119,6 +119,7 @@ import {
   weakerStopEvidence,
 } from "./backend";
 import {
+  appContentIdentity,
   decodeSource,
   hashAlTree,
   hashPackage,
@@ -127,8 +128,9 @@ import {
   snapshotApplies,
   targetAlFiles,
   testAppHashFor,
+  testAppReadFor,
 } from "./baseline-snapshot";
-import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
+import type { BaselineObservation, BaselineSnapshot, TestAppRead } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
 import {
   MAX_ISOLATION_COMPILES,
@@ -324,6 +326,13 @@ import {
   withoutRefusedTests,
 } from "./resume";
 import type { CarriedVerdict, ResumeIndex, SessionFingerprintInput } from "./resume";
+import {
+  type RestartBatchDecision,
+  type RestartResume,
+  assertRestartRowBatch,
+  decideRestartBatch,
+  restartResumeOf,
+} from "./resume-restart";
 import { CONTROL_DRAIN_MS } from "./run-mutant-transport";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
@@ -363,6 +372,7 @@ import {
 import {
   ISOLATION_AUTO_BUILD_TAG,
   type LendingSession,
+  NO_KILL_LEDGER_BUILD_TAG,
   PRUNED_NOTE,
   sameHiddenFiles,
 } from "./store";
@@ -396,6 +406,7 @@ import {
   orderCoveringTests,
   procedureScopeOf,
   recordKill,
+  seedKill,
 } from "./test-order";
 import {
   type ClosedWorld,
@@ -1962,6 +1973,16 @@ export interface SessionConfig {
    * the same residual risk.
    */
   readonly stopHungSessions?: boolean;
+  /**
+   * PR-472 (R197, R1174), `--no-kill-ledger`, OPT-IN, bcdev only. `false` turns the kill ledger's
+   * test order off for the run: every mutant's covering tests go in the no-ledger order, so R1174's
+   * re-walk is never asked for. Verdicts may differ from the default in either direction: the flag
+   * uses one fixed order (narrowest first, then name), the same for every mutant and free of earlier
+   * kills; the default reorders by earlier kills. `killingTest` and the cost also move. Such a run neither lends to nor
+   * borrows from a default run (history, resume). Absent: today's ledger order. Any other backend
+   * refuses it by name.
+   */
+  readonly killLedger?: false;
   /**
    * R198: how a mutant's covering tests are dispatched on a backend that has `runMany`.
    * `maxMethodsPerCall` caps one call (default unbounded; the gates force chunking with 2);
@@ -4832,7 +4853,7 @@ const CARRY_UNTRUSTED_WHY =
 
 /** R247: why no verdict crosses a test-app change, said the same way on every path. */
 const TEST_APP_WHY =
-  "A verdict measured against one test app says nothing about another: a changed test is exactly what might kill a survivor or spare a kill. Any change to the package's bytes counts, including a republish that only moved the version stamp and a recompile alc did not reproduce byte for byte";
+  "A verdict measured against one test app says nothing about another: a changed test is exactly what might kill a survivor or spare a kill. A different identity means different content (a changed source, entry, version or manifest field), or a prior recorded in the pre-R1234 form. A recompile that changes only the build timestamp no longer counts as a different test app (R1234)";
 
 /**
  * R247: refuses to carry any verdict of `row` unless it measured against THIS session's test app.
@@ -4870,7 +4891,7 @@ function assertSameTestApp(
       row.testAppProven,
     )}, and this session's test app is ${describeTestApp(testAppHash)}${
       testAppHash === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-    }.${revoked}${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}). Drop the resume flag to run from scratch.`,
+    }.${revoked}${note} ${TEST_APP_WHY}, so none of its verdicts is carried (R247, R495${note === "" ? "" : ", R601"}).${oldFormSentence(row.testAppHash, testAppHash)} Drop the resume flag to run from scratch.`,
   );
 }
 
@@ -4897,18 +4918,31 @@ interface PendingResumeCheck {
  * (runs recorded before 1.0.0.26 included). The lease is still asked at the live generation.
  * Returns the warning's text; the session emits it only once every resume check has passed (review:
  * a later check can still refuse, and the warning must not claim a carry that did not happen).
+ *
+ * PR-456: a generation change with a DIFFERENT database id, both recorded and non-empty, on the SAME
+ * server tier (`resourceKey`, never null), is a restart that lost the database. The resume then goes on
+ * in restart mode (returned as `restart`): survivors only, each batch against its own baseline compare;
+ * the app checks that follow are unchanged. A missing id on either side, or another tier, refuses as before.
  */
 function assertSameServerGeneration(
   row: RunRow,
   flag: string,
   current: PendingResumeCheck,
-): string | undefined {
+): { readonly warning?: string; readonly restart?: RestartResume } | undefined {
   const generation = current.serverGeneration;
   if (generation === undefined || row.serverGeneration === generation) return undefined;
   const id = current.databaseId;
   if (id !== undefined && id !== "" && row.databaseId === id) {
-    return `${flag}: carrying run ${row.id}'s verdicts across a lease reset: database id ${id} unchanged, server generation ${row.serverGeneration ?? "(none)"} -> ${generation} (R969). The database survived, so its apps and data are the ones those verdicts were measured against.`;
+    return {
+      warning: `${flag}: carrying run ${row.id}'s verdicts across a lease reset: database id ${id} unchanged, server generation ${row.serverGeneration ?? "(none)"} -> ${generation} (R969). The database survived, so its apps and data are the ones those verdicts were measured against.`,
+    };
   }
+  const restart = restartResumeOf(row, {
+    serverGeneration: generation,
+    databaseId: current.databaseId,
+    resourceKey: current.resourceKey,
+  });
+  if (restart !== undefined) return { restart };
   throw new ServerGenerationChangedError(flag, row.id, row.serverGeneration, generation);
 }
 
@@ -4933,6 +4967,36 @@ function pendingRefusal(row: RunRow, session: string, p: PendingResumeCheck): st
 /** R495: why an identity lends nothing, said the same way on every path. */
 const TEST_APP_UNPROVEN =
   "not proven installed: the identity was read from a package or source not proven to be the test app that ran, or recorded before R495";
+
+/**
+ * PR-476 (R1234): a prior run's `package:<64 hex>` identity (any suffix) is either the form runs made
+ * before R1234 recorded, or a package LethAL does not content-hash (signed or of unknown shape: it
+ * falls back to that form). It never equals a `package:c2:...` value, so a refusal says so, naming
+ * both causes. `undefined` for any other prior.
+ */
+function oldFormClause(prior: string | null | undefined): string | undefined {
+  return prior !== null && prior !== undefined && /^package:[0-9a-f]{64}(\||$)/.test(prior)
+    ? "the prior run's test-app identity is the pre-R1234 form (package:<hex>), or a package LethAL does not content-hash (signed or of unknown shape). A run made after R1234 of a package it can hash records package:c2:...; re-run fresh"
+    : undefined;
+}
+
+/** A refusal `reason` (a clause inside `TestAppRepublishedError`'s sentence) with the old-form clause. */
+function withOldFormClause(
+  reason: string,
+  prior: string | null | undefined,
+  /** This session's identity: when it equals the prior's, the identity is not why this refuses. */
+  current: string | undefined,
+): string {
+  // An unproven session (`current` undefined) refuses for lack of proof, not for its identity.
+  const clause = current === undefined || prior === current ? undefined : oldFormClause(prior);
+  return clause === undefined ? reason : `${reason}; ${clause}`;
+}
+
+/** `oldFormClause` as a leading-space sentence for a refusal message, or "". */
+function oldFormSentence(prior: string | null | undefined, current: string | undefined): string {
+  const clause = prior === current ? undefined : oldFormClause(prior);
+  return clause === undefined ? "" : ` Note: ${clause}.`;
+}
 
 /** R495: what a recorded run's test-app identity is worth, for a refusal or warning. */
 function recordedTestAppNote(hash: string | null, proven: boolean): string {
@@ -5011,6 +5075,8 @@ function resolveResume(
     readonly otherRunnerBuild: string;
     readonly on: boolean;
   },
+  /** PR-472: the digest with `--no-kill-ledger` the other way, and this session's state of it; set only on bcdev. */
+  ledgerFlag?: { readonly otherFingerprint: string; readonly killLedgerOff: boolean },
 ):
   | {
       runId: number;
@@ -5019,13 +5085,20 @@ function resolveResume(
       recorded: RecordedCarrySide;
       /** R969: the `resume-across-lease-reset` text; the session emits it after its own checks. */
       leaseResetWarning?: string;
+      /** PR-456: set when the prior run measured on another database (restart mode: survivors only). */
+      restart?: RestartResume;
+      /** PR-456: the prior run itself carried across a restart: its carried rows keep the caveat. */
+      priorAcrossRestart: boolean;
     }
   | undefined {
   if (cfg.resume === undefined) return undefined;
   let leaseResetWarning: string | undefined;
+  let restart: RestartResume | undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
     // R680: first, and for a hook session too: the server's generation is fixed before any hook.
-    leaseResetWarning = assertSameServerGeneration(row, flag, pending);
+    const generationCheck = assertSameServerGeneration(row, flag, pending);
+    leaseResetWarning = generationCheck?.warning;
+    restart = generationCheck?.restart;
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
@@ -5046,6 +5119,13 @@ function resolveResume(
     if (r === undefined) return;
     switch (r.step) {
       case "backend-build":
+        // PR-472: a run of the other kill-ledger mode keeps its own named refusal.
+        if (
+          ledgerFlag !== undefined &&
+          (row.runnerBuild === NO_KILL_LEDGER_BUILD_TAG) !== ledgerFlag.killLedgerOff
+        ) {
+          throw new KillLedgerResumeError(killLedgerResumeMessage(flag, ledgerFlag.killLedgerOff));
+        }
         throw new Error(
           `${flag}: ${r.why}; none of its verdicts is carried. Drop the resume flag to run from scratch.`,
         );
@@ -5062,6 +5142,7 @@ function resolveResume(
   let priorHidden: CarryHidden | null;
   // R601: the resumed run's recorded test-app identity, for the `resume-reusing-run` clause.
   let priorTestAppHash: string | null;
+  let priorAcrossRestart = false;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -5105,6 +5186,22 @@ function resolveResume(
         if (other !== null)
           throw new CarryWalkError(
             carryWalkResumeMessage(`--resume found run ${other}`, carryFlag.carryWalk),
+          );
+      }
+      // PR-472: likewise for an unfinished run recorded with `--no-kill-ledger` the other way.
+      if (ledgerFlag !== undefined) {
+        const other = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: ledgerFlag.otherFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          ...(lendingSession?.runnerBuild !== undefined
+            ? { runnerBuild: lendingSession.runnerBuild }
+            : {}),
+        });
+        if (other !== null)
+          throw new KillLedgerResumeError(
+            killLedgerResumeMessage(`--resume found run ${other}`, ledgerFlag.killLedgerOff),
           );
       }
       // PR-347: likewise for an unfinished run recorded with `refusedCutTail` the other way (the default flipped).
@@ -5173,6 +5270,8 @@ function resolveResume(
         );
       }
       // R938: likewise for a v3 run recorded under another environment, or before it was recorded.
+      // PR-472: a bcdev `--no-kill-ledger` session also reaches this (its build is the "no-kill-ledger" tag, with no
+      // environment tag), and finds nothing: the query skips a row whose build equals the session's.
       if (lendingSession?.runnerBuild !== undefined) {
         const otherEnv = cfg.store.unfinishedRunUnderOtherEnvironment({
           projectPath: cfg.projectDir,
@@ -5233,6 +5332,7 @@ function resolveResume(
       throw new Error(`--resume: run ${found} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(foundRow);
     priorTestAppHash = foundRow.testAppHash;
+    priorAcrossRestart = foundRow.resumedAcrossRestart;
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -5291,6 +5391,11 @@ function resolveResume(
       if (carryFlag !== undefined && row.configFingerprint === carryFlag.otherCarryFingerprint) {
         throw new CarryWalkError(carryWalkResumeMessage(`--resume-run ${id}`, carryFlag.carryWalk));
       }
+      if (ledgerFlag !== undefined && row.configFingerprint === ledgerFlag.otherFingerprint) {
+        throw new KillLedgerResumeError(
+          killLedgerResumeMessage(`--resume-run ${id}`, ledgerFlag.killLedgerOff),
+        );
+      }
       if (
         olderDefaultFingerprint !== undefined &&
         row.configFingerprint === olderDefaultFingerprint
@@ -5318,6 +5423,7 @@ function resolveResume(
       throw new Error(`--resume-run ${id} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(row);
     priorTestAppHash = row.testAppHash;
+    priorAcrossRestart = row.resumedAcrossRestart;
     priorRunId = id;
   }
 
@@ -5333,6 +5439,7 @@ function resolveResume(
       cfg.store.mutantVerdicts(priorRunId),
       cfg.stopHungSessions === true,
       cfg.backend.killsMustReproduce === true,
+      restart !== undefined,
     ),
     refusedTests,
   );
@@ -5354,15 +5461,28 @@ function resolveResume(
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing.${
-      seeds > 0
-        ? ` ${seeds} carried kill(s) may seed R197's kill ledger, so the remaining mutants' tests are ordered as in a fresh run (R1179).`
-        : ""
+    message: `${
+      restart !== undefined
+        ? // PR-456: the restart wording. The numbers are CEILINGS: a survivor carries only when its batch's fresh baseline equals the prior run's.
+          `[lethal] --resume: reusing run ${priorRunId} across a server restart that lost the database (generation ${restart.priorGeneration} -> ${restart.generation}, database ${restart.priorDatabaseId} -> ${restart.databaseId}) — at most ${[...index.carryable.values()].filter((v) => v.verdict === "survived").length} survivor(s) may be carried, each only when its batch's fresh baseline equals the baseline run ${priorRunId} measured for the same instrumented source. ${[...index.carryable.values()].filter((v) => v.verdict === "killed" || v.verdict === "timeout-killed").length} prior kill(s) are NOT carried: they are re-run, and the prior killer is tried first (an ordering hint only; R197). Every batch is deployed and baselined fresh, and no baseline is reused (PR-456).`
+        : `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing.`
     }${
-      noSeed > 0
+      // PR-456: in restart mode no kill is carried (the head above already says they are re-run and seeded).
+      // PR-472: with the ledger off, nothing seeds it.
+      restart === undefined && cfg.killLedger === false
+        ? " The kill ledger is off for this run (--no-kill-ledger): carried kills seed nothing, and every mutant's tests run in the no-ledger order (PR-472)."
+        : restart === undefined && seeds > 0
+          ? ` ${seeds} carried kill(s) may seed R197's kill ledger, so the remaining mutants' tests are ordered as in a fresh run (R1179).`
+          : ""
+    }${
+      restart === undefined && cfg.killLedger !== false && noSeed > 0
         ? ` ${noSeed} carried kill(s) will not seed it: their killing test names no single covering test of this session (R1179).`
         : ""
-    } Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646).${
+    }${
+      restart !== undefined
+        ? ""
+        : " Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192)."
+    } A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646).${
       testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
         ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
         : ""
@@ -5414,7 +5534,9 @@ function resolveResume(
     index,
     carryHidden: priorHidden,
     recorded,
+    priorAcrossRestart,
     ...(leaseResetWarning !== undefined ? { leaseResetWarning } : {}),
+    ...(restart !== undefined ? { restart } : {}),
   };
 }
 
@@ -5532,6 +5654,8 @@ interface BatchScope {
   /** PR-301: `--stop-hung-sessions` for this session, so an overrun's quarantine note can name it when
    *  off. Absent where the caller has no such setting (named mutants): unknown, and the note is silent. */
   readonly stopHungSessions?: boolean;
+  /** PR-472: `--no-kill-ledger` for this session; see `SessionConfig.killLedger`. */
+  readonly killLedgerOff?: boolean;
   readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
@@ -5563,6 +5687,8 @@ interface BatchScope {
    * stop so far (the largest `v3MutantStopMs` of any batch's baseline); `undefined` before the first.
    */
   readonly v3MutantStop?: { ms: number | undefined };
+  /** PR-456: a resume across a restart that lost the database (survivors only, per batch); the run it resumes. */
+  readonly restart?: { readonly priorRunId: number };
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 
@@ -5669,6 +5795,8 @@ interface ScoreBatchInput {
   readonly select: (
     baseline: readonly BaselineRow[],
     lineEvidence: ReadonlySet<TestMethodRef>,
+    /** PR-456: a restart-mode resume's decision for this batch (carry its survivors, or why not). */
+    restart?: RestartBatchDecision,
   ) => CoveringPlan | undefined;
 }
 /** R514: the run and batch whose stored baseline (R192) a batch reused. */
@@ -6179,6 +6307,16 @@ function lostBatchNote(safety: SessionSafety): string {
  */
 export class NoMutableLinesError extends Error {}
 
+/** PR-472: `--no-kill-ledger` on a backend that is not bcdev. Extends `Error` directly. */
+export class KillLedgerFlagBackendError extends Error {
+  constructor(backendKind: string) {
+    super(
+      `kill-ledger-flag-backend: --no-kill-ledger is for the bcdev backend only (R1174's re-walk exists only there); this run's backend is ${backendKind}. Drop the flag.`,
+    );
+    this.name = "KillLedgerFlagBackendError";
+  }
+}
+
 /**
  * R508: the lease was lost, and writing the lost batch's correction to the store failed, so its
  * stored verdicts may still be carried by `--resume`. Conservative: `onLost` may already have
@@ -6475,11 +6613,11 @@ async function batchTestAppReader(
   testDir: string,
   /** R389: the session's closed-world answer, bound into the hash as the run's identity is. */
   closedWorld: ClosedWorld,
-): Promise<() => Promise<string | PackageUnread | undefined>> {
+): Promise<() => Promise<BatchTestAppRead>> {
   const packageReader = backend.fetchPublishedAppPackage;
   const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
   return async () => {
-    const h = await testAppHashFor(
+    const h = await testAppReadFor(
       packageReader === undefined
         ? undefined
         : async () =>
@@ -6490,16 +6628,31 @@ async function batchTestAppReader(
     );
     // R389: a snapshot taken under another guard answer is never reused. R630: a failed read
     // passes through as itself, so the refusal it leads to can name its cause.
-    return typeof h === "string" ? guardedTestAppHash(h, closedWorld) : h;
+    // PR-476: the tag goes on BOTH values of a read, or on neither.
+    return h === undefined || "unread" in h
+      ? h
+      : {
+          identity: guardedTestAppHash(h.identity, closedWorld),
+          bytesHash: guardedTestAppHash(h.bytesHash, closedWorld),
+        };
   };
 }
 
+/** PR-476: a batch's test-app read: both values (c2 identity, bytes hash), a failed read, or unknown. */
+type BatchTestAppRead = TestAppRead | PackageUnread | undefined;
+
 /** R630: a test-app read as the hash it gives, or `undefined` (failed or unknown). Every use as a
- *  hash goes through this ONCE per site, so a failed read is never compared or reused as one. */
+ *  hash goes through this ONCE per site, so a failed read is never compared or reused as one.
+ *  PR-476: `hashOf` is the string-only form (`testAppHashFor`); `identityOf` is a read's cross-session
+ *  identity and `bytesOf` its within-session republish signal (`hashPackage`). */
 const hashOf = (r: string | PackageUnread | undefined): string | undefined =>
   typeof r === "string" ? r : undefined;
-const unreadOf = (r: string | PackageUnread | undefined): string | undefined =>
-  typeof r === "object" ? r.unread : undefined;
+const identityOf = (r: BatchTestAppRead): string | undefined =>
+  r === undefined || "unread" in r ? undefined : r.identity;
+const bytesOf = (r: BatchTestAppRead): string | undefined =>
+  r === undefined || "unread" in r ? undefined : r.bytesHash;
+const unreadOf = (r: BatchTestAppRead): string | undefined =>
+  r !== undefined && "unread" in r ? r.unread : undefined;
 
 /**
  * R495: a session that PROVED its test app (`proven`) and reads a different one (`now`) at a batch
@@ -6513,11 +6666,13 @@ const unreadOf = (r: string | PackageUnread | undefined): string | undefined =>
 function assertNoTestAppDrift(
   store: ResultsStore,
   runId: number,
+  /** PR-476: the proven `bytesHash` (`hashPackage`), never the c2 identity: within one session only a
+   *  moved `hashPackage` shows that something was PUBLISHED meanwhile. */
   proven: string | undefined,
-  read: string | PackageUnread | undefined,
+  read: BatchTestAppRead,
   batchIdx: number,
 ): void {
-  const now = hashOf(read);
+  const now = bytesOf(read);
   if (proven === undefined || now === proven) return;
   store.setRunTestAppHash(runId, null, false, null);
   throw new TestAppDriftedError(proven, now, batchIdx, unreadOf(read));
@@ -6666,11 +6821,17 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // C02-04: all of it only with `input.snapshot`; without one the baseline always runs and
   // nothing is recorded.
   let snapshotKey:
-    | { readonly batchHash: string; readonly testAppHash: string | undefined }
+    | {
+        readonly batchHash: string;
+        /** The c2 identity: the snapshot key. */
+        readonly testAppHash: string | undefined;
+        /** PR-476: the first read's `hashPackage` form, for the within-session re-read compare. */
+        readonly beforeBytes: string | undefined;
+      }
     | undefined;
   let reused: BaselineSnapshot | undefined;
   // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
-  let hashTestApp: (() => Promise<string | PackageUnread | undefined>) | undefined;
+  let hashTestApp: (() => Promise<BatchTestAppRead>) | undefined;
   // R630: why the read before the baseline failed, for the refusal below.
   let firstUnread: string | undefined;
   // R272: the tests whose baseline ran IN THIS SESSION. Only their durations reach the report: a
@@ -6697,8 +6858,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
       const read = await hashTestApp();
       // R495: before `select` carries anything or a snapshot is reused.
-      assertNoTestAppDrift(store, runId, provenTestApp?.hash, read, batchIdx);
-      const testAppHash = hashOf(read);
+      assertNoTestAppDrift(store, runId, provenTestApp?.bytesHash, read, batchIdx);
+      const testAppHash = identityOf(read);
+      const testAppBytes = bytesOf(read);
       firstUnread = unreadOf(read);
       // R492 (sol run 001), R495 for every session: the test app that runs is the PROVEN one; a read
       // here that differs from it (or a session with nothing proven) reuses nothing.
@@ -6800,7 +6962,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           });
         }
       }
-      snapshotKey = { batchHash, testAppHash };
+      snapshotKey = { batchHash, testAppHash, beforeBytes: testAppBytes };
       // PR-21 (L5): a backend that needs its own baseline state (serve-entries, R1008) reuses a
       // snapshot only after re-checking it on its daemon; any reason not to falls back to the
       // baseline as today, by name (docs/superpowers/specs/2026-11-15-pr21-l5-baseline-reuse.md).
@@ -7087,11 +7249,12 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   if (missingFromServer.length > 0) {
     // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
     const reread = await hashTestApp?.().catch(() => undefined);
-    const after = hashOf(reread);
+    // PR-476: the re-read is compared as `hashPackage` (a republish of the same source is still one).
+    const after = bytesOf(reread);
     // R495 (sol, final review): a re-read that is not the proven test app (changed, or unreadable)
     // withdraws the run's proof, so neither this run's snapshots, the one just recorded included,
     // nor its verdicts lend anything later.
-    const proven = input.snapshot?.provenTestApp?.hash;
+    const proven = input.snapshot?.provenTestApp?.bytesHash;
     if (proven !== undefined && after !== proven) store.setRunTestAppHash(runId, null, false, null);
     // R686: a codeunit whose OnRun raises gives the same found-0 answer; named only when proven.
     const unread = unreadOf(reread) ?? firstUnread;
@@ -7104,7 +7267,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       missing: missingFromServer,
       testsPerCodeunit,
       proven,
-      before: snapshotKey?.testAppHash,
+      before: snapshotKey?.beforeBytes,
       after,
       compiledInPublishedPackage: input.testsCompiledInPublishedPackage === true,
       ...(unread !== undefined ? { unread } : {}),
@@ -7136,7 +7299,31 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // already builds the covering sets from them; leaving their lines out made a resumed session
   // decide trigger mutants differently from an uninterrupted one).
   const lineEvidence = lineEvidenceOf(ranHere, baseline, reused !== undefined);
-  const plan = input.select(baseline, lineEvidence);
+  // PR-456 (r5 #5): a resume across a restart that lost the database decides here, per batch, whether
+  // this batch's survivors may carry: after the fresh baseline and every refusal above, before `select`
+  // and so before any of this batch's mutants is scheduled.
+  const restartDecision: RestartBatchDecision | undefined =
+    scope.restart !== undefined
+      ? decideRestartBatch({
+          prior:
+            snapshotKey === undefined || snapshotKey.testAppHash === undefined
+              ? null
+              : store.priorRestartSnapshot(
+                  scope.restart.priorRunId,
+                  snapshotKey.batchHash,
+                  snapshotKey.testAppHash,
+                ),
+          fresh: baseline,
+          freshComplete: baseline.length === tests.length,
+          reused: reused !== undefined,
+          isolationMode:
+            backend.isolatesTests === true ||
+            backend.baselineBatchingKnobOff === true ||
+            scope.isolationAuto !== undefined,
+          isStopped: stoppedByUs,
+        })
+      : undefined;
+  const plan = input.select(baseline, lineEvidence, restartDecision);
   if (plan === undefined) return "nothing-to-run";
   const {
     mutants: toExecute,
@@ -7258,6 +7445,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     groupRuns,
     sessionReuse,
     ...(scope.stopHungSessions !== undefined ? { stopHungSessions: scope.stopHungSessions } : {}),
+    ...(scope.killLedgerOff === true ? { killLedgerOff: true } : {}),
     baselineReused,
     baselineReach,
     ...(scope.reachTrace !== undefined ? { reachTrace: scope.reachTrace } : {}),
@@ -7406,6 +7594,9 @@ async function runSessionBody(
   const carrySkip = readCarrySkip(process.env);
   reachTrace?.start();
   const caps = cfg.backend.capabilities();
+  // PR-472: refused by name before any run on a backend that never re-walks.
+  if (cfg.killLedger === false && !isBcdev(caps.kind))
+    throw new KillLedgerFlagBackendError(caps.kind);
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   if (
     cfg.timeBudgetSeconds !== undefined &&
@@ -7931,6 +8122,7 @@ async function runSessionBody(
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const {
     testAppHash,
+    bytesHash: testAppBytesHash,
     testDigests,
     testDigestParts,
     testDigestDependencies,
@@ -7962,6 +8154,9 @@ async function runSessionBody(
     (await provenWithoutHook(cfg, buildBackend.kind, publishedRead))
       ? testAppHash
       : undefined;
+  // PR-476: its within-session twin (`hashPackage` form; for al-runner the same `source:` identity).
+  // Set together with `testAppHash` by `reportPublishedTestApp`, so defined whenever it is proven.
+  const provenTestAppBytes = provenTestAppHash === undefined ? undefined : testAppBytesHash;
   if (
     envPublishes === undefined &&
     !isLocalRunner(buildBackend.kind) &&
@@ -7974,10 +8169,15 @@ async function runSessionBody(
   // package folders) is complete here and is recorded with the run row. Every other session takes
   // it under the lease (below).
   let alRunnerTestApp: TestAppIdentity | undefined;
-  if (provenTestAppHash !== undefined && isLocalRunner(buildBackend.kind)) {
+  if (
+    provenTestAppHash !== undefined &&
+    provenTestAppBytes !== undefined &&
+    isLocalRunner(buildBackend.kind)
+  ) {
     const got = await takeTestAppDependencies(cfg, "not-published", sourceSnapshot);
-    if ("deps" in got) alRunnerTestApp = { hash: provenTestAppHash, deps: got.deps };
-    else
+    if ("deps" in got) {
+      alRunnerTestApp = { hash: provenTestAppHash, bytesHash: provenTestAppBytes, deps: got.deps };
+    } else
       warnTestAppDependenciesUnproven(
         emit,
         `its dependencies could not be fingerprinted: ${got.why}`,
@@ -7997,7 +8197,12 @@ async function runSessionBody(
     backend: backendName,
     // R857: part of what lends, so a run under --isolate-tests lends nothing to a default run, and
     // the other way, by the one check every lend passes.
-    runnerBuild: v3Build !== undefined ? lendingRunnerBuild(cfg.backend, v3Build) : undefined,
+    runnerBuild:
+      v3Build !== undefined
+        ? lendingRunnerBuild(cfg.backend, v3Build)
+        : cfg.killLedger === false // PR-472: bcdev only (refused elsewhere); a default run stays undefined
+          ? NO_KILL_LEDGER_BUILD_TAG
+          : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
   const resumeInputs = await resumeInputsOf(cfg.backend);
@@ -8095,13 +8300,17 @@ async function runSessionBody(
   // PR-347: `refusedCutTail` (PR-297) is on unless `false`; the key is in the digest only when on. A backend with no such
   // getter (every other backend) has `undefined` here and never gets the key or the cross-flag search.
   const cutTailOn = cfg.backend.refusedCutTail === true;
+  // PR-472: `--no-kill-ledger` (bcdev only, checked above); in the digest only when on.
+  const ledgerOffOn = cfg.killLedger === false;
   const fingerprintWith = (
     prune: boolean,
     carryOn: boolean = carryWalk,
     cutTail: boolean = cutTailOn,
+    ledgerOff: boolean = ledgerOffOn,
   ) =>
     sessionFingerprint({
       ...fingerprintBase,
+      ...(ledgerOff ? { killLedgerOff: true as const } : {}), // PR-472
       ...(cutTail ? { v3RefusedCutTail: true as const } : {}), // PR-297
       ...(prune ? { v3ReachPrune: true as const } : {}),
       ...(carryApplies && !carryOn ? { v3CarryWalkOff: true as const } : {}),
@@ -8119,6 +8328,7 @@ async function runSessionBody(
           ...(reachPrune ? { v3ReachPrune: true as const } : {}),
           ...(carryApplies && !carryWalk ? { v3CarryWalkOff: true as const } : {}),
           ...(carryApplies && !carrySkip ? { v3CarrySkipOff: true as const } : {}), // PR-410
+          ...(ledgerOffOn ? { killLedgerOff: true as const } : {}), // PR-472
         })
       : undefined;
   const resolvedResume = resolveResume(
@@ -8149,6 +8359,13 @@ async function runSessionBody(
           otherFingerprint: fingerprintWith(reachPrune, carryWalk, !cutTailOn),
           otherRunnerBuild: lendingRunnerBuild(cfg.backend, v3Build, !cutTailOn),
           on: cutTailOn,
+        }
+      : undefined,
+    // PR-472: bcdev only; the flag is refused elsewhere.
+    isBcdev(caps.kind)
+      ? {
+          otherFingerprint: fingerprintWith(reachPrune, carryWalk, cutTailOn, !ledgerOffOn),
+          killLedgerOff: ledgerOffOn,
         }
       : undefined,
   );
@@ -8540,6 +8757,15 @@ async function runSessionBody(
       message: `--stop-hung-sessions is off: ${STOP_HUNG_SESSIONS_OFF_TEXT}`,
     });
   }
+  // PR-472: the warning code is the caveat `buildReport` raises from it.
+  if (cfg.killLedger === false) {
+    emit({
+      type: "warning",
+      code: "kill-ledger-off" satisfies Caveat,
+      message:
+        "--no-kill-ledger is on: covering tests run in the no-ledger order, so R1174's re-walk is not needed, but a kill can take more tests to reach. Verdicts may differ from the default in either direction: this run uses one fixed order (narrowest first, then name), the same for every mutant and free of earlier kills; the default reorders by earlier kills. killingTest and cost also move. History, --resume and snapshots are not shared with a default run (PR-472).",
+    });
+  }
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
   // PR-461 (R826): a BC call bears only so many guard checks; refused by name before any publish. On
   // the deployed set (after --confirm narrows it), and before R48's refusal: it is the more specific.
@@ -8769,7 +8995,12 @@ async function runSessionBody(
           message: SOURCE_LESS_UNPROVEN,
         });
       }
-      const proven = "proven" in readBackProof ? after.packageHash : undefined;
+      // PR-476: the identity is the c2 form (`after.testAppHash`); `after.packageHash` is its
+      // `hashPackage` twin, which the within-session drift check compares. Defined together.
+      const proven =
+        "proven" in readBackProof && after.packageHash !== undefined
+          ? after.testAppHash
+          : undefined;
       // R496: proof covers the whole closure: this fingerprint checks every extension in it
       // installed, including the ones the hook did not publish. From the served package's
       // manifest (F8), under the lease and after the hook (the race is impossible by order).
@@ -8779,9 +9010,12 @@ async function runSessionBody(
             ? await takeTestAppDependencies(cfg, afterRead.bytes, sourceSnapshot)
             : { why: "the test app read back after the hook has no package bytes" };
       }
-      const identity =
-        proven !== undefined && readBackDeps !== undefined && "deps" in readBackDeps
-          ? { hash: proven, deps: readBackDeps.deps }
+      const identity: TestAppIdentity | undefined =
+        proven !== undefined &&
+        after.packageHash !== undefined &&
+        readBackDeps !== undefined &&
+        "deps" in readBackDeps
+          ? { hash: proven, bytesHash: after.packageHash, deps: readBackDeps.deps }
           : undefined;
       // R486/R492: the row records the test app that ran, or NULL ("unknown"), never the outgoing
       // one and never an unproven one. R496: with its dependency fingerprint, or nothing.
@@ -8816,7 +9050,7 @@ async function runSessionBody(
           throw new TestAppRepublishedError(
             cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
             recorded,
-            reason,
+            withOldFormClause(reason, recorded, proven),
           );
         }
       }
@@ -8877,14 +9111,18 @@ async function runSessionBody(
             : pre !== undefined && pre !== got.deps
               ? `a dependency changed while this session waited for the lease (its digests were taken over dependencies ${pre}, and under the lease they are ${got.deps})`
               : undefined;
-        if (why === undefined && "deps" in got) {
+        if (why === undefined && "deps" in got && provenTestAppBytes !== undefined) {
           cfg.store.setRunTestAppHash(
             runId,
             recordedTestAppHash(provenTestAppHash),
             true,
             got.deps,
           );
-          historyTestApp = { hash: provenTestAppHash, deps: got.deps };
+          historyTestApp = {
+            hash: provenTestAppHash,
+            bytesHash: provenTestAppBytes,
+            deps: got.deps,
+          };
         } else {
           // In one step: no identity, no digests, one warning; `historyTestApp` stays undefined.
           cfg.store.setRunTestAppHash(runId, null, false, null);
@@ -8925,7 +9163,7 @@ async function runSessionBody(
         throw new TestAppRepublishedError(
           cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
           prior?.testAppHash ?? null,
-          reason,
+          withOldFormClause(reason, prior?.testAppHash, historyTestApp?.hash),
         );
       }
     }
@@ -8963,6 +9201,7 @@ async function runSessionBody(
     const lane0 = v3Lanes?.[0];
     const scope: BatchScope = {
       stopHungSessions: cfg.stopHungSessions === true,
+      killLedgerOff: cfg.killLedger === false,
       // R766 (b): under lanes the baseline runs on lane 0 (its N = 1 baseline), the rest on the owner.
       backend: lane0 !== undefined ? splitBackend(cfg.backend, lane0) : cfg.backend,
       ...(v3Lanes !== undefined
@@ -8995,6 +9234,9 @@ async function runSessionBody(
       ...(reachTrace !== undefined ? { reachTrace } : {}),
       ...(reachPrune ? { reachPrune: true as const } : {}),
       ...(carryWalk && carryApplies ? { carryWalk: true as const } : {}),
+      ...(resolvedResume?.restart !== undefined
+        ? { restart: { priorRunId: resolvedResume.runId } }
+        : {}),
       ...(timeBudget !== undefined ? { timeBudget } : {}),
       ...(slowdownMonitor !== undefined ? { slowdown: slowdownMonitor } : {}),
       ...(cfg.backend.isolationAuto === true
@@ -9036,7 +9278,7 @@ async function runSessionBody(
         const now = await (
           await batchTestAppReader(cfg.backend, cfg.testDir, sessionClosedWorld)
         )();
-        assertNoTestAppDrift(cfg.store, runId, historyTestApp.hash, now, batchIdx);
+        assertNoTestAppDrift(cfg.store, runId, historyTestApp.bytesHash, now, batchIdx);
       }
       // 1. write the instrumented project for this artifact — currently
       // always every file `generateMutationSet` found (single artifact).
@@ -9325,7 +9567,7 @@ async function runSessionBody(
                 old.proven,
               )}, with dependencies ${old.deps ?? "not recorded"}, and this session's test app is ${describeTestApp(historyTestApp?.hash)}${
                 historyTestApp === undefined ? ` (${TEST_APP_UNPROVEN})` : ""
-              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency, or LethAL changing how it fingerprints System (R1230). No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
+              }, with dependencies ${historyTestApp?.deps ?? "unknown"}. ${TEST_APP_WHY}; so does a changed dependency, or LethAL changing how it fingerprints System (R1230).${oldFormSentence(old.testAppHash, historyTestApp?.hash)} No survivor from it is skipped: every mutant is executed (R247, R495, R496).`,
             });
           },
           carryUntrusted: (old) => {
@@ -9816,6 +10058,7 @@ async function runSessionBody(
       const select = (
         baseline: readonly BaselineRow[],
         lineEvidence: ReadonlySet<TestMethodRef>,
+        restartDecision?: RestartBatchDecision,
       ): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -10214,6 +10457,13 @@ async function runSessionBody(
           toExecute = [];
           const carryNotFaced: MutantManifestEntry[] = [];
           const carryNoRecord: MutantManifestEntry[] = [];
+          // PR-456: a resume across a restart that lost the database carries SURVIVORS only, and only
+          // of a batch whose fresh baseline equalled the prior run's (`restartDecision.carry`).
+          const restartMode = resumeState.restart !== undefined;
+          const rowBatchHashes = new Map<number, string | null>();
+          let restartCarried = 0;
+          let restartKillsRerun = 0;
+          let restartSeeded = 0;
           for (const m of remaining) {
             const covering = perMutantTests.get(m.mutantId);
             if (covering === undefined) continue; // step 5 already recorded no-coverage
@@ -10223,11 +10473,49 @@ async function runSessionBody(
               toExecute.push(m);
               continue;
             }
+            if (restartMode) {
+              // PR-456: the row's whole decision (`restartRowAction`, exported so the offline harness
+              // runs the same code): a kill is re-run with its killer seeded; a survivor carries only
+              // for an equal batch, through the batch gate and R646.
+              const act = restartRowAction({
+                carried,
+                covering,
+                decision: restartDecision,
+                tests,
+                priorRunId: resumeState.runId,
+                rowBatchHash: (b) => {
+                  if (!rowBatchHashes.has(b)) {
+                    rowBatchHashes.set(
+                      b,
+                      cfg.store.snapshotBatchHash(resumeState.runId, b)?.batchHash ?? null,
+                    );
+                  }
+                  return rowBatchHashes.get(b) ?? null;
+                },
+              });
+              if (act.kind === "kill") {
+                // Its prior killer goes into R197's ledger FIRST, as an ordering hint only (D6). A
+                // seeded killer moves no verdict (R577 reproduces the kill live).
+                restartKillsRerun += 1;
+                if (act.seed !== undefined) {
+                  seedKill(killLedger, m, act.seed);
+                  restartSeeded += 1;
+                }
+                toExecute.push(m);
+                continue;
+              }
+              if (act.kind === "rerun") {
+                if (act.why === "no-record") carryNoRecord.push(m);
+                if (act.why === "not-faced") carryNotFaced.push(m);
+                toExecute.push(m);
+                continue;
+              }
+            }
             // R646: R644's rule for a carried survivor. A test green in this session's baseline but
             // red where it was scored covers it now and never ran against it, so it is re-run. A
             // kill carries as is: a test failed under it, whatever else covers it now.
             const survivor = carried.verdict === "survived" || carried.verdict === "known-survivor";
-            if (survivor) {
+            if (survivor && !restartMode) {
               const faced = carried.coveringTests;
               if (faced === undefined || faced.length === 0) {
                 carryNoRecord.push(m);
@@ -10275,7 +10563,13 @@ async function runSessionBody(
               undefined, // killingTestRef
               carriedReproduction(carried),
               carried.stopEvidence,
+              // PR-456: a row carried across a restart (or from a run that did) keeps the caveat.
+              restartMode || resumeState.priorAcrossRestart,
             );
+            if (restartMode || resumeState.priorAcrossRestart) {
+              cfg.store.markResumedAcrossRestart(runId);
+              if (restartMode) restartCarried += 1;
+            }
             // R644 (build review I2): a carried survivor was not run here, so its STORE row keeps
             // the tests it faced where it was scored, never the tests covering it now; a later
             // history session reads that list as "faced". The report row above is unchanged.
@@ -10289,6 +10583,21 @@ async function runSessionBody(
               const killer = carriedKillerRef(carried, tests);
               if (killer !== undefined) recordKill(killLedger, m, killer);
             }
+          }
+          // PR-456 (D4, NIT9): said once per batch, at its decision and AFTER the carries happened (R969's
+          // rule: never claim a carry that did not). It names both generations and both database ids.
+          if (resumeState.restart !== undefined) {
+            const r = resumeState.restart;
+            const where = `run ${resumeState.runId}, server generation ${r.priorGeneration} -> ${r.generation}, database ${r.priorDatabaseId} -> ${r.databaseId}`;
+            const kills = `${restartKillsRerun} prior kill(s) are re-run${restartSeeded > 0 ? `, ${restartSeeded} with the prior killer tried first` : ""}`;
+            emit({
+              type: "warning",
+              code: "resume-across-restart",
+              message:
+                restartDecision?.carry === true
+                  ? `[lethal] --resume across a restart (${where}): batch ${batchIdx}: carried ${restartCarried} survivor(s). The fresh baseline equals the one run ${resumeState.runId} measured for this instrumented source, but equality was checked on the unmutated baseline only: those survivors were measured on the earlier database. ${kills}.`
+                  : `[lethal] --resume across a restart (${where}): batch ${batchIdx}: re-run, nothing carried (${restartDecision?.reason ?? "no decision was made for this batch"}). ${kills}.`,
+            });
           }
           if (carryNoRecord.length > 0) {
             emit({
@@ -10336,8 +10645,11 @@ async function runSessionBody(
           // bytes, test app) cannot tell, so a batch holding such a member never reuses one: the
           // baseline runs again. 0 known sites; the cost is that one baseline.
           // R857: under --isolate-tests a resume runs its baseline again: the warm-up needs its rows.
+          // PR-456: and in restart mode every batch measures a FRESH baseline: it is the one the prior
+          // run's is compared with (a reuse would compare the prior run's baseline with itself).
           allowReuse:
             resumeState !== undefined &&
+            resumeState.restart === undefined &&
             cfg.backend.isolatesTests !== true &&
             cfg.backend.baselineBatchingKnobOff !== true && // PR-235: a stored baseline may be batched
             cfg.backend.isolationAuto !== true && // R896 (review 1)
@@ -11781,6 +12093,18 @@ function carryWalkResumeMessage(subject: string, nowOn: boolean): string {
   return `carry-walk-resume-refused: ${subject} was recorded with ${CARRY_WALK_ENV} ${nowOn ? "off" : "on, or before the knob existed"}, and this session has it ${nowOn ? "on" : "off"}. A survivor scored with the carry walk must never be carried into a run without it as an ordinary one (PR-340). Set the knob as that run had it, or drop the resume flag to run from scratch.`;
 }
 
+/** PR-472: a resume or lend across a change of `--no-kill-ledger`. Extends `Error` directly. */
+export class KillLedgerResumeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KillLedgerResumeError";
+  }
+}
+
+function killLedgerResumeMessage(subject: string, nowOff: boolean): string {
+  return `kill-ledger-resume-refused: ${subject} was recorded with --no-kill-ledger ${nowOff ? "off" : "on"}, and this session has it ${nowOff ? "on" : "off"}. A kill or survivor scored in one order must never be carried into a run with the other (PR-472). Pass the flag as that run had it, or drop the resume flag to run from scratch.`;
+}
+
 /** PR-303 rule 6: why a resume across a flag change is refused. */
 function reachPruneResumeMessage(subject: string, nowOn: boolean): string {
   return `reach-prune-resume-refused: ${subject} was recorded with ${REACH_PRUNE_ENV} ${nowOn ? "off" : "on"}, and this session has it ${nowOn ? "on" : "off"}. A pruned survivor must never be carried into a run without pruning as an ordinary one (PR-303). Set the flag as that run had it, or drop the resume flag to run from scratch.`;
@@ -12025,6 +12349,58 @@ export function facedEveryCoveringTest(
   return covering.length > 0 && covering.every((ref) => had.has(qualifiedTestName(ref)));
 }
 
+const isSeedableKillVerdict = (v: string): boolean => v === "killed" || v === "timeout-killed";
+
+/** PR-456: what a restart-mode resume does with one prior row it matched to this session's mutant. */
+export type RestartRowAction =
+  | { readonly kind: "carry" }
+  /** A kill or timeout-kill: re-run, its prior killer (when one is seedable, D6) goes into R197's ledger first. */
+  | { readonly kind: "kill"; readonly seed?: TestMethodRef }
+  /** A survivor that is re-run: its batch did not compare equal, or R646's record or faced rule failed. */
+  | {
+      readonly kind: "rerun";
+      readonly why: "batch" | "no-record" | "not-faced" | "not-carryable";
+    };
+
+/**
+ * PR-456 (r3 items 3-4, r5 #3-#4): the per-row decision of a resume across a restart that lost the
+ * database. `carried` is the prior verdict `carriedVerdictFor` matched (the index holds `survived` and
+ * kills only: `known-survivor` never enters it in restart mode). A kill is re-run, seeded through
+ * `isSeedableCarriedKill` and `carriedKillerRef` as R1179 does. A survivor carries only when its batch's
+ * baseline compared equal (`decision.carry`), its own batch hashes to that snapshot (a mismatch throws),
+ * and R646 holds (a recorded, non-empty faced list covering every test covering it now).
+ */
+export function restartRowAction(a: {
+  readonly carried: CarriedVerdict;
+  readonly covering: readonly TestMethodRef[];
+  readonly decision: RestartBatchDecision | undefined;
+  readonly tests: readonly TestMethodRef[];
+  readonly priorRunId: number;
+  /** `snapshotBatchHash(prior, batchIndex)?.batchHash ?? null`. */
+  readonly rowBatchHash: (batchIndex: number) => string | null;
+}): RestartRowAction {
+  const { carried, decision } = a;
+  // `known-survivor` (a history lend, R644) and anything else but a survivor or a kill is never carried here.
+  if (carried.verdict !== "survived" && !isSeedableKillVerdict(carried.verdict)) {
+    return { kind: "rerun", why: "not-carryable" };
+  }
+  if (carried.verdict !== "survived") {
+    const killer = isSeedableCarriedKill(carried) ? carriedKillerRef(carried, a.tests) : undefined;
+    return { kind: "kill", ...(killer !== undefined ? { seed: killer } : {}) };
+  }
+  if (decision?.carry !== true) return { kind: "rerun", why: "batch" };
+  assertRestartRowBatch(
+    decision,
+    a.priorRunId,
+    { batchIndex: carried.batchIndex },
+    carried.batchIndex === undefined ? undefined : a.rowBatchHash(carried.batchIndex),
+  );
+  const faced = carried.coveringTests;
+  if (faced === undefined || faced.length === 0) return { kind: "rerun", why: "no-record" };
+  if (!facedEveryCoveringTest(faced, a.covering)) return { kind: "rerun", why: "not-faced" };
+  return { kind: "carry" };
+}
+
 /** What the test project's `app.json` has to say for check 2 to have a local expectation at all. */
 interface TestAppManifest {
   readonly name?: unknown;
@@ -12227,22 +12603,28 @@ async function reportPublishedTestApp(
    *  only by the read after its hook. */
   judge = true,
 ): Promise<{
+  /** The cross-session identity (`appContentIdentity` for a package, else `source:`). */
   testAppHash: string | undefined;
+  /** PR-476: the within-session republish signal: `package:` + `hashPackage`, or the same `source:`. */
+  bytesHash: string | undefined;
   sources: PublishedTestSources;
-  /** R486: the package's hash only when one was read AND parsed, never the source fallback. */
+  /** R486: the package's `bytesHash` only when one was read AND parsed, never the source fallback. */
   packageHash?: string;
 }> {
   // R247: this session's test-app identity, from the ONE package read (`testAppHashFor`'s rule:
-  // the package's hash when it was read, `undefined` when the read failed, else the test source
+  // the package's identity when it was read, `undefined` when the read failed, else the test source
   // tree's hash). With no package reader it can only be a hash or `undefined`.
   const sourceHash = async () => hashOf(await testAppHashFor(undefined, cfg.testDir));
   const warn: RunEmitter = judge ? emit : () => {};
   if (read.kind === "no-fetch") {
-    return { testAppHash: await sourceHash(), sources: { kind: "not-published" } };
+    const source = await sourceHash();
+    return { testAppHash: source, bytesHash: source, sources: { kind: "not-published" } };
   }
   if (read.kind === "not-requested") {
+    const source = await sourceHash();
     return {
-      testAppHash: await sourceHash(),
+      testAppHash: source,
+      bytesHash: source,
       sources: { kind: "unavailable", why: NO_PUBLISHED_READ },
     };
   }
@@ -12255,14 +12637,20 @@ async function reportPublishedTestApp(
     });
     return {
       testAppHash: undefined,
+      bytesHash: undefined,
       sources: { kind: "unavailable", why: unreadable(read.cause) },
     };
   }
   const { bytes, version } = read;
-  const testAppHash = `package:${hashPackage(bytes)}`;
-
+  // PR-476: the SAME function as `testAppReadFor`, or every bcdev session would drift at batch 0.
+  // S1: both values are computed inside the guard: a NAVX-shaped package whose zip cannot be walked
+  // takes the `unreadable` branch with neither value, never a raw zip error out of the session.
+  let testAppHash: string | undefined;
+  let bytesHash: string | undefined;
   let published: PublishedApp;
   try {
+    testAppHash = appContentIdentity(bytes);
+    bytesHash = `package:${hashPackage(bytes)}`;
     published = parsePublishedApp(
       Buffer.from(bytes),
       armSymbols !== undefined ? { buildSymbols: armSymbols } : {},
@@ -12273,7 +12661,7 @@ async function reportPublishedTestApp(
       code: "published-test-app-unreadable",
       message: `[lethal] the server returned a package for the test app "${name}" that could not be read (${err instanceof Error ? err.message : String(err)}), so this run did not verify the published suite.`,
     });
-    return { testAppHash, sources: { kind: "unavailable", why: UNREADABLE } };
+    return { testAppHash, bytesHash, sources: { kind: "unavailable", why: UNREADABLE } };
   }
 
   const message = publishedTestAppWarning(
@@ -12285,7 +12673,8 @@ async function reportPublishedTestApp(
   const files = publishedAlSources(Buffer.from(bytes));
   return {
     testAppHash,
-    packageHash: testAppHash,
+    bytesHash,
+    packageHash: bytesHash,
     sources:
       files.length > 0
         ? { kind: "published", files, pkg: bytes }
@@ -12347,6 +12736,8 @@ async function testAppIdentity(
   deferred: boolean,
 ): Promise<{
   testAppHash: string | undefined;
+  /** PR-476: `testAppHash`'s within-session twin (`hashPackage` form), tagged alike. */
+  bytesHash: string | undefined;
   testDigests?: Record<string, string>;
   testDigestParts?: TestDigestParts;
   closedWorld?: PendingClosedWorld;
@@ -12355,7 +12746,7 @@ async function testAppIdentity(
   /** R601 (review I3): why this session is open-world, when it is (no `closedWorld`). */
   openWorldWhy?: string;
 }> {
-  const { testAppHash, sources } = await reportPublishedTestApp(
+  const { testAppHash, bytesHash, sources } = await reportPublishedTestApp(
     cfg,
     read,
     tests,
@@ -12365,7 +12756,7 @@ async function testAppIdentity(
   );
   const none = (why: string) => {
     warnNoTestDigests(emit, why);
-    return { testAppHash, openWorldWhy: why };
+    return { testAppHash, bytesHash, openWorldWhy: why };
   };
   // An env-tool session publishes `envTool.publishApps`, PREBUILT .app files, only after the lease
   // is taken, which is after the read above (`afterLeaseAcquiredFor` in cli.ts calls
@@ -12376,6 +12767,7 @@ async function testAppIdentity(
     if (deferred)
       return {
         testAppHash,
+        bytesHash,
         openWorldWhy: "an env-tool session's test app is digested open-world (R389)",
       };
     return none(
@@ -12406,6 +12798,8 @@ async function testAppIdentity(
   return {
     testAppHash:
       testAppHash === undefined ? undefined : guardedTestAppHash(testAppHash, guard.closedWorld),
+    bytesHash:
+      bytesHash === undefined ? undefined : guardedTestAppHash(bytesHash, guard.closedWorld),
     testDigests: got.digests,
     testDigestParts: got.parts,
     testDigestDependencies: got.dependencies,
@@ -13789,6 +14183,8 @@ interface RunMutantsArgs {
   readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   /** PR-301: see `BatchScope.stopHungSessions`. Absent: unknown, and the note does not name the stop. */
   readonly stopHungSessions?: boolean;
+  /** PR-472: see `BatchScope.killLedgerOff`. Orders by the no-ledger order, so no re-walk is asked for. */
+  readonly killLedgerOff?: boolean;
   /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
    *  budget derived from them, are from another day. Since R516 every position-1 `timeout` is
    *  confirmed unmutated with R53's 2x margin on every batch; this field only names the cause of
@@ -14136,7 +14532,13 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
     const ordered =
-      rw.cur?.order ?? orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
+      rw.cur?.order ??
+      orderCoveringTests(
+        covering,
+        m,
+        args.killLedgerOff === true ? newKillLedger() : args.killLedger, // PR-472
+        args.memberCountsByTest,
+      );
     // R586 (F5): a backend that runs a whole test codeunit per call learns every covering ref's
     // budget up front, so one call can be sent the largest of them.
     args.backend.useCoveringBudgets?.(
@@ -16652,6 +17054,10 @@ export function record(
   // GitHub #49: a `timeout-killed`'s stop evidence (see `MutantOutcome.stopEvidence`). Passed by the
   // covering loop's timeout kill sites and by the resume replay, which carries a prior row's.
   stopEvidence?: StopEvidence,
+  // PR-456: a carried survivor measured on a database the server has since lost (a resume across a
+  // restart, or of a run that carried so). Rides ONLY on `mutant-carried`; the fold derives the
+  // `resumed-across-restart` caveat from it, never from a warning code.
+  acrossRestart?: boolean,
 ): number {
   const key = identityKeyOf(m);
   // PR-212 §2c (i): no remaining test covers this mutant, and a left-out company-writing test names its object,
@@ -16758,6 +17164,7 @@ export function record(
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
       ...(runner !== undefined ? { runner } : {}),
+      ...(acrossRestart === true ? { acrossRestart: true as const } : {}),
     });
   } else if (strandedSkip === true) {
     if (failureNote === undefined) {

@@ -231,6 +231,12 @@ export interface FoldedReport {
     readonly carriedMutants: number;
     readonly skippedStranded: number;
   };
+  /**
+   * PR-456: present when at least one `mutant-carried` event had `acrossRestart` (a survivor measured on a
+   * database the server has since lost). The caveat `resumed-across-restart` is derived from this, which is
+   * derived from the carried ROWS, never from the `resume-across-restart` warning's code.
+   */
+  readonly carriedAcrossRestart?: number;
   readonly timings: {
     readonly totalMs: number;
     readonly generateMutationSetMs: number;
@@ -581,6 +587,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const degradedWindows: DegradedWindow[] = [];
   const scoredSeq = new WeakMap<SessionOutcome, number>();
   let carriedCount = 0;
+  let carriedAcrossRestartCount = 0;
   let strandedSkipCount = 0;
 
   for (const e of events) {
@@ -846,6 +853,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "mutant-carried":
         carriedCount += 1;
+        if (e.acrossRestart === true) carriedAcrossRestartCount += 1;
         carriedFromRunIds.push(e.fromRunId);
         outcomes.push({
           mutant: e.mutant,
@@ -1150,6 +1158,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           },
         }
       : {}),
+    ...(carriedAcrossRestartCount > 0 ? { carriedAcrossRestart: carriedAcrossRestartCount } : {}),
     timings: { totalMs, generateMutationSetMs, deployMs, baselineMs },
     baselineTests,
     ...(testMethods !== undefined ? { testMethods } : {}),

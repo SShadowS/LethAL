@@ -50,7 +50,7 @@ import {
   preflightObserve,
   settleThrown,
 } from "./gate-warnings";
-import { assertKillsReproduced } from "./kill-reproduction";
+import { assertKillsReproduced, latestRunId } from "./kill-reproduction";
 import {
   NAMES_PROJECT_DIR,
   NAMES_SELECTOR_IDS,
@@ -176,7 +176,7 @@ async function runFenced(scratchRoot: string): Promise<SessionReport> {
       throw e;
     });
     // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
-    assertKillsReproduced("bcdev-names", report, store);
+    assertKillsReproduced("bcdev-names", report, store, latestRunId(store)); // a scratch store (R1241)
     checkGateWarnings("bcdev-names", "fenced", warnings);
     return report;
   } finally {

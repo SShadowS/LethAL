@@ -135,6 +135,9 @@ export interface CarriedVerdict {
   readonly coveringTests?: readonly string[];
   readonly coverageAttribution?: CoverageAttribution;
   readonly unplaceable?: boolean;
+  /** PR-456: the batch of the prior run this row came from. A survivor carried across a restart is
+   *  checked against THAT batch's baseline (`assertRestartRowBatch`). */
+  readonly batchIndex?: number;
 }
 
 export interface ResumeIndex {
@@ -214,6 +217,13 @@ export function buildResumeIndex(
    * re-run instead. Directional, like `stopHungSessions`, and not in the fingerprint.
    */
   killsMustReproduce = false,
+  /**
+   * PR-456: the prior run measured on another database (the server restarted and lost it). Then a
+   * `survived` row carries (after its batch's baseline compared equal); a kill or `timeout-killed` stays
+   * in the index only so its killer can seed R197's ledger, and is re-run; `known-survivor` is not
+   * carried (its history lend is today's `--skip-known-survivors` path).
+   */
+  acrossRestart = false,
 ): ResumeIndex {
   const seen = new Map<string, MutantVerdictRow[]>();
   // R391: the same rows grouped by (file, tuple), for rule 2.
@@ -254,6 +264,7 @@ export function buildResumeIndex(
     !(row.verdict === "timeout-killed" && row.stopEvidence === "v3-cpu-stop");
   const carryableRow = (row: MutantVerdictRow): boolean =>
     CARRYABLE_VERDICTS.has(row.verdict) &&
+    (!acrossRestart || row.verdict !== "known-survivor") &&
     (row.verdict !== "timeout-killed" || stopHungSessions) &&
     !unreproducedKill(row);
 
@@ -316,6 +327,7 @@ function carriedOf(row: MutantVerdictRow): CarriedVerdict {
   return {
     verdict: row.verdict,
     durationMs: row.durationMs,
+    batchIndex: row.batchIndex,
     ...(row.killingTest !== undefined ? { killingTest: row.killingTest } : {}),
     ...(row.failureNote !== undefined ? { failureNote: row.failureNote } : {}),
     ...(row.killingTestFailure !== undefined ? { killingTestFailure: row.killingTestFailure } : {}),
@@ -490,6 +502,8 @@ export interface SessionFingerprintInput {
   readonly v3CarryWalkOff?: true;
   /** PR-410: `LETHAL_V3_CARRY_SKIP=off`. Only when OFF, so every default digest is unchanged. */
   readonly v3CarrySkipOff?: true;
+  /** PR-472: `--no-kill-ledger`. Only when on, so every default digest is unchanged. */
+  readonly killLedgerOff?: true;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -586,6 +600,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.v3ReachPrune === true ? { v3ReachPrune: true } : {}), // PR-303
     ...(input.v3CarryWalkOff === true ? { v3CarryWalkOff: true } : {}), // PR-340
     ...(input.v3CarrySkipOff === true ? { v3CarrySkipOff: true } : {}), // PR-410
+    ...(input.killLedgerOff === true ? { killLedgerOff: true } : {}), // PR-472
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,

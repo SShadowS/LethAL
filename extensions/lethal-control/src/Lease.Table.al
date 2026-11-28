@@ -23,7 +23,9 @@ table 91006 "LC Lease"
         field(7; "Client Nonce"; Text[64]) { }
         field(8; "Op Kind"; Option)
         {
-            OptionMembers = none,publish,run;
+            // 1.0.0.31 (PR-478): `client-run` is a client-session op (ActivateForClient). Appended, so the
+            // stored ordinals of none/publish/run do not move. Only DeactivateForClient tombstones it.
+            OptionMembers = none,publish,run,"client-run";
         }
         field(9; "Op Attempt Id"; Text[64]) { }
         field(10; "Op Started At"; DateTime) { }
@@ -33,8 +35,8 @@ table 91006 "LC Lease"
         /// fresh claim and committed before phase 2 can hang.
         ///
         /// This exists because a watchdog cannot discover it any other way. MEASURED (Cronus281,
-        /// `scripts/r53-probe/`): a web-service session cannot see itself in `Active Session`
-        /// (2000000110), and the rows it can see carry ids of the opposite sign — so the session
+        /// `scripts/r53-probe/`): a web-service session cannot see itself in the session list
+        /// (Active Session was withdrawn: measured blind on bcwin), and the rows it can see carry ids of the opposite sign — so the session
         /// about to run a mutant has to write its own `SessionId()` down first, and that committed
         /// row survives the kill.
         ///
@@ -59,6 +61,9 @@ table 91006 "LC Lease"
         /// TryForceResetLease, which re-mints the generation. A client resuming a run across a
         /// generation change carries its verdicts only when this is unchanged.</summary>
         field(16; "Database Id"; Text[32]) { }
+        /// <summary>1.0.0.31 (PR-478, amendment 3): the bound client session of a `client-run` op marked its own end
+        /// (EndClientSession). Cleared by ActivateForClient. The only proof DeactivateForClient accepts.</summary>
+        field(17; "Op Session Ended"; Boolean) { }
     }
 
     keys

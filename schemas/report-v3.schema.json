@@ -95,7 +95,9 @@
               "withheld-kills",
               "isolated-recheck-kills",
               "workdate-changed",
-              "survivors-beside-unrun-tests"
+              "survivors-beside-unrun-tests",
+              "resumed-across-restart",
+              "kill-ledger-off"
             ]
           }
         },

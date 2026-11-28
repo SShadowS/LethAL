@@ -19,6 +19,10 @@ import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-a
 import { CONTROL_SELECTOR_FILENAME } from "../packages/schemata/src/project.ts";
 import { type Conn, DEMO_SERVER, type ServerOps, sha256Of } from "./bc-app-content.ts";
 import {
+  CONTROL_APP,
+  CONTROL_PINS,
+  CONTROL_SHA256,
+  DEMO_CONTROL,
   GATE_FIXTURES,
   HOST,
   HeldLeaseUnknownError,
@@ -38,6 +42,8 @@ import {
   buildLaunch,
   configFileName,
   continiaDependencyProblems,
+  controlBytesFor,
+  controlFor,
   decideContinia,
   describeLogin,
   downloadSymbols,
@@ -47,6 +53,7 @@ import {
   launchFileName,
   parseArgs,
   parseSecretEnv,
+  pinnedControl,
   readSecretFile,
   realContiniaOps,
   resolveLane,
@@ -102,14 +109,55 @@ describe("continiaDependencyProblems", () => {
   });
 
   // R-826b: bc4 is BC 29. It is named on its own; `all` stays the BC 28.4 servers.
-  test("bc4 is accepted by name, in every mode", () => {
-    expect(parseArgs(["--server", "bc4"]).servers).toEqual(["bc4"]);
-    expect(parseArgs(["--server", "bc4", "--predict"])).toMatchObject({ predict: true });
-    expect(parseArgs(["--server", "bc4", "--write-config-only"])).toMatchObject({
-      servers: ["bc4"],
-      writeConfigOnly: true,
+  test("bc4 and bc5 (BC 29) are accepted by name, in every mode", () => {
+    for (const s of ["bc4", "bc5"] as const) {
+      expect(parseArgs(["--server", s]).servers).toEqual([s]);
+      expect(parseArgs(["--server", s, "--predict"])).toMatchObject({ predict: true });
+      expect(parseArgs(["--server", s, "--write-config-only"])).toMatchObject({
+        servers: [s],
+        writeConfigOnly: true,
+      });
+    }
+    expect(() => parseArgs(["--server", "bc6"])).toThrow(/usage/);
+  });
+
+  // PR-462/PR-478: bc4 stays on PR-309's 1.0.0.29 while DOTests' pinned series runs; the rest get CONTROL_APP (1.0.0.31).
+  test("PR-478: bc4 keeps its own control pin (1.0.0.29); bc1-bc3 get CONTROL_APP (1.0.0.31)", () => {
+    expect(CONTROL_APP).toContain("1.0.0.31");
+    expect(controlFor("bc4")).toEqual({
+      path: "/coord/handoff/PR-309/control/LethAL_LethAL Control_1.0.0.29.app",
+      sha256: "545efbeaad6d050ea768a257d20a7612c22cd17c3d25567b0b7ab4d5726df578",
     });
-    expect(() => parseArgs(["--server", "bc5"])).toThrow(/usage/);
+    for (const s of ["bc1", "bc2", "bc3"] as const) {
+      expect(controlFor(s)).toEqual({ path: CONTROL_APP, sha256: CONTROL_SHA256 });
+    }
+    // bc5 carries the same pinned series' second halves, so it is pinned with bc4.
+    expect(controlFor("bc5")).toEqual(controlFor("bc4"));
+    expect(Object.keys(CONTROL_PINS)).toEqual(["bc4", "bc5"]);
+    // The pin's sha is the one checked: these bytes pass against their own pin and not the default.
+    const bytes = Buffer.from("not a real app");
+    const pin = { path: "/x/c.app", sha256: sha256Of(bytes) };
+    expect(pinnedControl(pin.path, () => bytes, pin.sha256)).toBe(bytes);
+    expect(() => pinnedControl(pin.path, () => bytes)).toThrow(/refusing to publish it/);
+  });
+
+  test("PR-462: the real deps, bc-republish's control and bc-demo all read the server's own pin", () => {
+    // The real setup publishes controlBytesFor's bytes (no wrapper that could drop the server).
+    expect(REAL_DEPS.controlBytes).toBe(controlBytesFor);
+    const asked: string[] = [];
+    const read = (p: string) => {
+      asked.push(p);
+      return Buffer.from("not the pinned build");
+    };
+    expect(() => controlBytesFor("bc4", read)).toThrow(/refusing to publish it/);
+    expect(() => controlBytesFor("bc2", read)).toThrow(/refusing to publish it/);
+    expect(asked).toEqual([controlFor("bc4").path, CONTROL_APP]);
+    // bc-republish's `control` goes through the same function, never CONTROL_APP directly.
+    const republish = readFileSync(join(import.meta.dir, "bc-republish.ts"), "utf8");
+    expect(republish).toContain("controlBytesFor(args.server)");
+    expect(republish).not.toMatch(/\bCONTROL_APP\b|\bCONTROL_SHA256\b/);
+    // bc-demo stays on the same 1.0.0.29 build as bc4.
+    expect(DEMO_CONTROL).toEqual(controlFor("bc4"));
   });
 
   test("`all` is bc1, bc2 and bc3 only, in both modes, and the usage says so", () => {
@@ -119,11 +167,16 @@ describe("continiaDependencyProblems", () => {
       "bc2",
       "bc3",
     ]);
-    expect(() => parseArgs(["--server", "bc5"])).toThrow(/`all` is bc1, bc2 and bc3 \(BC 28\.4\)/);
+    expect(() => parseArgs(["--server", "bc6"])).toThrow(/`all` is bc1, bc2 and bc3 \(BC 28\.4\)/);
   });
 
-  test("--with-continia and --accept-build are bc3's: bc4 refuses them by name", () => {
-    expect(() => parseArgs(["--server", "bc4", "--with-continia"])).toThrow(/bc3 only/);
+  test("--with-continia and --accept-build are bc3's: bc4 and bc5 refuse them by name", () => {
+    expect(() => parseArgs(["--server", "bc4", "--with-continia"])).toThrow(
+      /bc3 only \(bc4 is BC 29\)/,
+    );
+    expect(() => parseArgs(["--server", "bc5", "--with-continia"])).toThrow(
+      /bc3 only \(bc5 is BC 29\)/,
+    );
     expect(parseArgs(["--server", "bc3", "--with-continia"]).withContinia).toBe(true);
   });
 });
@@ -207,6 +260,7 @@ describe("config writer", () => {
       bc2: { odata: 7148, dev: 7149, api: 7152 },
       bc3: { odata: 7248, dev: 7249, api: 7252 },
       bc4: { odata: 7448, dev: 7449, api: 7452 },
+      bc5: { odata: 7548, dev: 7549, api: 7552 },
     });
     const cfg = buildConfig("bc4", login, paths, "sandbox-app") as {
       bcdev: Record<string, unknown>;
@@ -219,6 +273,20 @@ describe("config writer", () => {
     });
     expect(configFileName("bc4")).toBe("lethal.config.bc4.json");
     expect(launchFileName("bc4")).toBe("launch.bc4.json");
+  });
+
+  test("bc5's config names bc5's three ports (a second BC 29, 2026-11-27)", () => {
+    const cfg = buildConfig("bc5", login, paths, "sandbox-app") as {
+      bcdev: Record<string, unknown>;
+    };
+    expect(cfg.bcdev).toMatchObject({
+      server: `${HOST}:7549`,
+      port: 7549,
+      baseUrl: `${HOST}:7548/BC`,
+      apiBaseUrl: `${HOST}:7552/BC`,
+    });
+    expect(configFileName("bc5")).toBe("lethal.config.bc5.json");
+    expect(launchFileName("bc5")).toBe("launch.bc5.json");
   });
 
   test("bc2's config names bc2's three ports and the W1 company", () => {
@@ -969,6 +1037,7 @@ describe("--write-config-only: configs from the secret file, no server call, no 
       continiaReads: 0,
       doctor: 0,
       take: 0,
+      controlServers: [] as string[],
     };
     const local = new Map<string, Buffer>();
     const resident = new Map<string, { pkg: Buffer; version: string }>();
@@ -1026,7 +1095,10 @@ describe("--write-config-only: configs from the secret file, no server call, no 
         release: async () => {},
       }),
       downloadSymbol: async () => appPkg("System", "sys", "28.4.1.1", "Microsoft"),
-      controlBytes: () => appPkg("LethAL Control", "lethal-control-id", "1.0.0.23"),
+      controlBytes: (server) => {
+        calls.controlServers.push(server);
+        return appPkg("LethAL Control", "lethal-control-id", "1.0.0.23");
+      },
       compile: async (_c, step) =>
         [step.target, ...step.dependents].map((dir) => ({
           dir,
@@ -1093,6 +1165,30 @@ describe("--write-config-only: configs from the secret file, no server call, no 
     expect(f.calls.take).toBe(1);
     expect(code).toBe(0);
     if (found.chosen !== undefined) chmodSync(found.chosen.dir, 0o755);
+  });
+
+  test("PR-462: the run asks for THIS server's control build (bc4 keeps its own pin)", async () => {
+    for (const server of ["bc4", "bc2"] as const) {
+      const f = fleet(false);
+      const h = harness(GOOD, f.over);
+      expect(await h.go(["--server", server, "--lane", "bugs", "--predict"])).toBe(0);
+      expect(f.calls.controlServers).toEqual([server]);
+    }
+  });
+
+  test("PR-462: each server's written config names its own control symbol (bc4: 1.0.0.29)", async () => {
+    for (const server of ["bc4", "bc2"] as const) {
+      const h = harness(GOOD);
+      await h.go(["--server", server, "--write-config-only"]);
+      const cfg = JSON.parse(
+        readFileSync(
+          join(h.repo, "fixtures", "sandbox-app", `lethal.config.${server}.json`),
+          "utf8",
+        ),
+      ) as { bcdev: { controlSymbolPath: string } };
+      expect(cfg.bcdev.controlSymbolPath).toBe(controlFor(server).path);
+    }
+    expect(controlFor("bc4").path).not.toBe(controlFor("bc2").path);
   });
 
   test("--predict --with-continia reads the Continia state and publishes nothing", async () => {

@@ -48,7 +48,7 @@ import {
   preflightObserve,
   settleThrown,
 } from "./gate-warnings";
-import { assertKillsReproduced } from "./kill-reproduction";
+import { assertKillsReproduced, latestRunId } from "./kill-reproduction";
 import {
   WRAPPED_PROJECT_DIR,
   WRAPPED_SELECTOR_IDS,
@@ -200,6 +200,7 @@ async function runLeg(
       `bcdev-wrapped/${coverageMode === "fenced" ? "fenced" : "hub"}`,
       report,
       store,
+      latestRunId(store), // a scratch store (R1241)
     );
     checkGateWarnings("bcdev-wrapped", coverageMode === "fenced" ? "fenced" : "hub", collected);
     return { report, warnings };

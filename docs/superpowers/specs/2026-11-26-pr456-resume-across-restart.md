@@ -27,6 +27,129 @@ lethal-code, 2026-11-26.
 - **(d) not yet measured.** No two stores share a batch hash with a stored baseline on both sides (email2 was paused
   before its snapshot). It runs on the next restart.
 
+## The live leg's pre-commitment (PR-468, 2026-11-27, written BEFORE the restart)
+
+- **Head and prior run:** PR-468 head 1f0027085 (all 11 legs and CI green).
+  - Prior run: `/coord/handoff/PR-468/live/store.sqlite`, run 1, a scoped `lethal run --backend bcdev` of
+    `fixtures/sandbox-app` on bc1.
+  - It was stopped by SIGTERM at 07:24:46Z after 11 scored, so it is UNFINISHED (R955).
+  - One batch (0), with its baseline snapshot stored.
+  - Scored before the stop: M0001-M0003 killed (IsOverBudget, killer OverBudgetDetected); M0004 and M0005 survived
+    (ClampPercent); M0021-M0026 no-coverage (Sandbox Pricing). The other 15 (M0006-M0020) were never scheduled.
+- **The steps:**
+  1. the owner restarts bc1 (a kraken `bc-restart` ask), which gives a new generation and a new database id;
+  2. `bc-linux-setup.ts --server bc1`;
+  3. a lease;
+  4. `lethal run … --resume-run 1` on the SAME store and config.
+- **Predicted, per mutant:**
+  - **Carried across the restart:** EXACTLY M0004 and M0005. The `resume-across-restart` event for batch 0 says
+    "carried 2 survivor(s)", and the report carries the `resumed-across-restart` caveat.
+  - **Re-run, killer seeded:** M0001, M0002 and M0003, each re-scored `killed`. A `killingTest`-only difference is
+    allowed (R197, D5).
+  - **No-coverage:** M0021-M0026 are recorded no-coverage; 0 are executed.
+  - **Fresh:** M0006-M0020 are scheduled and scored.
+  - **Every one of the 26 final verdicts** equals `packages/runner/itest/bcdev.baseline.json`'s (17 survived, 3
+    killed, 6 no-coverage).
+- **BLOCK if:**
+  - anything else carries;
+  - a kill carries;
+  - the batch's compare says "differs" (that would contradict probe (d); investigate before merge);
+  - any verdict differs from the frozen figures.
+
+## r5 (PR-468's spec review against today's code; overrides r4 and r3 where they differ)
+
+1. **(BLOCK) Strands stay skipped, exactly as today (D1).** "The new branch" item 5 and the red test "a prior strand
+   is re-run, not skipped" are VOID.
+   - The red test instead: a prior `quarantined:` row outside a degraded window, then a generation and id change →
+     still skipped at step 1b'.
+2. **The same server only.** The new branch also requires `prior.resourceKey !== null && prior.resourceKey ===
+   current.resourceKey`. Otherwise it refuses as today: a run on bc1 is never carried onto bc2 "across a restart".
+3. **`known-survivor` does not carry in restart mode.** Only `survived` does. History (`priorSurvivorKeys`) still
+   lends as today.
+4. **Rows carry their batch.**
+   - `batchIndex` is threaded into `MutantVerdictRow` and `CarriedVerdict`.
+   - A survivor carries only if `snapshotBatchHash(prior, row.batchIndex)` equals the hash of the snapshot that was
+     compared equal. Otherwise it fails loudly (a caller-contract violation), never carries.
+5. **The compare site:** inside `scoreBatch`, after `baseline-batch-finished`, the R955 `budget-in-baseline` return,
+   the R139 refusal and R738/R740, and BEFORE `input.select(...)`.
+   - In restart mode `allowReuse = false`, so every batch has a FRESH baseline to compare.
+   - A new store query finds the prior snapshot by (run, batch hash). It follows the PR-66 reuse row, returns the
+     payload, and applies the suspect, lost and degraded exclusions.
+   - `ScoreBatchInput.select` gets the decision (carry allowed for this batch, or the named reason).
+6. **Equal, made exact:**
+   - the batch-level `commonWorkDate` is present on both sides and equal;
+   - per test, a WorkDate missing on BOTH sides for a `skip` is equal, and a one-sided absence differs;
+   - coverage is compared as the whole stored `CoverageMap` (entries as a SET, plus granularity, `overloadIndex`
+     and `namingGaps`).
+   - **Before the live leg,** the build's OWN compare function is run over the two stores of probe (d) (email3 run 1
+     against bugs' after-restart run) and must say EQUAL.
+7. **The offline prediction, now from an INDEPENDENT oracle** (`/coord/handoff/PR-468/split.ts`, counts only):
+   - **The oracle's rules:** R646 as documented (a non-empty faced set containing every covering test, the
+     baseline's refused skips left out); identity by (ast_hash, codeunit, procedure, operator, identity_ordinal); a
+     kill is seedable when the killer METHOD matches exactly one covering test, it reproduced, and it has no
+     ledger-order note.
+   - **On email3 run 1: 300 of 300 survivors CARRY; 302 of 302 kills are SEEDABLE.** Re-run: 256 errors. The 1,015
+     no-coverage are recorded as no-coverage, 0 executed.
+   - **The build's check:** an offline harness runs the BUILT decision code (the resume index plus the restart
+     branch) over a read-only copy of email3's store, with the batch declared equal and the apps declared matching.
+     It must give carried = 300 and seeded = 302. Each difference is explained by name before merge, or it is a
+     BLOCK.
+   - The repo fixture tests use invented shapes, one case per filter: R646, refused tests, the batch gate,
+     `known-survivor`, degraded or lost rows, and a slowdown-note window.
+8. **The caveat `resumed-across-restart`, the full ripple:**
+   - a fold accumulator and a `buildReport` input, DERIVED from carried-across-restart rows, not from the warning code;
+   - `EXPLAIN_SCHEMA_VERSION` 35 → 36, keeping the frozen `schemas/explain-v35.schema.json`, adding v36, a row in
+     `schemas/README.md`, and the history in `explain.ts`;
+   - the pinned caveat enum in `schemas.test.ts`;
+   - `generate-schemas` (report-v3);
+   - `CAVEAT_INTERPRETATIONS`, with the counts in `interpretation.test.ts` (39 → 40) and `report.test.ts`;
+   - `docs/using-lethal-from-an-agent.md` (the caveat list, and R680/R969's "a different id refuses" paragraph).
+9. **The label survives a later resume.** A run that carried across a restart records a flag on its run row. A
+   resume of THAT run sets the caveat too.
+10. **The refusal side, updated:**
+    - R680's tests in `orchestrator.test.ts`, the `ServerGenerationChangedError` text and `resume-reusing-run`'s
+      restart-mode wording;
+    - a superseded note in R1012 and R959;
+    - CHANGELOG.
+    - A re-run kill that is seeded and then killed live counts once in R197's ledger: the seed is skipped when the
+      same kill is recorded live.
+
+## r4: the build pre-commitment (PR-468, 2026-11-27)
+
+- **The GO conditions now hold:**
+  - **(a) PASS** across three restarts.
+  - **(b) passes on master** since PR-457 (ed39f0203): System is hashed by CONTENT (`P content c1:`). On the
+    2026-11-27 restart, 21 of 22 packages were byte-equal and System was content-equal (486/486). The partner `X`
+    lines still hash bytes, and they were byte-equal.
+    - A prior run recorded by a client BEFORE PR-457 has the raw-bytes `P` line, so its `test_app_deps` differs and
+      the resume REFUSES as today, by name. That is fail-closed and stated, not migrated.
+  - **(d) PASS:** batch 16cdc30fedce, 667/667 tests equal on outcome, WorkDate and coverage across the restart
+    (`/coord/handoff/PR-456/probes/result-2026-11-27.md`, compare v2).
+  - **(c)** was measured in r2.
+- **Since r3:** R1228's slowdown STOP (PR-466, held) writes the SAME `degraded_windows` row. So "never carry from a
+  degraded window" covers a slowdown window with no extra code. A test pins it with a window whose note is a
+  slowdown's.
+- **Verdict evidence (bugs, Email scope):** 766 of 766 covered verdicts equal across restarts #1-#3. The one
+  difference was a confirm budget error that re-scored killed, by the same killer.
+- **The build is r3 exactly:** items 1-4, 6 and 7, with r3's D1-D7. Item 5 is deleted; strands stay skipped.
+- **The offline prediction (pre-committed) on PR-427-shaped data:** email3 run 1 (`/coord/handoff/PR-427/email3`):
+  one batch (16cdc30fedce) whose baseline probe (d) found equal.
+  - It has 300 survived, 302 killed (all with a killing test), 256 error, 1,015 no-coverage, 0 strands and 1
+    snapshot.
+  - **A resume across a lost database, with equal apps** (in a fixture, the apps check is satisfied), must carry
+    EXACTLY the survivors that pass R646 (a non-empty faced list covering every covering test). That is ≤ 300; the
+    exact count is the R646 predicate over the stored rows, computed by the test's oracle, not by the code under
+    test.
+  - It must re-run all 302 kills, each with its stored killer seeded first, plus all 256 errors and all 1,015
+    no-coverage.
+  - Any other split is a BLOCK.
+  - The fixture is built from the store's COUNTS and shapes (invented ids and names). No DO text enters the repo.
+- **The live end-to-end leg:** a scoped bcdev run on a leased bc server, then a restart, then
+  `bc-linux-setup.ts`, then `--resume-run`.
+  - The restart is the OWNER's (a kraken ask, `--kind bc-restart`).
+  - Its pre-commitment names at least one carried survivor and at least one re-run kill by mutant id, read from that
+    run's own store BEFORE the restart (D5).
+
 ## r3 changes (delta review)
 
 - **(D1, BLOCK) Item 5 is DELETED. Strand skipping stays exactly as it is today.**

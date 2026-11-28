@@ -167,6 +167,12 @@ export type RunEventInput =
        * `mutant-carried`/`mutant-skipped-stranded` events, which is what lets Task 3 delete the
        * orchestrator's own `resumedMutantCount`/`strandedSkippedCount` counters rather than
        * keeping two accountings of the same quantity.
+       *
+       * PR-456: across a restart that lost the database `carryableCount` OVERSTATES what may carry: it
+       * counts the prior kills too (kept in the index only so their killers can seed R197's ledger; they
+       * are re-run), and a survivor carries only when its batch's fresh baseline equals the prior run's.
+       * The `resume-reusing-run` warning says so in words; the `resume-across-restart` warning, once per
+       * batch, says what carried.
        */
       readonly type: "resume-resolved";
       readonly fromRunId: number;
@@ -583,6 +589,16 @@ export type RunEventInput =
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly runner?: RunnerKind;
+      /**
+       * PR-456: this survivor was measured on a database the server has since lost (carried across a
+       * restart), or on a run that carried one. The fold derives the caveat `resumed-across-restart`
+       * from rows with this flag, never from the `resume-across-restart` warning's code.
+       *
+       * The flag is set on EVERY carried row of a resume whose prior run carried across a restart (a later
+       * resume of it), not only on the rows that themselves crossed the restart. So per row it OVERSTATES
+       * (a survivor the prior run measured itself is flagged too); the run-level caveat is true.
+       */
+      readonly acrossRestart?: true;
     }
   | {
       /**

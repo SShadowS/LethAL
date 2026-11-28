@@ -10,15 +10,18 @@ import {
   DOTNET_EXCEPTION_RSA,
   DOTNET_NO_OBJECT,
   EDGE_REFUSALS,
+  ERRORS_TEMP,
   FAMILIES,
   FIELDREF_CONVERT,
   FORMAT_EVALUATE,
   FORMAT_REGION,
   type Family,
   GET_URL,
+  IO_STREAMS,
   JSON_TEXT,
   LANGUAGE_REGION,
   NO_CLIENT,
+  NUMBERS_TEXT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
   PUBAPP_FLOWFIELD,
@@ -1780,8 +1783,7 @@ describe("PR-375: the zip-blob family", () => {
 describe("PR-431: the edge-refusals family", () => {
   const f = EDGE_REFUSALS;
 
-  test("last of FAMILIES (place 27, BC-check number 28): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("edge-refusals");
+  test("place 27 of FAMILIES (BC-check number 28): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(26);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051028");
   });
@@ -2087,7 +2089,16 @@ describe("PR-417: BC answers measured on Linux BC", () => {
       (f) => f.cultureData === "all" || f.cells.some((c) => c.depends === "locale"),
     );
     expect(culture.map((f) => f.name).sort()).toEqual(
-      [DATES_FORMULAS, FORMAT_EVALUATE, FORMAT_REGION, JSON_TEXT, LANGUAGE_REGION, RECORD_FILTERS]
+      [
+        DATES_FORMULAS,
+        FORMAT_EVALUATE,
+        FORMAT_REGION,
+        IO_STREAMS,
+        JSON_TEXT,
+        LANGUAGE_REGION,
+        NUMBERS_TEXT,
+        RECORD_FILTERS,
+      ]
         .map((f) => f.name)
         .sort(),
     );
@@ -2120,5 +2131,229 @@ describe("PR-417: BC answers measured on Linux BC", () => {
       "209 of 209 cells of format-region are culture data measured on Linux BC (bc4",
     );
     expect(note).toContain("file none upstream unless Windows BC gives the same answer");
+  });
+});
+
+describe("PR-487: the errors-temp family", () => {
+  const f = ERRORS_TEMP;
+  const al = (): string => emitApp(f)["src/Cells.al"] ?? "";
+
+  // Red: insert the family before edge-refusals, or drop it from FAMILIES.
+  test("place 28 of FAMILIES (BC-check number 29): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(27);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051029");
+  });
+
+  // the 67 cells bc1 (BC 28.4) and edge-e5176a9fd ran (/coord/handoff/PR-487/joined.tsv)
+  test("67 cells with distinct names, 3 support codeunits right after the last cell", () => {
+    expect(f.cells).toHaveLength(67);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(67);
+    const last = BASE_ID + f.cells.length;
+    expect(al()).toContain(`codeunit ${last + 1} "ET Helper"`);
+    expect(al()).toContain(`codeunit ${last + 2} "ET Run Fail"`);
+    expect(al()).toContain(`codeunit ${last + 3} "ET Run Ok"`);
+    expect(f.extraIds).toBe(3);
+  });
+
+  // Red: a DeleteAll on a real table in any cell is a write before Codeunit.Run's return value is used (BC then refuses
+  // the Run); cells count their own key range instead, and every range is distinct.
+  test("no cell deletes from a real table, and every key range a cell writes is its own", () => {
+    for (const c of f.cells) {
+      const body = [...(c.setup ?? []), c.call].join("\n");
+      expect({
+        cell: `${c.type}/${c.method}`,
+        realDeleteAll: /\b(Row|Row2|RA|RT)\.DeleteAll/.test(body),
+      }).toEqual({
+        cell: `${c.type}/${c.method}`,
+        realDeleteAll: false,
+      });
+    }
+    const ranges = f.cells.flatMap((c) =>
+      (c.setup ?? []).flatMap((s) =>
+        [...s.matchAll(/Row2\.SetRange\("Key", (\d+), \d+\)/g)].map((m) => m[1]),
+      ),
+    );
+    expect(ranges.length).toBeGreaterThan(10);
+    expect(new Set(ranges).size).toBe(ranges.length);
+  });
+
+  /** Each `Format(...)` argument list in a cell's statements, with nested parentheses kept. */
+  const formatArgs = (s: string): string[] => {
+    const out: string[] = [];
+    for (let i = s.indexOf("Format("); i >= 0; i = s.indexOf("Format(", i + 1)) {
+      let depth = 0;
+      for (let j = i + "Format".length; j < s.length; j++) {
+        if (s[j] === "(") depth++;
+        if (s[j] === ")" && --depth === 0) {
+          out.push(s.slice(i + "Format(".length, j));
+          break;
+        }
+      }
+    }
+    return out;
+  };
+  // Red (each separately): `Format(R)` without `, 0, 9`; `R` itself as a V:[...] argument; a bare HasCollectedErrors() or
+  // IsTemporary: each would follow the session's language (Yes/No). The two enum captions of Info.Defaults are the one
+  // measured exception (R1236 says so).
+  test("every Format in a cell is Format(x, 0, 9) or a named enum caption, and no Boolean is printed bare", () => {
+    for (const c of f.cells) expect(c.depends).toBeUndefined();
+    const stmts = f.cells.map((c) => [...(c.setup ?? []), c.call].join("\n")).join("\n");
+    const args = formatArgs(stmts);
+    // every Format the 67 cells hold (a scan that finds none would make the check below vacuous)
+    expect(args.length).toBe(27);
+    const loose = args.filter(
+      (a) => !a.endsWith(", 0, 9") && a !== "EI.ErrorType" && a !== "EI.Verbosity",
+    );
+    expect(loose).toEqual([]);
+    expect(stmts).not.toMatch(/Error\('V:\[[^']*'(, [^,;]+)*, R[,)]/);
+    expect(stmts).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
+    expect(stmts).not.toMatch(/(?<!Format\()\b\w+\.(IsTemporary|Collectible)\b(?!\()/);
+  });
+});
+
+describe("PR-488: the numbers-text family", () => {
+  const f = NUMBERS_TEXT;
+  const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
+
+  // Red: insert the family before errors-temp, or drop it from FAMILIES.
+  test("place 29 of FAMILIES (BC-check number 30): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(28);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051030");
+  });
+
+  // the 120 cells bc1 (BC 28.4) and edge-e5176a9fd ran (/coord/handoff/PR-488/joined.tsv)
+  test("120 cells with distinct names, 2 support codeunits right after the last cell", () => {
+    expect(f.cells).toHaveLength(120);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(120);
+    const al = emitApp(f)["src/Cells.al"] ?? "";
+    expect(al).toContain(`codeunit ${BASE_ID + 121} "NT Helper"`);
+    expect(al).toContain(`codeunit ${BASE_ID + 122} "NT Run Ok"`);
+    expect(f.extraIds).toBe(2);
+  });
+
+  // Red: mark a non-case cell `locale`, or drop `locale` from a case cell: R1210's filing rule would read the wrong cells.
+  test("exactly the 7 case-mapping cells are locale cells", () => {
+    expect(f.cells.filter((c) => c.depends === "locale").map((c) => c.type)).toEqual(
+      Array(7).fill("NT Case"),
+    );
+    expect(f.cells.filter((c) => c.type === "NT Case")).toHaveLength(7);
+  });
+
+  // Red: a cell answering a bare number (`nt(..., "D")`): `Error('V:[%1]', D)` formats it in the session's culture.
+  test("every answer is a Format(x, 0, 9), a bracketed text, or a named text source", () => {
+    const TEXT_SOURCES = new Set([
+      "T5",
+      "C5",
+      "GetLastErrorText()",
+      "H.CollectOneCount()",
+      "H.HasCollectedInRun()",
+    ]);
+    for (const c of f.cells) {
+      const expr = c.call.replace(/^Error\('V:\[%1\]', /, "").replace(/\);$/, "");
+      const ok = expr.startsWith("Format(") || expr.startsWith("'[' + ") || TEXT_SOURCES.has(expr);
+      expect({ cell: `${c.type}/${c.method}`, expr, ok }).toEqual({
+        cell: `${c.type}/${c.method}`,
+        expr,
+        ok: true,
+      });
+    }
+  });
+
+  // Red: a Format without `, 0, 9` (a number in the session's format, R1210), or a call to Evaluate.
+  test("every Format is Format(x, 0, 9) and no cell calls Evaluate", () => {
+    let n = 0;
+    for (const c of f.cells) {
+      for (const m of stmts(c).matchAll(/Format\(/g)) {
+        n++;
+        let depth = 0;
+        const from = (m.index ?? 0) + "Format".length;
+        for (let j = from; j < stmts(c).length; j++) {
+          if (stmts(c)[j] === "(") depth++;
+          if (stmts(c)[j] === ")" && --depth === 0) {
+            expect({
+              cell: `${c.type}/${c.method}`,
+              f9: stmts(c)
+                .slice(from, j + 1)
+                .endsWith(", 0, 9)"),
+            }).toEqual({
+              cell: `${c.type}/${c.method}`,
+              f9: true,
+            });
+            break;
+          }
+        }
+      }
+      expect(stmts(c)).not.toContain("Evaluate(");
+    }
+    expect(n).toBeGreaterThan(40);
+  });
+});
+
+describe("PR-489: the io-streams family", () => {
+  const f = IO_STREAMS;
+  const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
+
+  // Red: insert the family before numbers-text, or drop it from FAMILIES.
+  test("last of FAMILIES (place 30, BC-check number 31): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("io-streams");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(29);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051031");
+  });
+
+  // the 65 cells bc1 (BC 28.4) and edge-e5176a9fd ran (/coord/handoff/PR-489/joined.tsv)
+  test("65 cells with distinct names, the helper right after the last cell", () => {
+    expect(f.cells).toHaveLength(65);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(65);
+    expect(emitApp(f)["src/Cells.al"] ?? "").toContain(`codeunit ${BASE_ID + 66} "IO Helper"`);
+    expect(f.extraIds).toBe(1);
+  });
+
+  // Red: drop `locale` from a code-page cell, or mark an ASCII or UTF cell `locale` (R1210 would read the wrong cells).
+  test("exactly the 7 code-page cells are locale cells", () => {
+    expect(f.cells.filter((c) => c.depends === "locale").map((c) => c.method)).toEqual([
+      "Windows ae letter",
+      "MSDos ae letter",
+      "UTF8 ae read as Windows",
+      "UTF8 ae read without encoding",
+      "default ae bytes",
+      "To ae Windows",
+      "Export Xml",
+    ]);
+  });
+
+  // Red: a real-table DeleteAll, a reused key, or a Format without `, 0, 9`.
+  test("no real-table DeleteAll, every real key its own, every Format is format 9", () => {
+    const keys: string[] = [];
+    for (const c of f.cells) {
+      expect(stmts(c)).not.toMatch(/\b(B|Item)\.DeleteAll/);
+      // every key from ioKey() is 4 digits; an item code is 'X' + key + a row digit, so take the 4-digit stem everywhere
+      const own = new Set<string>();
+      for (const m of stmts(c).matchAll(/(?:InsertBlob\(|B\.Id := |B\.Get\(|'X|<Code>X)(\d{4})/g))
+        own.add(m[1] ?? "");
+      for (const k of own) keys.push(`${c.method}:${k}`);
+      for (const m of stmts(c).matchAll(/Format\(/g)) {
+        let depth = 0;
+        const s = stmts(c);
+        const from = (m.index ?? 0) + "Format".length;
+        for (let j = from; j < s.length; j++) {
+          if (s[j] === "(") depth++;
+          if (s[j] === ")" && --depth === 0) {
+            expect({ cell: c.method, f9: s.slice(from, j + 1).endsWith(", 0, 9)") }).toEqual({
+              cell: c.method,
+              f9: true,
+            });
+            break;
+          }
+        }
+      }
+    }
+    const byKey = new Map<string, Set<string>>();
+    for (const k of keys) {
+      const [cell, key] = k.split(":") as [string, string];
+      byKey.set(key, (byKey.get(key) ?? new Set()).add(cell));
+    }
+    // 7 Blob-field cells and 5 XMLport cells take a key each (the malformed and empty imports write none)
+    expect(byKey.size).toBe(12);
+    for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });
   });
 });

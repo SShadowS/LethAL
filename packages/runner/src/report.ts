@@ -296,7 +296,11 @@ export type Caveat =
   // R1131: at least one row was not scored because its start WorkDate moved from the batch's baseline.
   | "workdate-changed"
   // PR-381 (R1197), PR-387: survivors in an al-runner-v3 or bcdev run with tests not run at baseline.
-  | "survivors-beside-unrun-tests";
+  | "survivors-beside-unrun-tests"
+  // PR-456 (R1229): a survivor was carried across a server restart that lost the database.
+  | "resumed-across-restart"
+  // PR-472 (R197, R1174): `--no-kill-ledger` was on (bcdev only).
+  | "kill-ledger-off";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -848,6 +852,44 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "no score changed. A test that ran and failed on its own is not counted here: it is red on BC " +
       "too.",
     basis: "R1197",
+  },
+  "kill-ledger-off": {
+    meaning:
+      "`--no-kill-ledger` was on: every mutant's covering tests ran in the no-ledger order " +
+      "(narrowest test first, then the name), not in the order that puts tests that already " +
+      "killed first (R197). R1174's second walk of a survivor is not needed, because the two " +
+      "orders are the same. Verdicts may differ from the default in either direction: the flag " +
+      "uses one fixed order, the same for every mutant and free of earlier kills, while the " +
+      "default reorders by earlier kills. A test whose outcome depends on the tests run before it " +
+      "can therefore pass in one order and fail in the other. `killingTest` and the cost also move. " +
+      "A kill can take more tests to reach. Measured upper " +
+      "bounds, in seconds of test time on read-only copies of real runs: dropping the ledger adds " +
+      "at most 901 (Email), 878 (Queue), 69 (Subs), 1,533 (narrow Tests-Misc) and 8,232 (E-Documents) " +
+      "to kills, while the second walk it saves cost 2,911, 2,849, 1,761, 4,495 and 0. It suits " +
+      "files with many survivors, and is worse where kills ride on long tests in other codeunits.",
+    entailedNegative:
+      "Neither order is the one the project's CI runs (a test codeunit's declared order; R1235). " +
+      "The same tests are tried in another order, and a mutant is `survived` only after every " +
+      "covering test passed in that order. A verdict that differs from a default run's rests on a " +
+      "test whose outcome depends on the tests run before it, not on the mutant alone.",
+    basis: "R1174",
+  },
+  "resumed-across-restart": {
+    meaning:
+      "At least one SURVIVOR in this report was carried across a server restart that lost the " +
+      "database (the server's generation and database id both changed since the run it was measured in). " +
+      "That survivor was measured on the EARLIER database. Before it was carried, the apps were checked " +
+      "(the test app, its dependencies and the source, as for any resume) and its batch's fresh baseline " +
+      "was compared with the earlier run's, test by test, outcome, start WorkDate and coverage, and was " +
+      "equal. That equality was checked on the UNMUTATED baseline only. Kills were not carried: they were " +
+      "re-run on the current database. Strands stay skipped, as on any resume.",
+    entailedNegative:
+      "Not a claim that the carried survivors are wrong, and not a reliability downgrade like " +
+      "`baseline-red`. It corrects the `resumed` caveat's remark that the exposure is the same as every " +
+      "run's: here the data under the survivors may have changed in ways no baseline test observes (a " +
+      "value that decides a branch inside a procedure, or rows left over since the earlier setup). A " +
+      "survivor can only hide a kill that way, never invent one; re-running without `--resume` removes it.",
+    basis: "R1229",
   },
 };
 
@@ -3553,6 +3595,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // R631 - see CAVEAT_INTERPRETATIONS["project-symlink-skipped"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "project-symlink-skipped"))
     caveats.push("project-symlink-skipped");
+  // PR-472 - see CAVEAT_INTERPRETATIONS["kill-ledger-off"]. From the warning itself: no field.
+  if (events.some((e) => e.type === "warning" && e.code === "kill-ledger-off"))
+    caveats.push("kill-ledger-off");
   // R922 (4) - see CAVEAT_INTERPRETATIONS["al-runner-v3-serve-default-fallback"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "al-runner-v3-serve-default-fallback"))
     caveats.push("al-runner-v3-serve-default-fallback");
@@ -3615,6 +3660,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if ((input.groupedCalls ?? 0) > 0) caveats.push("session-warm");
   // See CAVEAT_INTERPRETATIONS.resumed for what this caveat means to a reader.
   if (input.resumedFrom !== undefined) caveats.push("resumed");
+  // PR-456: derived from the carried ROWS (`mutant-carried` with `acrossRestart`), never the warning code.
+  if (input.carriedAcrossRestart !== undefined) caveats.push("resumed-across-restart");
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
   if (input.unplaceableCount > 0) caveats.push("attribution-unplaceable");
   // R72 — see CAVEAT_INTERPRETATIONS["platform-artifact-kills"]. Built from the mutant rows just
@@ -4520,6 +4567,12 @@ export function renderConsole(r: SessionReport): string {
           ? ` ${r.resumedFrom.skippedStranded} mutant(s) were NOT re-run: a prior run's execution of them could not be confirmed complete and stranded the tier, which is what a mutant that never terminates does every time — and it would block every mutant behind it. They are recorded as errors and excluded from the score, NOT scored as survived. Pass --retry-stranded to attempt them.`
           : ""
       }`,
+    );
+  }
+  // PR-456: survivors carried across a restart that lost the database were measured on the EARLIER database.
+  if (r.validity.caveats.includes("resumed-across-restart")) {
+    lines.push(
+      `RESUMED ACROSS A RESTART: at least one survivor was measured on the database the server has since lost; its batch's baseline equalled the earlier run's, which was checked on the unmutated baseline only. Kills were re-run (validity.caveats "resumed-across-restart", R1229).`,
     );
   }
   // PR-247: one line. It never says "remove": a rarely-killing test can be a mutant's only killer.

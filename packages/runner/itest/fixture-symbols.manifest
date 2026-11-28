@@ -1,5 +1,5 @@
 # R670: the files of the pinned fixture-symbols tar, in archive order (tar -tf, directories left out).
-# sha256 165b17dd3aae07fbe02f1e918e5d6d3bba97d5fa5e5e295b94772f33de65b662
+# sha256 431354324c2343532fd8e2f6f9e9ac721d63c9a17e8408632780e63b70a7c1b4
 examples/credit-limit/.alpackages/Microsoft_Application_28.0.46665.47126.app
 examples/credit-limit/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
 examples/credit-limit/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
@@ -191,3 +191,12 @@ fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_Business Foundation_28.0.46
 fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
 fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_System_28.0.47067.0.app
 fixtures/sandbox-wrapped-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-carry-tests/.alpackages/LethAL_PR327 SingleInstance Leak Target_1.0.0.0.app
+fixtures/sandbox-carry-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-carry/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-reach-tests/.alpackages/LethAL_LethAL Sandbox Reach_1.0.0.0.app
+fixtures/sandbox-reach-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-reach/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-tailcut-tests/.alpackages/LethAL_LethAL Sandbox Tailcut_1.0.0.0.app
+fixtures/sandbox-tailcut-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-tailcut/.alpackages/Microsoft_System_28.0.47067.0.app

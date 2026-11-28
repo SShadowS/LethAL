@@ -89,7 +89,7 @@ import {
   describeRow,
   siteOf,
 } from "./harden-expected";
-import { assertKillsReproduced } from "./kill-reproduction";
+import { assertKillsReproduced, latestRunId } from "./kill-reproduction";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import {
   SCRATCH_ANSWERS,
@@ -338,7 +338,12 @@ async function main(): Promise<void> {
       });
       // R582: every kill was re-run under the mutant (verify's own kills are not evidenced:
       // `VerifyResult` carries no marker).
-      assertKillsReproduced(`agreement/${leg === "a" ? "A" : "B"}`, report, store);
+      assertKillsReproduced(
+        `agreement/${leg === "a" ? "A" : "B"}`,
+        report,
+        store,
+        latestRunId(store),
+      ); // scratch (R1241)
       checkGateWarnings("agreement", leg, warnings);
       return report;
     } finally {

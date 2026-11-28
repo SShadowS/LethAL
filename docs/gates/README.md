@@ -151,3 +151,18 @@ reaches a full ttl ahead (no lock on the lease row during a run), the claim's ru
 `operation-busy` for up to that bound plus 35 s. 1.0.0.29 is the minimum: no client path
 falls back to an older control app any more, so a 404 from any of these actions, a `HarnessInfo`
 without `databaseId`, or an answer that ran a method without `workDate`, is a plain failure.
+From 1.0.0.30 (R1170, PR-462) "LC Mutation Active" carries a `Generation` counter that every tuple write bumps, and a
+session that runs no op itself (a future client session) reloads the active tuple when it moves. A session inside its own
+op, or after its phase 3, never reloads, so the headless path is unchanged; the wire surface is unchanged, and the minimum
+stays 1.0.0.29. `bc4` stays on 1.0.0.29 (the setup script's per-server pin, also read by `bc-republish.ts control`) while
+lethal-bugs' DOTests series runs there, and so does `bc-demo` (`DEMO_CONTROL`, so the owner's laptop mode needs no new build).
+From 1.0.0.31 (R1170, PR-478) the control app carries the control-app half of a client-session backend. The headless path is
+unchanged, and so is the minimum (1.0.0.29). It adds:
+- a `client-run` op kind, which the stops refuse;
+- `ActivateForClient` and `DeactivateForClient`;
+- the self-binding `LC Client Bind` page and `BindCallerSession`;
+- the self-marked end (`EndCallerSession`, `LC Ended Session`);
+- gated attestation rows (`LC Client Attestation`, read by `ReadClientAttestation`).
+
+No `client-run` op is ever opened on `bc1`-`bc5`: an op bound from an OData session could never be ended there (the PR-478
+pre-commitment, amendment 6). `bc4`, `bc5` and `bc-demo` stay on 1.0.0.29.

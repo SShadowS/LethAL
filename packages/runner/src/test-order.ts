@@ -34,10 +34,16 @@ function nameOf(ref: TestMethodRef): string {
 /** Kills seen so far this session, by procedure scope and then by test. Shared across shards. */
 export interface KillLedger {
   readonly killsByProcedure: Map<string, Map<string, number>>;
+  /**
+   * PR-456: a re-run kill whose prior killer was seeded (`seedKill`), by mutant entry to the killer's
+   * test key. When the SAME kill is then recorded live (`recordKill`), the seed already counted it, so
+   * the live record is skipped: a kill counts once in R197's ledger, never twice.
+   */
+  readonly seeded: Map<MutantManifestEntry, string>;
 }
 
 export function newKillLedger(): KillLedger {
-  return { killsByProcedure: new Map() };
+  return { killsByProcedure: new Map(), seeded: new Map() };
 }
 
 /**
@@ -49,12 +55,29 @@ export function procedureScopeOf(m: MutantManifestEntry): string {
   return `${m.codeunitName}|${memberGroupNameOf(m)}`;
 }
 
-export function recordKill(ledger: KillLedger, m: MutantManifestEntry, ref: TestMethodRef): void {
+function countKill(ledger: KillLedger, m: MutantManifestEntry, key: string): void {
   const scope = procedureScopeOf(m);
   const byTest = ledger.killsByProcedure.get(scope) ?? new Map<string, number>();
-  const key = testKeyOf(ref);
   byTest.set(key, (byTest.get(key) ?? 0) + 1);
   ledger.killsByProcedure.set(scope, byTest);
+}
+
+export function recordKill(ledger: KillLedger, m: MutantManifestEntry, ref: TestMethodRef): void {
+  const key = testKeyOf(ref);
+  // PR-456: this mutant's kill by this test was seeded: it is already counted, so it counts once.
+  const seededKey = ledger.seeded.get(m);
+  if (seededKey !== undefined) {
+    ledger.seeded.delete(m);
+    if (seededKey === key) return;
+  }
+  countKill(ledger, m, key);
+}
+
+/** PR-456: counts the prior run's killer of a mutant this session will re-run, as an ordering hint only. */
+export function seedKill(ledger: KillLedger, m: MutantManifestEntry, ref: TestMethodRef): void {
+  const key = testKeyOf(ref);
+  countKill(ledger, m, key);
+  ledger.seeded.set(m, key);
 }
 
 /**

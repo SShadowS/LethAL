@@ -142,3 +142,192 @@ overrule). Principle 30, design first. **No code and no gate moves** come from t
   2. 1.0.0.30, headless-compatible and gate-provable on bc1-bc4;
   3. the driver;
   4. client-mode gate legs, hang included.
+
+## Amendment 1 (2026-11-27, coord PR-478, before any build; re-checked against master 9a7c05689)
+Evidence: `/coord/handoff/PR-478/spec-recheck.md`. Ruling (lethal-orchestrator): split into **478a** (control 1.0.0.31),
+**478b** (the driver) and **478c** (cost cuts, optional). Each gets its own pre-commitment and its own proof.
+
+### A1. The switch: a client-mode BACKEND, never `ciSessionKind` (replaces §1's first three bullets)
+- `ciSessionKind` stays what PR-307 and PR-311 made it: a LABEL for the session kind the project's CI runs. A difference
+  from the backend's own kind reads `session-kind-mismatch`. It never selects a path. (DO's configs set it to `client`, so
+  if it switched the backend, every DO run would be refused.)
+- Client mode is its own backend kind, `bcdev-client` (`--backend bcdev-client`). Its session kind is `client`, so a
+  `ciSessionKind: client` project shows no mismatch on it. `bcdev` stays headless and unchanged.
+- On a server with no `/cs`: refuse by name, `client-session-unavailable`, after a cheap probe and before anything is
+  published (§1, unchanged).
+- Client mode needs control **1.0.0.31**, checked by its own version gate. `MIN_CONTROL_VERSION` (headless) does not move.
+- **Never mixed:** `--resume`, `--resume-run`, history lending, baseline-snapshot reuse and `campaign compare` refuse to mix a
+  `bcdev-client` run with a `bcdev` run, by name. A headless baseline never seeds a client run, nor the reverse.
+
+### A2. SingleInstance state between mutants: a FRESH client session per mutant (changes §4)
+- Test isolation rolls back the database, not SingleInstance memory. R1174 measured a SingleInstance flag crossing test
+  codeunits in one session. In one KEPT client session, state set while mutant N's tests ran (the mutated code included)
+  would reach mutant N+1's tests: a false kill, or a false survivor.
+- **So the default is a NEW client session per mutant** (open, page 130455, the run, close). PR-314 measured an open at about
+  0.33 s.
+- **Keeping the session across mutants is allowed only after a measurement shows no leak** (478c):
+  - a probe on the Windows BC with a SingleInstance codeunit set by mutant N's test and read by mutant N+1's;
+  - pre-committed;
+  - shown both ways (the leak reproduced with a planted leaker, and absent with a reset).
+- The baseline and the coverage run use the same per-mutant shape (a fresh session per group), so §5's rule (one session
+  type and one grouping for green set and verdicts) still holds.
+
+### A3. Control 1.0.0.31 (478a): what 1.0.0.30 left out (completes §3)
+- **The `client-run` op kind** on `LC Lease."Op Kind"`. Each check keyed on `run` is extended to it, or left out on purpose
+  and said so in the pre-commitment:
+  - `TryRenew`'s fast path and its no-shrink rule;
+  - `TryStopHungRun` and `TryStopHungRunAt`;
+  - `IsOwnRunActive`;
+  - the client's lost-answer recovery (`opKind === "run"` in the orchestrator, `run-mutant-transport.ts` and `doctor.ts`).
+- **`ActivateForClient(fence, artifact, mutant, sessionId, runBoundMs)`:**
+  - fenced;
+  - refuses a session id that is not a live session;
+  - the bound is capped like `ExtendRunClaim`;
+  - returns the Generation it wrote.
+- **`DeactivateForClient(fence, opId)`:** the tuple-conditional clear, then the fail-closed reset.
+- **The attestation table**, keyed by (attempt id, op seq, method). It holds:
+  - the Generation and the mutant id the session LOADED;
+  - the lease's Server Generation or Database Id (R969), because Generation restarts at 0 on a reset in-memory database;
+  - `ObservedAny`, `ObservedIdentityMismatch`, `ObservedActive` and `TestMethodRuns`;
+  - the session id.
+- **How the table is written:** from Test Runner - Mgt's `OnAfterTestMethodRun` (PR-336's measured "PA"; "PB" is the
+  fallback).
+  - The writer is GATED: it writes only when this session is the recorded session of an in-flight `client-run` op, never
+    during a headless run.
+  - The per-method observation reset (`OnBeforeTestMethodRun`) clears the observations only. It does NOT set
+    `ResetSinceLoad`.
+- **A small page** through which the client session reports its session id.
+- **Proof:**
+  - offline: alc with 0 diagnostics, and source pins (the gate, the reset, every `::run` site), each red-checked;
+  - headless: 0 moves on bc1-bc3 (the 13 gates, plus hang on bc2 and bc3), the build read back at both ends, and the
+    older-client proof;
+  - `itest:lease` gains the fenced activate, deactivate, renew and stop-refusal cases;
+  - bc4 and bc-demo stay pinned to 1.0.0.29;
+  - on the Windows BC: rows written in a client session and none in a headless one; the stop of a `/cs` session (A5); the
+    session id.
+
+### A4. Order, time and coverage in client mode (changes §5 and §6)
+- **Order:**
+  - page 130455 runs a codeunit's methods in their declared order, and client mode adds a fixed codeunit order (the
+    manifest's);
+  - R197's ledger and R1174's re-walk do not apply in client mode;
+  - this is the CI-faithful order R1235 asks for, on this backend.
+- **Time:**
+  - one `RunNextTest` runs a whole codeunit, so a per-method budget cannot be enforced;
+  - the timeout trigger is the codeunit's sum of its selected methods' budgets, capped by the run runway (600 s);
+  - the lease heartbeat uses `TryRenew`, whose no-shrink rule covers `client-run` (A3).
+- **Coverage:** measured in a client session on the Windows BC before client mode scores anything. Headless coverage is NOT
+  assumed, because a test can reach code only when `GuiAllowed` is true.
+
+### A5. Stops need a probe first (changes §6)
+- R53's stop was measured on web-service sessions only.
+- `StopSession`, called from an OData session, stopping a `/cs` client session mid-test is probed on the Windows BC
+  (478a, pre-committed).
+- Until it is shown, client mode does not score `timeout-killed`: an overrun is `in-flight-unknown`, and the lane is
+  quarantined by name.
+
+### A6. Environment and asks
+- **The client library** (`Microsoft.Dynamics.Framework.UI.Client.dll` and 22 companions) was provided by kraken:
+  `/coord/cache/bc-client/28.4.53241.56646/`, sha-checked, from bc2's artifacts (BC 28.4.53241.56646).
+  - It targets .NETStandard 2.0 / win-x64, and it references Windows APIs (`Cng`, `Principal.Windows`).
+  - No build on a stand-in.
+- **A library probe comes first, in 478a's plan, before any driver work:**
+  - **On Linux .NET 8 and 10, in the container:** load the assemblies, build a `ClientContext` for a URL, and record which
+    calls fail and how (a missing native API, PlatformNotSupported, auth).
+  - bc1-bc5 have NO `/cs` (BC on Linux, no web server), so opening a session and running a test can only be measured against
+    the Windows BC.
+  - **On the Windows BC:**
+    - open a client session from Linux to its `/cs`, open page 130455, and run one test;
+    - record every call that fails.
+- **What the probe decides:**
+  - **If the library runs on Linux,** 478b's sidecar runs in the container, as §4 says.
+  - **If not,** the driver runs on the Windows BC's host, and LethAL drives it over a small remote protocol. That changes
+    478b's shape (a remote sidecar, its own transport, failure and stop handling, and security). 478b's pre-commitment then
+    says so and is reviewed again.
+- **The throwaway Windows BC:** asked of kraken when 478a's AL is built, not before (ruling).
+- **Stale wording fixed by this amendment:** §1's "1.0.0.30 present" is now 1.0.0.31 (A1); §3 is completed by A3; §6's
+  TestPage line also names R1170 (6) (a known-green test that uses a page part must pass first).
+
+## Amendment 2 (2026-11-27, coord PR-478; the spec-adversary's r1 review and the orchestrator's rulings)
+Evidence: `/coord/handoff/PR-478/adversary-r1.md`. Amendment 2 overrides Amendment 1 where they differ.
+
+### B1. The grouping unit: ONE fresh session per TEST CODEUNIT (ruling; replaces A2's "per mutant" and A4's order)
+- Page 130455 runs a codeunit's methods in one isolation, so the methods of one codeunit see each other's writes. Running
+  only a mutant's covering methods, with a method in between switched off, changes what the baseline measured, and the
+  resulting failure reproduces: a false kill.
+- **So the unit is the test codeunit, in a fresh client session, for the baseline, the coverage run and every mutant.**
+  - Per mutant and per covering codeunit, run the codeunit's methods in DECLARED order, from its first method up to and
+    including its last covering method.
+  - No method inside that prefix is ever switched off.
+  - Each such codeunit run is a new session (open, page 130455, run, close).
+- **Confirmation and reproduction replay exactly the same selection** (the same codeunit, the same prefix, a fresh session).
+  - Results are joined by (codeunit, method, line no.), never by request position.
+  - `reproduceKill` and `confirmWarm` use this replay on this backend, or refuse it by name; their position arguments are
+    not used.
+- **The kept-session path is WITHDRAWN (ruling).** No fixture probe can prove "no leak" for a real project, because BaseApp
+  alone holds many SingleInstance codeunits. PR-480 (478c) keeps only the other cuts (for example folding the attestation
+  read into the next activation), each measured.
+- **R1235's closure narrows** to "within a codeunit": codeunits run in a fixed order, each in its own session, so the order
+  across codeunits is not CI's.
+
+### B2. Never mixed (completes A1; 478b)
+- **A `bcdev-client` run is stored under its own backend kind.** Today `backendName = buildBackend.kind` would store
+  `bcdev`.
+- **Lending:** `backendBuildRefusal` gains an equality arm on the backend kind for non-v3 pairs.
+- **Snapshots:** `findBaselineSnapshot`'s query gains a backend predicate.
+- **Kind branches:** every `isBcdev(...)` and `kind !== "al-runner-v3"` branch is audited with an exhaustive switch, and
+  the list goes into 478b's pre-commitment. `backendSessionKind` returns `client` for the new kind.
+- **R1174's re-walk** and R197's ledger are explicitly off in client mode.
+- **Red tests, one per direction** (client into headless, and headless into client), for each of resume, resume-run,
+  lending, snapshot reuse and compare.
+
+### B3. Control 1.0.0.31 additions (completes A3; 478a)
+- **Overrun (ruling):** no stop, recover or deactivate path tombstones a `client-run` op until a read of `Active Session`
+  shows its bound session gone.
+  - On an overrun the driver sends neither a stop nor a deactivate. The op stays in flight, and the next acquire reads
+    `operation-orphaned`.
+  - A dead client session is retried only after the same proof.
+- **The session binds itself:** inside the op, the small page sets `Op Session Id := SessionId()`, only when the op is
+  `client-run`, the op id matches and the field is blank. The writer gate and the stop key on that bound value, never on an
+  id the client supplied.
+- **Both per-method subscribers are gated:** the observation reset (`OnBeforeTestMethodRun`) is gated exactly like the
+  writer. A headless `RunMutantMany` therefore keeps its latched identity mismatch.
+  - A source pin covers this, plus a red test: a mismatch in method 1 still answers `identityMismatch = true` at the end
+    of a headless RunMany.
+- **The expected identity in a client session:** outside an op, loading or refreshing the tuple from the row also sets
+  `ExpectedTargetAppId` and `ExpectedArtifactId` from that row. A stale artifact's guard then still latches a mismatch, and
+  a red check covers it.
+- **An unreached method:** the row carries `Loaded` (or `GuardCalls`). A row with `Loaded = false` is accepted only when
+  nothing was observed. The writer never reads the tuple table, so it attests what the session loaded.
+- **The writer:** `InherentPermissions` on its own table and on the lease read; the table is `DataPerCompany = false`.
+- **`ActivateForClient`:** ends with the serving OData session's in-memory state reset (pinned), because the deactivate may
+  land in another pooled session.
+
+### B4. Verdicts and read-backs (478b)
+- **The verdict comes from the attestation row's own success field, keyed by op.**
+  - A disagreement with the page's result is a refusal.
+  - A page Failure with no row is a refusal, never a kill.
+- **Before each `RunNextTest`, the driver reads back:**
+  - page 130455's Run set (it must equal the request);
+  - the test runner id (only 130450 is accepted).
+- **Before deactivating:** no child session of the client session may be alive (background sessions, tasks, a job queue
+  run). Otherwise the result is refused, and the test is labelled as one that starts sessions.
+- **NumberSequence** is not rolled back by isolation. This is labelled in the caveat (headless shares it).
+
+### B5. TestPage (ruling)
+- **Client mode SCORES TestPage tests once R1170 (6)'s page-part probe passes** (a known-green test that uses a page part
+  passes in a client session on the Windows BC). That is a large share of the point: DOTests' Email partial had 49 errors
+  from refused TestPage tests.
+- **Until then, they are refused as headless refuses them,** by name.
+
+### B6. Probes that must be able to fail (478a, on the Windows BC unless noted)
+- **The stop (A5):** a stop of a session that is running a test. Negative controls:
+  - a stop that lands on an idle session after the codeunit finished;
+  - a stop on an id that does not exist;
+  - an interaction that finished with its answer lost before the stop.
+  The pre-commitment names the exact client-library signal that counts as "our StopSession ended this run".
+- **A raising `OnAfterTestMethodRun` subscriber:** what page 130455 records.
+- **An `OnBefore` write surviving isolation,** and **IsolatedStorage** under isolation.
+- **The library's error paths, on Linux .NET too:** a test that raises, a `StopSession`, a dropped connection. The exception
+  types and texts are recorded, because classifying "stopped", "dead" and "failed" rests on them.
+- **Each red check covers both directions** of the writer gate and of the reset gate.

@@ -1564,6 +1564,30 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v37.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v36.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "explain-v35.schema.json": [
         "caveats",
         "contract",
@@ -1919,6 +1943,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "isolated-recheck-kills",
         "workdate-changed",
         "survivors-beside-unrun-tests",
+        "kill-ledger-off",
+        "resumed-across-restart",
       ],
       "#/properties/survivorSelection/properties/rankedBy": ["report-order", "actionability"],
       "#/properties/survivors/items/properties/attribution": [
@@ -2080,6 +2106,10 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v34.schema.json")).toEqual(required("explain-v33.schema.json"));
     // PR-381's v35 added a caveat value and an optional `score` block, not a required field.
     expect(required("explain-v35.schema.json")).toEqual(required("explain-v34.schema.json"));
+    // PR-456's v36 added a caveat value, not a required field.
+    expect(required("explain-v36.schema.json")).toEqual(required("explain-v35.schema.json"));
+    // PR-472's v37 added a caveat value, not a required field.
+    expect(required("explain-v37.schema.json")).toEqual(required("explain-v36.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

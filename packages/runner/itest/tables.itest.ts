@@ -42,7 +42,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import { type SessionReport, mutantRef } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import { ResultsStore } from "../src/store";
+import type { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import {
   assertLaunchMatchesConfig,
@@ -52,6 +52,7 @@ import {
   printItestTarget,
   readFixtureConfig,
 } from "./config-path";
+import { holdFixtureStore, openFixtureStore } from "./fixture-store";
 import { TABLES_FIGURES } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -853,7 +854,9 @@ async function runOnce(scratchRoot: string, leg: "first" | "second"): Promise<Ru
       new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
 
-  const store = new ResultsStore(join(PROJECT_DIR, "lethal.sqlite"));
+  // R1241: the fixture's store is SHARED by every gate in this worktree: hold it, and read only this session's run.
+  const fixture = openFixtureStore(join(PROJECT_DIR, "lethal.sqlite"));
+  const store = fixture.store;
   try {
     const warnings = collectWarnings();
     const report = await runSession({
@@ -882,7 +885,7 @@ async function runOnce(scratchRoot: string, leg: "first" | "second"): Promise<Ru
       throw e;
     });
     checkGateWarnings("tables", leg, warnings);
-    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    const runId = fixture.ownRunId();
     const sessionLiveness = store.sessionIdLiveness(runId);
     // GH-24: the report keeps only the tests that REACHED, so the order both control tests ran in,
     // and whether they shared one grouped call, is read from the store's rows (insertion order is
@@ -899,7 +902,7 @@ async function runOnce(scratchRoot: string, leg: "first" | "second"): Promise<Ru
     const repro = killReproductionFailures("tables", report, store, runId);
     return { report, odataCfg, sessionLiveness, reachControlRuns, repro };
   } finally {
-    store.close();
+    fixture.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and this script never
     // exits, even on a fully successful run.
     await backend.close();
@@ -1841,6 +1844,8 @@ async function main(): Promise<void> {
   // R9: runs the session TWICE and asserts verdict-identity, matching itest:bcdev/itest:alrunner
   // — a single run left cross-run nondeterminism here indistinguishable from a confusing
   // per-mutant baseline mismatch instead of an explicit determinism failure.
+  // R1241: hold the fixture's shared store for BOTH legs, before either deploys.
+  const hold = holdFixtureStore(join(PROJECT_DIR, "lethal.sqlite"));
   const scratchA = await mkdtemp(join(tmpdir(), "lethal-itest-tables-a-"));
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-tables-b-"));
   try {
@@ -1909,6 +1914,7 @@ async function main(): Promise<void> {
         "confusing per-mutant baseline mismatch",
     );
   } finally {
+    hold.release();
     await rm(scratchA, { recursive: true, force: true });
     await rm(scratchB, { recursive: true, force: true });
   }

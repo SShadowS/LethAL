@@ -132,6 +132,40 @@ lethal-code, 2026-11-27.
    Pinned by a test, and the banner says so.
 6. **NIT 6:** the banner gives the window's row count apart from the left-out count.
 
+## r3 (2026-11-27, approved by the orchestrator; the build is HELD until the load question below is read)
+
+- **Why:** bugs found a confound.
+  - A FRESH bc4 ran its baseline 3.87× slower per test than email3's first baseline at server1 load1 ≈ 340, which is
+    mostly kraken-alsem's benchmarks, outside our container. BC runs on server1.
+  - So part 1's email3 slowdown may be host load, at least partly. R1228 carries bugs' correction (8a4fe76da).
+  - server1 keeps NO load history, so the 29 healthy controls cannot be compared with email3's hours after the fact.
+- **The change to the design:**
+  - At each block's end, the monitor reads the host's `/proc/pressure/cpu` "some avg60" and `/proc/loadavg` load1
+    (the container sees the host's values: BC runs on the same host).
+    - A read error records `null`, never 0.
+  - The block's median, PSI and load1 are kept.
+  - The STOP warning and the banner print the 3 blocks' PSI and load1 beside their medians: "… at 4.9× (PSI 72%,
+    load1 310) …".
+  - Nothing in the STOP rule reads them yet.
+- **The load-gate question**, pre-committed now, evaluated later on NEW data only:
+  - **Data:**
+    - bugs' hourly logs during the narrowed runs (`narrow-*/hourly.tsv`: load and per-mutant cost);
+    - the per-block ratio and PSI of every bcdev run recorded from 2026-11-27 on, by an offline script over its
+      stores and events plus the hourly logs (the r3 build's own records once it lands);
+    - (b)'s runs.
+  - **Labels**, set before computing, from evidence other than the ratio:
+    - **LOAD-ONLY:** a span on a tier restarted ≤ 1 h before, with PSI avg60 ≥ 50%;
+    - **QUIET-DEGRADED:** a span bugs names degraded with PSI avg60 < 20%;
+    - **HEALTHY-QUIET:** a fresh tier with PSI < 20%.
+  - **The rule:**
+    - If any LOAD-ONLY span reaches STOP (3 blocks ≥ 4.0), the STOP needs a load gate. The gate's form is then
+      designed with its own pre-commitment, for example no STOP while PSI avg60 ≥ the LOAD-ONLY spans' minimum, or a
+      concurrent canary.
+    - If no LOAD-ONLY span reaches STOP (with at least 3 such spans of ≥ 150 passing rows each), the STOP stands
+      without a gate.
+    - If no QUIET-DEGRADED span exists, it is reported that tier state alone was never seen to trip the STOP.
+  - **Below the data floor** (fewer than 3 LOAD-ONLY spans): "not enough data", and the build stays held.
+
 ## Constants (exported)
 
 - `TIER_SLOWDOWN_BLOCK = 50`, `TIER_SLOWDOWN_STOP = 4.0`, `TIER_SLOWDOWN_HOLD = 3`, `TIER_SLOWDOWN_MIN_REF_MS = 50`.
@@ -169,3 +203,121 @@ lethal-code, 2026-11-27.
 - Per `legs.ts` for the touched files. The frozen BC gates should not move.
 - Any `tier-slowdown-stop` in a gate is a BLOCK, to be investigated (N3: not pre-measured on the latest gate stores).
 - The `time-budget-reached` type change: gates that pin event sets are checked by the scan.
+
+## r4 (2026-11-28, lethal-code): the STOP rule after R1228 settled; PRE-COMMITTED before any replay of it
+
+**Why.** R1228 is settled as BC tier state, not host load (lethal-bugs, a46c058fb; the orchestrator unblocked PR-466,
+`/coord/handoff/PR-466/orchestrator-unblock-2026-11-28.md`).
+- DOTests file 2's same passing tests went from 0.44x to 3.3-3.6x their own baseline about 3-4 h into the run, at load
+  9.5-31 and 0.01% CPU pressure.
+- **r2's STOP at 4.0 would never fire on file 2,** whose blocks peak at 3.3-3.6.
+- Part 1's healthy runs reach 3.64 only in short plateaus. So the hold, not the height, has to separate them: bugs' input
+  is a median held for at least 1 h.
+- The load gate r3 deferred is now the design's own guard, as bugs asks: overnight load bursts of 100-300 would
+  otherwise trip it.
+
+**r4 overrides r2/r3's STOP rule (everything else in r2, r2a and r3 stands: the rows, the reference, the window, the
+stop mechanism, the events, the texts' shape, the ripple, the arming line):**
+- **Block:** 50 passing rows, as before; its median ratio, and the host's `/proc/pressure/cpu` "some avg60" read at the
+  block's last row (r3's reading).
+- **A block is HOT** when its median is ≥ **2.5** AND its PSI is readable AND below **20%**.
+  - An unreadable PSI (`null`) or PSI ≥ 20% makes the block NOT hot. So on a host without PSI the STOP never fires: the
+    fail-safe direction (no stop is today's behaviour). The arming line says when PSI was unreadable.
+- **STOP** when the current run of consecutive hot blocks has at least **3** blocks AND spans at least **60 minutes** of
+  wall clock, from the first row of its first block to the last row of the current block. A block that is not hot
+  resets the run.
+  - The onset (and so the window) is the first row of the run's first block, as in r2.
+- **The baseline's load:** the arming line also prints the PSI read at the baseline's end. A baseline under heavy load
+  inflates the denominators and hides a slowdown. That is stated, with no rule.
+- **Constants:** `TIER_SLOWDOWN_BLOCK = 50`, `TIER_SLOWDOWN_STOP = 2.5`, `TIER_SLOWDOWN_HOLD = 3`,
+  `TIER_SLOWDOWN_HOLD_MS = 3_600_000`, `TIER_SLOWDOWN_MAX_PSI = 20`, `TIER_SLOWDOWN_MIN_REF_MS = 50`.
+- **The texts** print the hot run's block medians with their PSI and the run's span in minutes, instead of "3 blocks ≥ 4.0".
+
+**Acceptance, PRE-COMMITTED: an offline replay of exactly this rule, run before any runtime code moves.**
+- **Script:** `/coord/handoff/PR-466/replay-r4.ts` over part 1's stores (`stores.txt`), tm7-a and tm7-b, and DOTests file 2
+  (`/coord/handoff/PR-427/f2-header`).
+- **Wall clock** comes from each row's `mutant-scored` event time.
+- **History has no PSI:** every replayed block counts as PSI-readable and below 20%. So the replay can only show the rule
+  firing TOO OFTEN, never too rarely: the guard only removes STOPs.
+- **A1 (healthy):** NO STOP on any healthy run with event times. At least 20 healthy runs must be evaluable, or "not
+  enough data". A healthy run without event times is reported as not evaluable and never counted as a pass.
+- **A2 (degraded):** a STOP on email3 (run 1, or its resume) AND on file 2, before each run's end. The onset time is
+  reported against bugs' onset (file 2: about 3-4 h in) and part 1's STOP points (email3 3.09 h).
+- **A3 (informational):** queue2, email, subs, edocs.
+- **The rule:**
+  - If A1 and A2 both pass, the build goes ahead with these constants.
+  - If either fails, NO runtime build. The result is reported, and any new constants need a new pre-commitment
+    evaluated on data recorded after it.
+  - The constants are not tuned on this replay.
+
+**r4's result (2026-11-28):** it FAILED A2. email3 stops, but DOTests file 2 does not: its longest unbroken hot run is
+54.7 min, because single blocks just under 2.5 reset it. A1 passed: 0 healthy STOPs on 20 timed runs, and no healthy
+hot stretch is longer than 11.6 min. So there is no r4 build (`/coord/handoff/PR-466/findings.md`, section r4).
+
+## r5 (2026-11-28, the orchestrator's ruling): a sliding 60-minute median, built as a SHADOW; PRE-COMMITTED
+
+**The rule.** It replaces r4's STOP rule. Everything else in r2, r2a and r3 stands: the rows fed, the MIN reference,
+the window semantics, the stop mechanism, the ripple.
+- **Every fed row** (r2's: a passing mutant row in `runSession`'s mutant loop, with an own duration and a reference of at
+  least 50 ms) is stamped with its monotonic time.
+- **A check runs after every 50th fed row.** W is the fed rows of the last 60 min, ending at the current row.
+- **It TRIGGERS when all of these hold:**
+  - the first fed row of the session is at least 60 min old (the window is full);
+  - |W| ≥ 50;
+  - the median of W's ratios is ≥ **2.5**;
+  - the host's `/proc/pressure/cpu` "some avg60", read at the check, is readable and below **20%**. An unreadable PSI
+    never triggers: the fail-safe direction.
+- **It triggers once per session.** The onset is W's FIRST row, and the window (store and fold) starts at that row's
+  mutant, with r2's mark semantics taken at that row.
+- **Constants:** `TIER_SLOWDOWN_WINDOW_MS = 3_600_000`, `TIER_SLOWDOWN_CHECK_EVERY = 50`, `TIER_SLOWDOWN_MIN_ROWS = 50`,
+  `TIER_SLOWDOWN_STOP = 2.5`, `TIER_SLOWDOWN_MAX_PSI = 20`, `TIER_SLOWDOWN_MIN_REF_MS = 50`.
+- **Why this form:** r4's replay showed that time held separates healthy runs (≤ 11.6 min hot) from slow ones, and that
+  the strict reset is what missed file 2. **Its trigger was chosen after seeing file 2, so file 2 cannot judge it.**
+
+**Two modes. The DEFAULT is SHADOW.**
+- **Shadow** (no flag; bcdev sessions only, as r2): on a trigger it records `tier-slowdown-would-stop`. That is a new
+  event type, NOT a `warning`, so no gate's warning set moves. Its fields:
+  - atMs, the window median, |W|, the window's span, PSI and load1 at the check, the onset's mutant row id and seq;
+  - plus the same figures, optional, in the report as `tierSlowdownWouldStop`, and one console line.
+  - Nothing else changes: no stop, no window, no verdict, no exit code.
+  - Every check's figures still go to the arming line at session end: fed, skipped, checks, the highest window median,
+    the PSI-unreadable count, the baseline's PSI, and the mode.
+- **Opt-in stop:** `lethal run --tier-slowdown-stop` (bcdev only; refused by name elsewhere). On a trigger it does r2a's
+  clean stop exactly:
+  - `TimeBudget` spends, never a quarantine, and the window is marked in the store and the fold;
+  - `time-budget-reached` with `stoppedByTierSlowdown`, exit `TIME_BUDGET_EXIT_CODE`;
+  - the run is never finished, and is resumable by R1229 after the operator restarts the tier. Never an automatic
+    restart.
+  - The texts print r5's figures (median, |W|, span, PSI) instead of r4's blocks.
+- **The flag is in the run's identity** (PR-472's precedent, `--no-kill-ledger`):
+  - `tierSlowdownStop: true` joins the config fingerprint only when the flag is on;
+  - a cross-flag search refuses, by name, a `--resume` whose stored run was made with the flag the other way.
+  - So a resume never mixes shadow rows with stop rows.
+
+**Tests (red both ways).**
+- **The rule:**
+  - no trigger while the window is not full, with |W| < 50, at a median of 2.49, at PSI ≥ 20, or with PSI unreadable;
+  - a trigger at 2.5 with a full window;
+  - the onset is W's first row;
+  - once per session.
+- **Shadow:**
+  - a session that triggers stops nothing;
+  - its report, verdicts, exit code and store rows equal those of the same session with no monitor, apart from the
+    new event and field;
+  - red if shadow stops, or if it moves any verdict.
+- **Opt-in:** r2's tests 3, 4 and 6-10, adapted (the boundary through the real `record()`, B1's order, the teardown
+  write, no quarantine, the texts, al-runner).
+- **Identity:**
+  - a flag-on run is not resumed by a flag-off `--resume`, and the reverse; both refusals are named;
+  - flag-off digests are unchanged, so existing stores still resume.
+
+**Acceptance: judged ONLY on runs recorded after this pre-commitment, in shadow mode.**
+- **Data:** bugs runs the shadow beside `ratio-watch.sh` on every DOTests run from now on, plus the gates.
+- **Labels,** set from evidence other than r5's own figures: bugs' `hourly.tsv`, `ratio-watch.sh` alerts, their
+  degradation-restart notes, and a fresh tier.
+- **A1:** no would-stop on any healthy run, with at least 10 healthy runs (gates included).
+- **A2:** a would-stop on every degraded run, with at least 2, before its end. Its onset is reported against bugs'.
+- **Below the floors:** "not enough data", and the opt-in stays off by default.
+- **If A1 and A2 pass:** the orchestrator decides whether DOTests' configs turn the stop on. Nothing changes a default
+  by itself.
+- **If either fails:** a new pre-commitment.
