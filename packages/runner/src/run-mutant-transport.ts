@@ -1112,6 +1112,12 @@ export class RunMutantTransport {
         throw new Error(`${action} \`value\` is not a JSON object: ${value}`);
       }
       return parsed as Record<string, unknown>;
+    } catch (err) {
+      // PR-479 leg 4: our own timer's abort surfaced as a bare "AbortError", which names neither the action nor the bound.
+      if (controller.signal.aborted) {
+        throw new Error(`${action} gave no answer within ${timeoutMs} ms (${String(err)})`);
+      }
+      throw err;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }

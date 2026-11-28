@@ -1758,11 +1758,15 @@ export class BcDevMcpBackend implements ExecutionBackend {
       }
       closed = true;
 
-      const att = await transport.readClientAttestation({
-        attemptId,
-        lease: fenceLease,
-        timeoutMs: CLIENT_CALL_TIMEOUT_MS,
-      });
+      // PR-479 leg 4: End and the final Deactivate are done, so a lost read is named but never in flight.
+      const att = await transport
+        .readClientAttestation({ attemptId, lease: fenceLease, timeoutMs: CLIENT_CALL_TIMEOUT_MS })
+        .catch((err: unknown) => {
+          throw new ClientRunFailure(
+            "client-attestation-unreadable",
+            `ReadClientAttestation: ${describeThrown(err)}`,
+          );
+        });
       if (!att.read) {
         throw new ClientRunFailure(
           "client-attestation-unreadable",

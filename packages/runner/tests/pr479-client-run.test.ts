@@ -790,6 +790,36 @@ describe("PR-479 round 3a: one client codeunit op", () => {
     expect(
       await caught(rig("ok", { attestation: () => ({ read: true, rows: [] }) }).run()),
     ).toEqual(["client-run-empty", false]);
+    // leg 4: a lost attestation read after the final Deactivate is named, and the op ended
+    expect(
+      await caught(
+        rig("ok", {
+          attestation: () => {
+            throw new DOMException("The operation was aborted.", "AbortError");
+          },
+        }).run(),
+      ),
+    ).toEqual(["client-attestation-unreadable", false]);
+  });
+
+  test("leg 4: a control call our own timer aborts names the action and the bound, never a bare AbortError", async () => {
+    const hang = ((_url: string, init?: RequestInit) =>
+      new Promise((_, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted.", "AbortError")),
+        );
+      })) as unknown as typeof fetch;
+    const t = new RunMutantTransport(
+      { baseUrl: "http://odata/BC", company: "CRONUS", username: "u", password: "p" },
+      "target-app",
+      "0123456789abcdef0123456789abcdef",
+      hang,
+    );
+    const lease = { epoch: 1, token: "t", serverGeneration: "g", opSeq: 1 };
+    const e = await t
+      .readClientAttestation({ attemptId: "a1", lease, timeoutMs: 20 })
+      .catch((x: unknown) => x);
+    expect(String(e)).toContain("ReadClientAttestation gave no answer within 20 ms");
   });
 
   test("round 3b: with no baselineWorkDate the op's own start read sets it, and the end read must equal it", async () => {
