@@ -70,12 +70,13 @@ import {
   compareMutants,
   normalizeForComparison,
 } from "../itest/mutant-equality";
-import type { CoverageMode } from "./backend";
+import { type BackendKind, type CoverageMode, isBcdevClient } from "./backend";
 import { assertCardinality } from "./campaign-anchors";
 import { parseAnchorConfig, runAnchorCheck } from "./campaign-anchors-run";
 import { freezeStageTo } from "./campaign-freeze";
 import { UncommittedPathError, assertCommitted } from "./campaign-git";
 import { findRepoRoot, readCampaignManifest, resolveRecordsDirIn } from "./campaign-manifest";
+import { ClientNeverMixedError } from "./client-mode";
 import type { SessionReport } from "./report";
 import { refuseRetiredV2Report } from "./v2-retired";
 
@@ -419,6 +420,16 @@ export async function runCampaignAnchors(args: CampaignAnchorsArgs): Promise<num
   c.step("assert-committed");
   await assertCampaignPathsCommitted(paths, { git: c.git, repoRoot: c.repoRoot });
   announceChecked(c, paths);
+
+  // PR-479: anchors are pre-committed against a headless run's coverage; a bcdev-client report has none.
+  const ran = (JSON.parse(await readFile(args.reportPath, "utf8")) as { backend?: unknown })
+    .backend;
+  if (typeof ran === "string" && isBcdevClient(ran as BackendKind)) {
+    throw new ClientNeverMixedError(
+      "campaign anchors",
+      `${args.reportPath} ran on ${ran}, and a stage's anchors are pre-committed against a headless run's coverage`,
+    );
+  }
 
   const outcome = await runAnchorCheck({
     reportPath: args.reportPath,

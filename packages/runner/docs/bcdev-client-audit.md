@@ -6,7 +6,8 @@ without a row here.
 
 **What counts as a site:** a line that holds `"bcdev"`, `"al-runner-v3"`, `isBcdev(`, `isBcServer(`, `isBcServerName(`,
 `isBcdevClient(`, `isLocalRunner(`, `backendSessionKind`, `BackendKind` or `BCDEV_CLIENT`. Comment lines, `*.test.ts`,
-`tests/`, `itest/` and `native/` are not scanned.
+`tests/`, `itest/` and `native/` are not scanned, with one exception: `packages/runner/itest/baseline-guard.ts` is
+production code (the stage-baseline guard) and is scanned.
 
 **How the test matches rows to lines:** a row names a file and an excerpt. A site belongs to the FIRST row of its file
 (in table order) whose excerpt is a substring of the site's line, so a specific row goes above a general one. A row's
@@ -40,6 +41,8 @@ count must equal the number of sites it claims. An unclaimed site, or a count th
 | packages/runner/src/bcdev-backend.ts | import { BCDEV_CLIENT } | 1 | new-arm | import |
 | packages/runner/src/bcdev-backend.ts | kind: this.cfg.clientMode === true ? BCDEV_CLIENT : "bcdev" | 1 | new-arm | the built backend reports its own kind; coverage "none" beside it |
 | packages/runner/src/campaign-freeze.ts | report.backend === "al-runner-v3" | 1 | same-as-bcdev | v3 freeze stays refused; a client stage records its backend (baseline-guard) |
+| packages/runner/src/campaign-subcommands.ts | import { type BackendKind, type CoverageMode, isBcdevClient } | 1 | new-arm | import |
+| packages/runner/src/campaign-subcommands.ts | isBcdevClient(ran as BackendKind) | 1 | refuse:bcdev-client-never-mixed | `campaign anchors`: a stage's anchors are pre-committed against a headless run's coverage, so a client report is refused |
 | packages/runner/src/changed-line-survivors.ts | import { BCDEV_CLIENT } | 1 | new-arm | import |
 | packages/runner/src/changed-line-survivors.ts | const v3 = report.backend === "al-runner-v3" | 1 | same-as-bcdev | only v3 puts a survivor apart |
 | packages/runner/src/changed-line-survivors.ts | report.backend === BCDEV_CLIENT | 1 | new-arm | the survivor list carries the client-no-coverage text |
@@ -98,23 +101,26 @@ count must equal the number of sites it claims. An unclaimed site, or a count th
 | packages/runner/src/orchestrator.ts | ...(isBcServer(caps.kind) && | 1 | same-as-bcdev | a row whose body never ran |
 | packages/runner/src/orchestrator.ts | isBcServer(caps.kind) && contributed | 1 | same-as-bcdev | an unattested artifact quarantines (round 2 attests through rows) |
 | packages/runner/src/orchestrator.ts | cfg.killLedger === false && !isBcdev(caps.kind) | 1 | refuse:kill-ledger-flag-backend | --no-kill-ledger is refused on a client run |
-| packages/runner/src/orchestrator.ts | if (isBcdevClient(caps.kind)) { | 2 | new-arm | never-mixed and flag refusals; the /cs and version preflight |
+| packages/runner/src/orchestrator.ts | if (isBcdevClient(caps.kind)) { | 3 | new-arm | the experimental gate, never-mixed and flag refusals; the /cs and version preflight; the client-ran-testpage-unscored warning |
+| packages/runner/src/orchestrator.ts | isBcdevClient(cfg.backend.capabilities().kind) | 1 | refuse:bcdev-client-refused-named-mutants | S3: runNamedMutants has no client preflight or refusals |
 | packages/runner/src/orchestrator.ts | cfg.excludeTests.length > 0 && !isBcdev(caps.kind) | 1 | refuse:exclude-test | the client refusal comes first (bcdev-client-refused-exclude-test) |
 | packages/runner/src/orchestrator.ts | if (caps.kind === "al-runner-v3" && workers > 1) | 1 | same-as-bcdev | v3 lanes |
 | packages/runner/src/orchestrator.ts | caps.kind === "al-runner-v3" | 1 | new-arm | the collapse is gone: a client run stores its own name |
 | packages/runner/src/orchestrator.ts | ? { kind: "al-runner-v3" } | 1 | same-as-bcdev | the v3 build backend |
 | packages/runner/src/orchestrator.ts | isLocalRunner( | 9 | same-as-bcdev | the client is not a local runner |
-| packages/runner/src/orchestrator.ts | const companyWrites = isBcServer(caps.kind) | 1 | same-as-bcdev | company-write tests are left out |
-| packages/runner/src/orchestrator.ts | sessionKindSensitiveTests(testModel, tests, !isBcServer(caps.kind)) | 1 | same-as-bcdev | handlers only: TestPage tests are refused by name as headless |
+| packages/runner/src/orchestrator.ts | const companyWrites = isBcServer(caps.kind) | 1 | same-as-bcdev | the company-write scan runs for both BC kinds |
+| packages/runner/src/orchestrator.ts | isBcdevClient(caps.kind) && companyWrites.length > 0 | 1 | refuse:bcdev-client-refused-client-company-writes | S5: a client run leaves no method out, so company-write methods are refused unless --keep-company-tests (--tests-only still drops whole codeunits) |
+| packages/runner/src/orchestrator.ts | sessionKindSensitiveTests(testModel, tests, !isBcdev(caps.kind)) | 1 | new-arm | S5: a client run takes the TestPage and unreadable-source reasons too; only headless bcdev is handlers-only |
 | packages/runner/src/orchestrator.ts | backendSessionKind: backendSessionKind({ | 1 | new-arm | the event's session kind |
 | packages/runner/src/orchestrator.ts | bcdev: isBcdev(caps.kind), | 1 | new-arm | headless flag |
 | packages/runner/src/orchestrator.ts | client: isBcdevClient(caps.kind), | 1 | new-arm | the client flag: backendSessionKind says "client" |
-| packages/runner/src/orchestrator.ts | testPageRefused: ReadonlyMap<string, string> = isBcServer(caps.kind) | 1 | same-as-bcdev | TestPage tests refused by name |
+| packages/runner/src/orchestrator.ts | testPageScan: ReadonlyMap<string, string> = isBcServer(caps.kind) | 1 | same-as-bcdev | the TestPage scan runs for both BC kinds |
+| packages/runner/src/orchestrator.ts | testPageRefused: ReadonlyMap<string, string> = isBcdevClient(caps.kind) | 1 | new-arm | S5: a client run refuses no TestPage test; they run and are named client-ran-testpage-unscored |
 | packages/runner/src/orchestrator.ts | !isBcServer(caps.kind) && (await testAppInstallsPermissionsMock | 1 | same-as-bcdev | BC refuses its own |
 | packages/runner/src/orchestrator.ts | isBcServer(caps.kind) ? undefined : readAppVersionBestEffort | 1 | same-as-bcdev | app version is the server's |
 | packages/runner/src/orchestrator.ts | const largeMethods = isBcServer(caps.kind) | 1 | same-as-bcdev | large-method warning |
 | packages/runner/src/orchestrator.ts | isBcServer(backendName) | 2 | same-as-bcdev | BC shape rule for wrapped files |
-| packages/runner/src/orchestrator.ts | isBcdev(backendName) && cfg.stopHungSessions | 1 | off | a client run sends no stop |
+| packages/runner/src/orchestrator.ts | isBcdev(backendName) && cfg.stopHungSessions | 1 | refuse:bcdev-client-refused-stop-hung-sessions | S4: the flag is refused on a client run up front, so this headless warning is never reached |
 | packages/runner/src/orchestrator.ts | if (isBcServer(caps.kind)) assertMethodGuards | 1 | same-as-bcdev | guard limit per call |
 | packages/runner/src/orchestrator.ts | isBcdev(caps.kind) && baselineTimeoutMs | 1 | off | the stop grace does not apply: a client run sends no stop |
 | packages/runner/src/orchestrator.ts | if (isBcServer(caps.kind) && workers > 1) | 1 | refuse:workers | one session at a time on one tier |
@@ -142,6 +148,7 @@ count must equal the number of sites it claims. An unclaimed site, or a count th
 | packages/runner/src/cli.ts | "bcdev" section | 12 | unreachable | config error texts |
 | packages/runner/src/cli.ts | parsed.backendKind !== "al-runner-v3" | 3 | same-as-bcdev | v3-only config |
 | packages/runner/src/cli.ts | parsed.backendKind === "al-runner-v3" | 3 | same-as-bcdev | v3 branches |
+| packages/runner/src/cli.ts | parsed.backendKind !== undefined && isBcdevClient(parsed.backendKind) | 1 | refuse:bcdev-client-refused-init | S4: lethal init writes no config for the experimental backend |
 | packages/runner/src/cli.ts | isBcdevClient(parsed.backendKind) && configFile.envTool | 1 | refuse:bcdev-client-refused-env-tool | an env tool provisions a server /cs does not know |
 | packages/runner/src/cli.ts | parsed.backendKind !== "bcdev" \|\| configFile.envTool | 1 | same-as-bcdev | env-tool session is headless-only (a client run refuses above) |
 | packages/runner/src/cli.ts | join(scratchDir, "al-runner-v3") | 1 | unreachable | v3 scratch folder |
@@ -163,6 +170,10 @@ count must equal the number of sites it claims. An unclaimed site, or a count th
 | packages/runner/src/cli.ts | backendKind: "bcdev", | 1 | unreachable | `lethal verify` builds headless |
 | packages/runner/src/cli.ts | Pick<LethalConfigFile, "bcdev" \| "alRunnerV3"> | 1 | unreachable | a type |
 | packages/runner/src/cli.ts | if (backendKind === "al-runner-v3") { | 1 | same-as-bcdev | v3 branch |
+| packages/runner/itest/baseline-guard.ts | import { BCDEV_CLIENT } | 1 | new-arm | import |
+| packages/runner/itest/baseline-guard.ts | ?? "bcdev" | 2 | same-as-bcdev | a stage or report with no backend field is read as a headless one |
+| packages/runner/itest/baseline-guard.ts | frozen !== BCDEV_CLIENT && ran !== BCDEV_CLIENT | 1 | refuse:bcdev-client-never-mixed | a stage frozen on one side of the client line is never compared with a report from the other |
+| packages/runner/itest/baseline-guard.ts | bcdev-client-never-mixed: ${what} | 1 | refuse:bcdev-client-never-mixed | the refusal text |
 | scripts/agentflow/gate-table.ts | legs: [ | 6 | unreachable | gate leg names |
 | scripts/agentflow/gate-table.ts | "bcdev", | 3 | unreachable | gate leg names |
 | scripts/bc-v3-join.ts | import { BCDEV_CLIENT } | 1 | new-arm | import |
@@ -192,4 +203,7 @@ count must equal the number of sites it claims. An unclaimed site, or a count th
 None. Sites the spec does not settle, and what this table chose:
 - The report's execution context (`GuiAllowed`, `ClientType`) for a client run is written as assumed, not measured (no driver yet).
 - `lethal verify` is headless-only and builds its own backend, so a client run never reaches it. No refusal was added.
+- A client run switches no method off (round 3, S5). Company-write methods are refused by name unless `--keep-company-tests`;
+  TestPage methods run and are named `client-ran-testpage-unscored`; session-kind-sensitive tests take the client session
+  kind. `--tests-only` stays allowed: it drops whole codeunits, so no method inside a kept one is switched off.
 - A stage baseline now records the report's backend. A stage with no backend field is read as a headless one.

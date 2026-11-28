@@ -21,6 +21,8 @@ import {
   type BcDevConfigSection,
   bcDevBackendConfig,
   buildBackend,
+  helpText,
+  initFromCli,
   parseCliConfig,
   resourceIdentityFor,
 } from "../src/cli";
@@ -42,16 +44,23 @@ import {
   assertConfirmInput,
   mergeConfirmation,
 } from "../src/confirm";
+import type { RunEvent } from "../src/events";
 import { MIN_CONTROL_VERSION } from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
 import { isRunOpKind } from "../src/lease";
 import type { LeaseApi } from "../src/lease";
 import { describe as describeMutant, toMutationElements } from "../src/mutation-elements";
+import { NamedMutantError } from "../src/named-mutants";
 import { notRunLine, notRunSurvivors } from "../src/not-run-survivors";
-import { KillLedgerFlagBackendError, LeaseSession, runSession } from "../src/orchestrator";
+import {
+  KillLedgerFlagBackendError,
+  LeaseSession,
+  runNamedMutants,
+  runSession,
+} from "../src/orchestrator";
 import { CAVEAT_INTERPRETATIONS } from "../src/report";
 import type { MutantOutcome } from "../src/report";
-import { backendSessionKind } from "../src/session-kind";
+import { SessionKindUnsetError, backendSessionKind } from "../src/session-kind";
 import { SessionSafety } from "../src/session-safety";
 import { ResultsStore, backendBuildRefusal } from "../src/store";
 import { servesTestApp, testAppJson } from "./helpers/proven-test-app";
@@ -325,6 +334,16 @@ describe("PR-479: the /cs probe", () => {
     );
   });
 
+  // Red: change `status >= 500` back to a bare 404 test (client-mode.ts): each 5xx passes the probe.
+  test("any 5xx refuses, not only a 404; the line below 500 still passes", async () => {
+    for (const status of [500, 502, 503, 599]) {
+      await expect(probeClientSession("https://web/BC", async () => status)).rejects.toThrow(
+        new RegExp(`client-session-unavailable.*${status}`),
+      );
+    }
+    await probeClientSession("https://web/BC", async () => 499);
+  });
+
   test("a 405 (the measured answer with /cs present), a 200 and a 401 pass; the URL is <base>/cs", async () => {
     const seen: string[] = [];
     for (const status of [405, 200, 401]) {
@@ -398,13 +417,15 @@ const HEADLESS: BackendCapabilities = {
 const CLIENT: BackendCapabilities = { ...HEADLESS, coverage: "none", kind: BCDEV_CLIENT };
 const selectorIds = { selectorId: 50000, controlId: 50001, tableId: 50002 };
 
-async function makeProject() {
+async function makeProject(extraTestFiles: Record<string, string> = {}) {
   const root = scratch("lethal-pr479-");
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
   await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), TESTS_AL);
+  for (const [name, text] of Object.entries(extraTestFiles))
+    await Bun.write(join(testDir, name), text);
   await Bun.write(join(testDir, "app.json"), testAppJson());
   return { projectDir, testDir, instrumentedDir: join(root, "instr") };
 }
@@ -484,6 +505,8 @@ async function session(
     ...project,
     instrumentedDir: `${project.instrumentedDir}${o.tag ?? ""}`,
     selectorIds,
+    // The opt-in a client run needs; a test that checks the gate passes `experimentalClientMode: false`.
+    ...(backend.capabilities().kind === BCDEV_CLIENT ? { experimentalClientMode: true } : {}),
     ...extra,
   });
   return { report, store, project };
@@ -522,13 +545,18 @@ describe("PR-479: a client session", () => {
     expect(i.meaning).toContain("Coverage is off on this backend");
     expect(i.meaning).toContain("Do not read these survivors as headless survivors");
     for (const risk of [
-      "NumberSequence",
-      "IsolatedStorage",
-      "TaskScheduler",
-      "zombie",
-      "child session",
+      "second session of its own",
+      "number sequence",
+      "stored secrets",
+      "background session or job",
+      "per-method events",
+      "dead session",
+      "never ends",
     ])
       expect(i.meaning).toContain(risk);
+    // Plain words: no unexplained product term (the nit of the round-1 review).
+    for (const jargon of ["NST", "NumberSequence", "zombie", "TaskScheduler", "IsolatedStorage"])
+      expect(i.meaning).not.toContain(jargon);
     expect(i.basis).toBe("R1170");
   });
 
@@ -586,6 +614,7 @@ describe("PR-479: a client session", () => {
     ["workers above 1", { workers: 2 }, ClientModeRefusedError],
     ["--no-kill-ledger", { killLedger: false }, KillLedgerFlagBackendError],
     ["--confirm-from", { confirm: {} as never }, ClientNeverMixedError],
+    ["--stop-hung-sessions", { stopHungSessions: true }, ClientModeRefusedError],
   ];
   for (const [flag, extra, expected] of refusedFlags) {
     test(`${flag} is refused on a client run, by name, before any run`, async () => {
@@ -652,17 +681,15 @@ describe("PR-479: lending never crosses the client line", () => {
     expect(backendBuildRefusal(run("bcdev"), undefined)).toBeUndefined();
   });
 
+  // Coverage is "none" on BOTH sides, so R354's coverage-mode refusal cannot pass the test: only the backend arms
+  // (`backendBuildRefusal`) can. Red: drop the client arms in `backendBuildRefusal` (store.ts): the cross cases lend.
   test("--skip-known-survivors never lends a survivor across the line, either way; within one side it does", async () => {
+    const headlessNone = { ...HEADLESS, coverage: "none" as const };
     const cases = [
-      {
-        first: { ...HEADLESS, coverage: "none" as const },
-        second: { ...HEADLESS, coverage: "none" as const },
-        lent: true,
-      },
+      { first: headlessNone, second: headlessNone, lent: true },
       { first: CLIENT, second: CLIENT, lent: true },
-      { first: HEADLESS, second: HEADLESS, lent: true },
-      { first: CLIENT, second: HEADLESS, lent: false },
-      { first: HEADLESS, second: CLIENT, lent: false },
+      { first: CLIENT, second: headlessNone, lent: false },
+      { first: headlessNone, second: CLIENT, lent: false },
     ] as const;
     for (const c of cases) {
       const store = new ResultsStore(":memory:");
@@ -671,10 +698,20 @@ describe("PR-479: lending never crosses the client line", () => {
       const survivor = one.report.mutants.find((m) => m.verdict === "survived");
       expect(survivor, `${c.first.kind} -> ${c.second.kind}`).toBeDefined();
       const b2 = new Stub(c.second);
-      await session(b2, { skipKnownSurvivors: true }, { store, project, tag: "-2" });
+      const events: RunEvent[] = [];
+      await session(
+        b2,
+        { skipKnownSurvivors: true, emit: [(e) => events.push(e)] },
+        { store, project, tag: "-2" },
+      );
       const reran = b2.log.includes(`run:${survivor?.mutantCode}`);
-      // A lent survivor is skipped (never executed); a refused one runs again.
-      expect(reran, `${c.first.kind} -> ${c.second.kind}`).toBe(!c.lent || false);
+      const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+      // A lent survivor is skipped (never executed); a refused one runs again and says why.
+      expect(reran, `${c.first.kind} -> ${c.second.kind}`).toBe(!c.lent);
+      expect(
+        codes.includes("history-backend-build-changed"),
+        `${c.first.kind} -> ${c.second.kind}`,
+      ).toBe(!c.lent);
       store.close();
     }
   });
@@ -959,5 +996,240 @@ describe("PR-479: survivors carry the caveat", () => {
     ).mutants;
     expect(rows.find((r) => r.id === "0/M0001")?.description).toContain("client-no-coverage");
     expect(rows.find((r) => r.id === "0/M0002")?.description).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 9. Round 3: the review's rulings (S2 to S5)
+// ---------------------------------------------------------------------------------------------
+
+describe("PR-479 S2: runSession is the second experimental gate", () => {
+  // Red: delete the `experimentalClientMode !== true` line in runSession: the unflagged client run starts.
+  test("a client backend without experimentalClientMode is refused by name before any backend call; with it, it runs", async () => {
+    const refused = new Stub(CLIENT);
+    await expect(session(refused, { experimentalClientMode: false })).rejects.toBeInstanceOf(
+      BcdevClientExperimentalError,
+    );
+    expect(refused.log).toEqual([]);
+    const absent = new Stub(CLIENT);
+    const project = await makeProject();
+    await expect(
+      runSession({
+        backend: absent,
+        store: new ResultsStore(":memory:"),
+        ...project,
+        selectorIds,
+      }),
+    ).rejects.toBeInstanceOf(BcdevClientExperimentalError);
+    expect(absent.log).toEqual([]);
+    // The flag opens the gate; a headless run never needs it.
+    const open = await session(new Stub(CLIENT));
+    expect(open.report.backend).toBe(BCDEV_CLIENT);
+    open.store.close();
+    const headless = await session(new Stub(HEADLESS));
+    expect(headless.report.backend).toBe("bcdev");
+    headless.store.close();
+  });
+});
+
+describe("PR-479 S3: runNamedMutants refuses a client backend", () => {
+  const cfgOf = (backend: Stub) =>
+    ({
+      backend,
+      store: new ResultsStore(":memory:"),
+      runId: 999,
+      testPageRefused: new Map(),
+    }) as unknown as Parameters<typeof runNamedMutants>[0];
+
+  // Red: delete the client check at the top of runNamedMutantsBody: the client call reaches "run 999 does not exist".
+  test("a client backend is refused by name with no backend call; a headless one gets past the check", async () => {
+    const client = new Stub(CLIENT);
+    await expect(runNamedMutants(cfgOf(client))).rejects.toThrow(
+      /bcdev-client-refused-named-mutants/,
+    );
+    await expect(runNamedMutants(cfgOf(new Stub(CLIENT)))).rejects.toBeInstanceOf(
+      ClientModeRefusedError,
+    );
+    expect(client.log).toEqual([]);
+    // Headless: the next check (the run row) answers instead.
+    await expect(runNamedMutants(cfgOf(new Stub(HEADLESS)))).rejects.toBeInstanceOf(
+      NamedMutantError,
+    );
+  });
+});
+
+describe("PR-479 S4: --stop-hung-sessions and init", () => {
+  // Red: delete the stopHungSessions block in runSession's client arm: the flag is accepted.
+  test("--stop-hung-sessions is refused on a client run by name; headless is not refused by that guard", async () => {
+    const backend = new Stub(CLIENT);
+    await expect(session(backend, { stopHungSessions: true })).rejects.toThrow(
+      /bcdev-client-refused-stop-hung-sessions/,
+    );
+    expect(backend.log).toEqual([]);
+    const headless = await session(new Stub(HEADLESS), { stopHungSessions: true }).catch(
+      (e: unknown) => e,
+    );
+    expect(headless).not.toBeInstanceOf(ClientModeRefusedError);
+    if (!(headless instanceof Error)) (headless as { store: ResultsStore }).store.close();
+  });
+
+  // Red: delete the client check at the top of initFromCli: the client call reads the project instead.
+  test("lethal init --backend bcdev-client is refused by name; --backend bcdev is not", async () => {
+    const dir = scratch("lethal-pr479-init-");
+    const client = await initFromCli({
+      mode: "init",
+      projectDir: dir,
+      backendKind: BCDEV_CLIENT,
+    }).catch((e: unknown) => e);
+    expect(client).toBeInstanceOf(ClientModeRefusedError);
+    expect((client as Error).message).toContain("bcdev-client-refused-init");
+    const headless = await initFromCli({
+      mode: "init",
+      projectDir: dir,
+      backendKind: "bcdev",
+    }).catch((e: unknown) => e);
+    expect(headless).not.toBeInstanceOf(ClientModeRefusedError);
+  });
+});
+
+describe("PR-479 S5: a client run switches no method off", () => {
+  const COMPANY_AL = `codeunit 79102 "Company Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure W()
+    var
+        C: Record Company;
+    begin
+        C.Insert();
+    end;
+}
+`;
+  const PAGE_AL = `codeunit 79103 "Page Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OpensCard()
+    var
+        Card: TestPage "Some Card";
+    begin
+        Card.OpenView();
+    end;
+}
+`;
+  const warnings = (events: readonly RunEvent[]) =>
+    events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+
+  // Red: delete the client-company-writes refusal in runSession: the client run silently leaves the method out.
+  test("company-write methods: refused by name on a client run; --keep-company-tests runs them; headless leaves them out", async () => {
+    const project = await makeProject({ "Company.Codeunit.al": COMPANY_AL });
+    const client = new Stub(CLIENT);
+    const err = await session(client, {}, { project, tag: "-a" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ClientModeRefusedError);
+    expect((err as Error).message).toContain("client-company-writes");
+    expect((err as Error).message).toContain("Company Tests.W");
+    expect(client.log.some((l) => l.startsWith("run:") || l === "deploy")).toBe(false);
+
+    const kept = new Stub(CLIENT);
+    const events: RunEvent[] = [];
+    const k = await session(
+      kept,
+      { keepCompanyTests: true, emit: [(e) => events.push(e)] },
+      { project, tag: "-b" },
+    );
+    expect(k.report.excludedTests ?? []).toEqual([]);
+    expect(warnings(events)).toContain("company-write-tests-kept");
+    k.store.close();
+
+    const headless = new Stub(HEADLESS);
+    const h = await session(headless, {}, { project, tag: "-c" });
+    expect(h.report.excludedTests?.map((t) => [t.test, t.reason])).toEqual([
+      ["Company Tests.W", "company-write"],
+    ]);
+    h.store.close();
+  });
+
+  // Red: make the refusal read every test file's source, not the run's own list (an over-broad refusal): this goes red.
+  test("--tests-only that drops the company-writing codeunit leaves nothing to refuse", async () => {
+    const project = await makeProject({ "Company.Codeunit.al": COMPANY_AL });
+    const r = await session(
+      new Stub(CLIENT),
+      { testsOnly: ["SandboxTests.Codeunit.al"] },
+      { project, tag: "-d" },
+    );
+    expect(r.report.backend).toBe(BCDEV_CLIENT);
+    r.store.close();
+  });
+
+  // Red: restore `isBcServer(...)` as the testPageRefused source for a client run: the test is refused, not run.
+  test("TestPage methods run on a client run and are named client-ran-testpage-unscored; headless refuses them", async () => {
+    const project = await makeProject({ "Page.Codeunit.al": PAGE_AL });
+    const events: RunEvent[] = [];
+    const c = await session(
+      new Stub(CLIENT),
+      { ciSessionKind: "client", emit: [(e) => events.push(e)] },
+      { project, tag: "-e" },
+    );
+    const named = events.find(
+      (e) => e.type === "warning" && e.code === "client-ran-testpage-unscored",
+    );
+    expect(JSON.stringify(named)).toContain("Page Tests.OpensCard");
+    expect(events.some((e) => e.type === "tests-testpage-refused")).toBe(false);
+    c.store.close();
+
+    const hEvents: RunEvent[] = [];
+    const h = await session(
+      new Stub(HEADLESS),
+      { emit: [(e) => hEvents.push(e)] },
+      { project, tag: "-f" },
+    );
+    expect(hEvents.some((e) => e.type === "tests-testpage-refused")).toBe(true);
+    expect(warnings(hEvents)).not.toContain("client-ran-testpage-unscored");
+    h.store.close();
+  });
+
+  // Red: pass `!isBcServer(caps.kind)` again to sessionKindSensitiveTests: the client run with no ciSessionKind starts.
+  test("session-kind-sensitive: a TestPage test with ciSessionKind unset is refused on a client run, and not on headless bcdev", async () => {
+    const project = await makeProject({ "Page.Codeunit.al": PAGE_AL });
+    const client = new Stub(CLIENT);
+    const err = await session(client, {}, { project, tag: "-g" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SessionKindUnsetError);
+    expect((err as Error).message).toContain("Page Tests.OpensCard (testpage)");
+    expect(client.log.some((l) => l.startsWith("run:"))).toBe(false);
+    const events: RunEvent[] = [];
+    const headless = await session(
+      new Stub(HEADLESS),
+      { emit: [(e) => events.push(e)] },
+      { project, tag: "-h" },
+    );
+    expect(events.some((e) => e.type === "tests-session-kind-sensitive")).toBe(false);
+    headless.store.close();
+  });
+});
+
+describe("PR-479 nits", () => {
+  // Red: restore the old two-kind strings in parseBackendKind (cli.ts).
+  test("the --backend error strings list all three kinds, the client one marked experimental", () => {
+    const parse = (backend: string) =>
+      parseCliConfig(["run", "--project", "/p", "--tests", "/t", "--backend", backend]);
+    expect(() => parse("nope")).toThrow(
+      'unknown --backend "nope" (expected "bcdev", "al-runner-v3" or "bcdev-client" (experimental))',
+    );
+    expect(() => parseCliConfig(["run", "--project", "/p", "--tests", "/t"])).toThrow(
+      'missing required --backend <"bcdev" | "al-runner-v3" | "bcdev-client" (experimental)>',
+    );
+  });
+
+  // Red: take one space out of the --workers help line (cli.ts).
+  test("the help keeps --workers on the column its neighbours use", () => {
+    const lines = helpText("0").split("\n");
+    const col = (flag: string) => {
+      const l = lines.find((x) => x.startsWith(`  ${flag}`));
+      if (l === undefined) throw new Error(`no help line for ${flag}`);
+      return l.length - l.slice(2 + flag.length).trimStart().length;
+    };
+    expect(col("--workers <n>")).toBe(col("--progress-out <path>"));
   });
 });

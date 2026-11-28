@@ -1146,6 +1146,27 @@ describe("lethal campaign freeze | anchors | compare", () => {
     TEST_TIMEOUT_MS,
   );
 
+  // Red: delete the client check in runCampaignAnchors (campaign-subcommands.ts): the client report is checked, not refused.
+  test(
+    "PR-479: anchors REFUSES a bcdev-client report, and still checks a headless one",
+    async () => {
+      const err = await refusalFrom(
+        runCampaignAnchors({ manifestPath, stage: "stage-ok", reportPath: clientReportPath }),
+      );
+      expect(err.message).toContain("bcdev-client-never-mixed");
+      expect(err.message).toContain("campaign anchors");
+      const lines: string[] = [];
+      const code = await runCampaignAnchors({
+        manifestPath,
+        stage: "stage-ok",
+        reportPath,
+        log: (l) => lines.push(l),
+      });
+      expect(code).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   test("R355: the result type REQUIRES the statement when the mode is unverified", () => {
     // Compile-time: `bun run typecheck` fails if an unverified result can omit its statement.
     // @ts-expect-error -- `statement` is required when `verified` is false.

@@ -96,7 +96,7 @@ export const defaultClientSessionProbe: ClientSessionProbe = async (url) => {
 
 /**
  * Before any publish: `<webClientBaseUrl>/cs` must answer (a GET; bcwin answered 405 with /cs
- * present, which counts as present). A missing field, a connection failure or a 404 refuses.
+ * present, which counts as present). A missing field, a connection failure, a 404 or any 5xx refuses.
  */
 export async function probeClientSession(
   webClientBaseUrl: string | undefined,
@@ -116,7 +116,9 @@ export async function probeClientSession(
       `${url} could not be reached (${err instanceof Error ? err.message : String(err)})`,
     );
   }
-  if (status === 404) throw new ClientSessionUnavailableError(`${url} answered 404`);
+  if (status === 404 || status >= 500) {
+    throw new ClientSessionUnavailableError(`${url} answered ${status}`);
+  }
 }
 
 /** Refuses a control app older than `CLIENT_MIN_CONTROL_VERSION`; an unreadable version refuses too. */

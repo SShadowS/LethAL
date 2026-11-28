@@ -895,12 +895,13 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "This run used the experimental bcdev-client backend. Coverage is off on this backend: every mutant " +
       "ran every test codeunit, so a survivor may be a mutant no test reached. Do not read these survivors " +
       "as headless survivors. A mutant no test reached is `survived` here, where a headless run reports it " +
-      "`no-coverage`. Risks not measured in this build: a child session a test starts; a NumberSequence, " +
-      "which is not rolled back; IsolatedStorage, an OnBefore write, and a raising subscriber under isolation; " +
-      "a background session, TaskScheduler or job queue started at login, which can reach a guard during a " +
-      "run; a subscriber to the test runner's per-method events, which runs outside isolation; a forced " +
-      "reset without a real NST restart, which leaves a zombie session; and an overrun, which wedges the " +
-      "server until a restart and ends the run's remaining work.",
+      "`no-coverage`. Risks not measured in this build: a test that starts a second session of its own; a " +
+      "number sequence, which a test's rollback does not undo; stored secrets, a write made before a test " +
+      "starts, and an event handler that raises an error; a background session or job started at login, " +
+      "which can reach a mutant during a run; a handler for the test runner's own per-method events, which " +
+      "runs outside the test's rollback; a forced reset that does not restart the server, which can leave a " +
+      "dead session behind; and a mutant that never ends, which blocks the server until it is restarted and " +
+      "ends the run's remaining work.",
     entailedNegative:
       "Not a claim that any survivor is wrong, and not a claim that a kill is: a kill is reproduced and " +
       "confirmed before it is reported. It says only that this run's survivors do not compare with a " +

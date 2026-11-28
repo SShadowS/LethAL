@@ -142,6 +142,7 @@ import {
   parseAlcErrors,
 } from "./bisect";
 import {
+  BcdevClientExperimentalError,
   ClientModeRefusedError,
   ClientNeverMixedError,
   ClientSessionUnavailableError,
@@ -1892,6 +1893,11 @@ export interface SessionConfig {
    * object they name is `error` / `left-out-test-reach`. al-runner-v3 never leaves them out.
    */
   readonly keepCompanyTests?: boolean;
+  /**
+   * PR-479: the experimental opt-in. `runSession` refuses a bcdev-client backend unless this is `true`, so a caller
+   * that builds the backend by hand cannot skip the `--experimental-client-mode` gate (`BcdevClientExperimentalError`).
+   */
+  readonly experimentalClientMode?: boolean;
   /**
    * PR-144, the withheld-kill recheck's nested session only: `Codeunit.Method` names; the suite is cut to
    * exactly these, after `--tests-only`. Sound only where each test runs alone, so it is refused unless the
@@ -7465,6 +7471,13 @@ async function runSessionBody(
   // PR-479: a bcdev-client run is never mixed with another backend's runs, and switches no method off. Each is
   // refused by name before any backend call.
   if (isBcdevClient(caps.kind)) {
+    if (cfg.experimentalClientMode !== true) throw new BcdevClientExperimentalError();
+    if (cfg.stopHungSessions === true) {
+      throw new ClientModeRefusedError(
+        "stop-hung-sessions",
+        "a client run sends no stop: a mutant that never ends blocks the server until it is restarted",
+      );
+    }
     if (cfg.confirm !== undefined) {
       throw new ClientNeverMixedError(
         "--confirm-from",
@@ -7802,6 +7815,18 @@ async function runSessionBody(
   // PR-212 (R1113): on a BC backend, the test methods that write the Company table are left out by name, through
   // the same records as `--exclude-test`, unless `--keep-company-tests`. al-runner-v3 opens no BC tier: untouched.
   const companyWrites = isBcServer(caps.kind) ? companyWriteMethods(testModel, tests) : [];
+  // PR-479: a client run switches no method off, so company-write methods are refused by name, never left out.
+  if (isBcdevClient(caps.kind) && companyWrites.length > 0 && cfg.keepCompanyTests !== true) {
+    throw new ClientModeRefusedError(
+      "client-company-writes",
+      `${companyWrites.length} test method(s) write the Company table (${companyWrites
+        .slice(0, 5)
+        .map((m) => qualifiedTestName(m.test))
+        .join(
+          ", ",
+        )}${companyWrites.length > 5 ? ", ..." : ""}) and a client run leaves no method out. Pass --keep-company-tests to run them, or narrow the suite with --tests-only`,
+    );
+  }
   const companyLeftOut = cfg.keepCompanyTests === true ? [] : companyWrites;
   const companyRecords: { test: string; file: string; reason: "company-write" }[] = [];
   if (companyLeftOut.length > 0) {
@@ -7930,7 +7955,8 @@ async function runSessionBody(
   // company-write leave-out) that can change with the session kind. Unset `ciSessionKind` with one of them is refused here,
   // before the TestPage scan, the lease work and every baseline or mutant run. The bcdev scan is H only: its TestPage tests
   // are refused and labelled already.
-  const sessionKindSensitive = sessionKindSensitiveTests(testModel, tests, !isBcServer(caps.kind));
+  // PR-479: a client run takes the TestPage and unreadable-source reasons too (it can open a TestPage); only headless bcdev is H only.
+  const sessionKindSensitive = sessionKindSensitiveTests(testModel, tests, !isBcdev(caps.kind));
   if (sessionKindSensitive.length > 0) {
     if (cfg.ciSessionKind === undefined)
       throw new SessionKindUnsetError(sessionKindSensitive, cfg.configPath);
@@ -7953,9 +7979,24 @@ async function runSessionBody(
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
   // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
-  const testPageRefused: ReadonlyMap<string, string> = isBcServer(caps.kind)
+  const testPageScan: ReadonlyMap<string, string> = isBcServer(caps.kind)
     ? scanTestPageModel(testModel, tests)
     : new Map();
+  // PR-479: a client session can open a TestPage, so a bcdev-client run refuses none of them: they run, and are named
+  // below (`client-ran-testpage-unscored`).
+  const testPageRefused: ReadonlyMap<string, string> = isBcdevClient(caps.kind)
+    ? new Map()
+    : testPageScan;
+  if (isBcdevClient(caps.kind)) {
+    const ran = tests.filter((t) => testPageScan.has(testKeyOf(t))).map(qualifiedTestName);
+    if (ran.length > 0) {
+      emit({
+        type: "warning",
+        code: "client-ran-testpage-unscored",
+        message: `[lethal] ${ran.length} test(s) open a TestPage and ran in the client session: ${ran.join(", ")}. A headless run refuses them. How a TestPage test behaves in this backend's session is not measured, so what they do to a verdict is not scored.`,
+      });
+    }
+  }
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
     .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
@@ -11147,6 +11188,13 @@ async function runNamedMutantsBody(
   cleanups: Array<() => void>,
 ): Promise<NamedMutantsResult> {
   const who = "runNamedMutants";
+  // PR-479: named mutants have no client preflight, refusals or session handling; refused before anything else.
+  if (isBcdevClient(cfg.backend.capabilities().kind)) {
+    throw new ClientModeRefusedError(
+      "named-mutants",
+      "named mutants run on headless bcdev only: they have no /cs probe, no control-version check and no client refusals",
+    );
+  }
   // The type requires it; this catches an untyped caller (run 002, review r1 #2).
   if (!(cfg.testPageRefused instanceof Map)) {
     throw new NamedMutantError(

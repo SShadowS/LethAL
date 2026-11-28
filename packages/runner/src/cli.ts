@@ -440,13 +440,17 @@ async function readDependencyCodeunits(
  *  al-runner is refused by name, never as "unknown". */
 function parseBackendKind(raw: string | undefined): BackendKind {
   if (raw === undefined || raw === "") {
-    throw new Error('missing required --backend <"bcdev" | "al-runner-v3">');
+    throw new Error(
+      'missing required --backend <"bcdev" | "al-runner-v3" | "bcdev-client" (experimental)>',
+    );
   }
   if (raw === RETIRED_V2_BACKEND) throw new AlRunnerV2RetiredError(V2_RETIRED_BACKEND_FLAG);
   // PR-479: "bcdev-client" is parsed here and refused without `--experimental-client-mode` where the backend is built
   // (`buildBackend`), so no parse path can quietly turn it on.
   if (raw !== "bcdev" && raw !== "al-runner-v3" && raw !== "bcdev-client") {
-    throw new Error(`unknown --backend "${raw}" (expected "bcdev" or "al-runner-v3")`);
+    throw new Error(
+      `unknown --backend "${raw}" (expected "bcdev", "al-runner-v3" or "bcdev-client" (experimental))`,
+    );
   }
   return raw;
 }
@@ -1304,8 +1308,10 @@ RUN — cost and recovery
                              test codeunit in a /cs client session with coverage OFF (a survivor
                              may be a mutant no test reached; the client-no-coverage caveat is on
                              every report). Needs LethAL Control 1.0.0.31 and "webClientBaseUrl"
-                             in the config's bcdev section. Round 1 has no driver yet
-  --workers <n>             parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
+                             in the config's bcdev section. Refuses --stop-hung-sessions, --workers
+                             above 1 and a run whose tests write the Company table (unless
+                             --keep-company-tests). Round 1 has no driver yet
+  --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
                              backend, with serve-entries and a build whose pin retires the §6
                              Sleep rule (else refused by name). The first latch or stop ends the
                              session with an error naming the mutants it discarded. bcdev is
@@ -5192,6 +5198,8 @@ export async function runFromCliWithAccept(
               ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
               ...(parsed.excludeTests !== undefined ? { excludeTests: parsed.excludeTests } : {}),
               ...(parsed.keepCompanyTests === true ? { keepCompanyTests: true } : {}),
+              // PR-479: the second gate, in `runSession` (the first is where the backend is built).
+              ...(parsed.experimentalClientMode === true ? { experimentalClientMode: true } : {}),
               ...(parsed.maxGuardsPerBatch !== undefined
                 ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
                 : {}),
@@ -6457,6 +6465,13 @@ export function renderDoctorReport(report: DoctorReport, createModeCaveat?: stri
  * REFUSES to overwrite without `--force`, because a config holds credentials someone typed once.
  */
 export async function initFromCli(parsed: InitCliConfig): Promise<number> {
+  // PR-479: a client run has no config template of its own; the experimental backend is opened by hand.
+  if (parsed.backendKind !== undefined && isBcdevClient(parsed.backendKind)) {
+    throw new ClientModeRefusedError(
+      "init",
+      'init writes no config for the experimental backend; init with --backend bcdev, then add "webClientBaseUrl" to the bcdev section',
+    );
+  }
   const outPath = parsed.outPath ?? join(parsed.projectDir, "lethal.config.json");
   if (existsSync(outPath) && parsed.force !== true) {
     throw new Error(

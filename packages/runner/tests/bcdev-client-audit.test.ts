@@ -15,6 +15,7 @@ const SITE_RE =
   /"bcdev"|"al-runner-v3"|\bisBcdev\(|\bisBcServer\(|\bisBcServerName\(|\bisBcdevClient\(|\bisLocalRunner\(|\bbackendSessionKind\b|\bBackendKind\b|\bBCDEV_CLIENT\b/;
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "tests", "itest", "native"]);
+const AUDITED_ITEST_FILE = "packages/runner/itest/baseline-guard.ts";
 
 function walk(dir: string, out: string[]): void {
   for (const name of readdirSync(dir)) {
@@ -34,6 +35,8 @@ function scanSites(): { file: string; text: string }[] {
     if (statSync(p).isDirectory()) walk(p, files);
   }
   walk(join(ROOT, "scripts"), files);
+  // S6: `itest/` is skipped as gate legs, but `baseline-guard.ts` is production code (the stage-baseline guard).
+  files.push(join(ROOT, ...AUDITED_ITEST_FILE.split("/")));
   const sites: { file: string; text: string }[] = [];
   for (const f of files.sort()) {
     const rel = relative(ROOT, f).replaceAll("\\", "/");
@@ -126,6 +129,18 @@ describe("PR-479: the bcdev-client audit table", () => {
     const { countMismatch } = matchAudit(rest, rows);
     expect(countMismatch.length).toBeGreaterThan(0);
   });
+
+  // S6. Red: drop `files.push(...AUDITED_ITEST_FILE...)` in scanSites: no baseline-guard site is scanned, and its rows miscount.
+  test("the stage-baseline guard (itest/baseline-guard.ts) is in the audit's scope, and has rows", () => {
+    expect(sites.some((s) => s.file === AUDITED_ITEST_FILE)).toBe(true);
+    expect(rows.some((r) => r.file === AUDITED_ITEST_FILE)).toBe(true);
+    // The other gate files stay out of scope.
+    expect(
+      sites.some(
+        (s) => s.file.startsWith("packages/runner/itest/") && s.file !== AUDITED_ITEST_FILE,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("PR-479: no default or caller names bcdev-client", () => {
@@ -168,6 +183,76 @@ describe("PR-479: no default or caller names bcdev-client", () => {
 
   test("no non-test file but backend.ts and the cli wiring writes the quoted name", () => {
     expect(scanQuoted()).toEqual([]);
+  });
+
+  // S2: the three tokens that open or name the client backend, and the only files that may hold each. `packages/`
+  // (itest included) and `scripts/` are scanned; test files may name them to test them.
+  const PINS: Record<string, readonly string[]> = {
+    "clientMode:": ["packages/runner/src/cli.ts"],
+    experimentalClientMode: ["packages/runner/src/cli.ts", "packages/runner/src/orchestrator.ts"],
+    BCDEV_CLIENT: [
+      "packages/runner/itest/baseline-guard.ts",
+      "packages/runner/src/backend.ts",
+      "packages/runner/src/bcdev-backend.ts",
+      "packages/runner/src/changed-line-survivors.ts",
+      "packages/runner/src/line-map.ts",
+      "packages/runner/src/mutation-elements.ts",
+      "packages/runner/src/store.ts",
+      "scripts/bc-v3-join.ts",
+    ],
+  };
+
+  /** Each non-comment line of `files` (path -> text) that holds a pinned token in a file not allowed to. */
+  function pinViolations(files: ReadonlyMap<string, string>): string[] {
+    const hits: string[] = [];
+    for (const [rel, text] of files) {
+      text.split("\n").forEach((line, i) => {
+        const t = line.trim();
+        if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) return;
+        for (const [token, allowed] of Object.entries(PINS)) {
+          if (line.includes(token) && !allowed.includes(rel))
+            hits.push(`${rel}:${i + 1}: ${token}`);
+        }
+      });
+    }
+    return hits;
+  }
+
+  function readAll(): Map<string, string> {
+    const files: string[] = [];
+    for (const d of readdirSync(join(ROOT, "packages"))) {
+      const p = join(ROOT, "packages", d);
+      if (statSync(p).isDirectory()) walkAll(p, files);
+    }
+    walkAll(join(ROOT, "scripts"), files);
+    return new Map(
+      files.map((f) => [relative(ROOT, f).replaceAll("\\", "/"), readFileSync(f, "utf8")]),
+    );
+  }
+
+  test("clientMode:, experimentalClientMode and BCDEV_CLIENT appear only in the files that may hold them", () => {
+    const all = readAll();
+    expect(pinViolations(all)).toEqual([]);
+    // Each allowed file really holds its token, so an allow-list entry cannot go stale unseen.
+    for (const [token, allowed] of Object.entries(PINS))
+      for (const rel of allowed)
+        expect(all.get(rel)?.includes(token), `${rel} ${token}`).toBe(true);
+    // The itest folder and scripts are inside the scan.
+    expect([...all.keys()].some((k) => k.startsWith("packages/runner/itest/"))).toBe(true);
+    expect([...all.keys()].some((k) => k.startsWith("scripts/"))).toBe(true);
+  });
+
+  test("red direction: a new file that sets any of the three tokens is caught; a comment is not", () => {
+    for (const token of Object.keys(PINS)) {
+      const line = token.endsWith(":") ? `x({ ${token} true })` : `x(${token})`;
+      for (const rel of [
+        "packages/runner/itest/new-leg.ts",
+        "scripts/new-script.ts",
+        "packages/runner/src/new.ts",
+      ])
+        expect(pinViolations(new Map([[rel, line]]))).toEqual([`${rel}:1: ${token}`]);
+      expect(pinViolations(new Map([["scripts/new-script.ts", `// ${line}`]]))).toEqual([]);
+    }
   });
 
   test("the cli wiring and backend.ts do write it (the scan sees something to allow)", () => {
