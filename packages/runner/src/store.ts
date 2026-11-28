@@ -16,6 +16,7 @@ import {
   serializeKey,
   twinSiteOf,
 } from "./selection";
+import { TIER_SLOWDOWN_REASON_PREFIX } from "./tier-slowdown";
 import { RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 import { commonWorkDate } from "./workdate-guard";
 
@@ -709,8 +710,9 @@ CREATE TABLE IF NOT EXISTS lost_batches (
 );
 -- R1227: the BC tier stopped answering lease renews. Rows of the run with id > after_mutant_id were
 -- measured while it was degraded: every resume reader reads them as error (EFFECTIVE_VERDICT_SQL),
--- and the session's teardown rewrites them. One window per run, the first wins. A whole new TABLE
--- needs no migrate() step.
+-- and the session's teardown rewrites them. One window per run, the EARLIER one wins (PR-466: per
+-- column the smaller after_mutant_id and after_snapshot_id; the renew note on a tie). A whole new
+-- TABLE needs no migrate() step.
 CREATE TABLE IF NOT EXISTS degraded_windows (
   run_id INTEGER NOT NULL PRIMARY KEY REFERENCES runs(id),
   after_mutant_id INTEGER NOT NULL,
@@ -2596,27 +2598,47 @@ export class ResultsStore {
   }
 
   /**
-   * R1227: the run's tier stopped answering lease renews after mutant row `afterMutantId` (and
-   * baseline snapshot `afterSnapshotId`). Writes the window (the first wins) and rewrites the rows
-   * after it as `invalidateBatch` does, except carried rows (measured by another run). Later baseline
-   * snapshots are refused at read time (`findBaselineSnapshot`). Safe to call again: the teardown does,
-   * for a row recorded after the stop. One transaction.
+   * R1227 / PR-466: the run's tier was degraded after mutant row `afterMutantId` (and baseline snapshot
+   * `afterSnapshotId`): it stopped answering lease renews, or the tier-slowdown stop fired. Writes the
+   * window and rewrites the rows after it as `invalidateBatch` does, except carried rows (measured by
+   * another run). Later baseline snapshots are refused at read time (`findBaselineSnapshot`). Safe to call
+   * again: the teardown does, for a row recorded after the stop. One transaction.
+   *
+   * B1: the EARLIER window wins, per column: `after_mutant_id` and `after_snapshot_id` each keep the
+   * smaller value. The note goes with the smaller mutant id; on a tie the renew note wins (a note that
+   * does not begin `TIER_SLOWDOWN_REASON_PREFIX`), else the stored note stays. Returns the stored window.
    */
   markDegradedWindow(
     runId: number,
     afterMutantId: number,
     afterSnapshotId: number,
     note: string,
-  ): void {
-    this.db.transaction(() => {
+  ): { afterMutantId: number; afterSnapshotId: number; note: string } {
+    return this.db.transaction(() => {
+      const old = this.db
+        .query(
+          "SELECT after_mutant_id, after_snapshot_id, note FROM degraded_windows WHERE run_id = ?",
+        )
+        .get(runId) as { after_mutant_id: number; after_snapshot_id: number; note: string } | null;
+      const stored =
+        old === null
+          ? { afterMutantId, afterSnapshotId, note }
+          : {
+              afterMutantId: Math.min(old.after_mutant_id, afterMutantId),
+              afterSnapshotId: Math.min(old.after_snapshot_id, afterSnapshotId),
+              note:
+                afterMutantId < old.after_mutant_id ||
+                (afterMutantId === old.after_mutant_id &&
+                  old.note.startsWith(TIER_SLOWDOWN_REASON_PREFIX) &&
+                  !note.startsWith(TIER_SLOWDOWN_REASON_PREFIX))
+                  ? note
+                  : old.note,
+            };
       this.db
         .query(
-          "INSERT OR IGNORE INTO degraded_windows (run_id, after_mutant_id, after_snapshot_id, note) VALUES (?, ?, ?, ?)",
+          "INSERT OR REPLACE INTO degraded_windows (run_id, after_mutant_id, after_snapshot_id, note) VALUES (?, ?, ?, ?)",
         )
-        .run(runId, afterMutantId, afterSnapshotId, note);
-      const w = this.db
-        .query("SELECT after_mutant_id, note FROM degraded_windows WHERE run_id = ?")
-        .get(runId) as { after_mutant_id: number; note: string };
+        .run(runId, stored.afterMutantId, stored.afterSnapshotId, stored.note);
       this.db
         .query(
           `UPDATE mutants SET verdict = 'error', failure_note = ?, killing_test = NULL,
@@ -2624,8 +2646,46 @@ export class ResultsStore {
              kill_reproduced = NULL, reproduced_failure = NULL
            WHERE run_id = ? AND id > ? AND COALESCE(carried, 0) = 0 AND verdict NOT IN ${INVALIDATION_KEEPS_SQL}`,
         )
-        .run(w.note, runId, w.after_mutant_id);
+        .run(stored.note, runId, stored.afterMutantId);
+      return stored;
     })();
+  }
+
+  /** PR-466: the run's stored degraded window, or null. */
+  degradedWindowOf(
+    runId: number,
+  ): { afterMutantId: number; afterSnapshotId: number; note: string } | null {
+    const w = this.db
+      .query(
+        "SELECT after_mutant_id, after_snapshot_id, note FROM degraded_windows WHERE run_id = ?",
+      )
+      .get(runId) as { after_mutant_id: number; after_snapshot_id: number; note: string } | null;
+    return w === null
+      ? null
+      : { afterMutantId: w.after_mutant_id, afterSnapshotId: w.after_snapshot_id, note: w.note };
+  }
+
+  /**
+   * PR-466: a test's passing BASELINE own durations (ms) in one run: rows with no mutant row and no mutant
+   * code, outcome pass, own time known. Rows recorded inside the run's degraded window (after the first
+   * test row of a mutant row past `after_mutant_id`) are left out: they come from snapshots the window
+   * refuses. The method compares case-insensitively, as AL does.
+   */
+  baselineOwnDurations(runId: number, codeunitId: number, method: string): number[] {
+    const rows = this.db
+      .query(
+        `SELECT t.own_duration_ms AS v FROM test_results t
+         WHERE t.run_id = ?1 AND t.codeunit_id = ?2 AND lower(t.method) = lower(?3)
+           AND t.mutant_row_id IS NULL AND t.mutant_code IS NULL
+           AND t.outcome = 'pass' AND t.own_duration_ms IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM degraded_windows w
+             WHERE w.run_id = t.run_id
+               AND t.id > COALESCE((SELECT MIN(r.id) FROM test_results r
+                                    WHERE r.run_id = t.run_id AND r.mutant_row_id > w.after_mutant_id), 9223372036854775807))`,
+      )
+      .all(runId, codeunitId, method) as Array<{ v: number }>;
+    return rows.map((r) => r.v);
   }
 
   /**

@@ -342,6 +342,7 @@ import {
   STRANDED_SKIP_NOTE,
   buildResumeIndex,
   carriedVerdictFor,
+  recordedVerdictOf,
   sessionFingerprint,
   testDiscoveryMarker,
   wasStranded,
@@ -362,7 +363,9 @@ import {
   coverageFilter,
   filterHistory,
   identityKeyOf,
+  isCarryDisabled,
   numberingDigestOf,
+  numberingUnchanged,
   objectKeyOf,
   testKeyOf,
   twinSitesOf,
@@ -446,6 +449,16 @@ import {
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
+import {
+  TierSlowdownMonitor,
+  type TierSlowdownStop,
+  readLoad1,
+  readPsiCpuAvg60,
+  storeReference,
+  tierSlowdownNote,
+  tierSlowdownWarning,
+  tierSlowdownWouldStopLine,
+} from "./tier-slowdown";
 import { reachPruneMessage } from "./timing-summary";
 import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
@@ -2004,6 +2017,13 @@ export interface SessionConfig {
    */
   readonly killLedger?: false;
   /**
+   * PR-466 (R1228, r5), `--tier-slowdown-stop`, OPT-IN, bcdev only. `true`: a tier-slowdown trigger STOPS the session
+   * (a spent budget, the window dropped, resumable). Absent: the monitor only SHADOWS (an event and a report field,
+   * nothing else). In the run's identity only when on, and a `--resume` across the flag is refused by name. Any other
+   * backend refuses it by name.
+   */
+  readonly tierSlowdownStop?: true;
+  /**
    * R198: how a mutant's covering tests are dispatched on a backend that has `runMany`.
    * `maxMethodsPerCall` caps one call (default unbounded; the gates force chunking with 2);
    * `requestCeilingMs` bounds one call (default `REQUEST_CEILING_MS`). `enabled: false` keeps
@@ -2105,6 +2125,13 @@ export interface SessionConfig {
   readonly appVersion?: string;
   /** Default 1. R671: more than 1 is refused by name for every backend (no fan-out exists). */
   readonly workers?: number;
+  /** PR-466: where the tier-slowdown monitor's session-end arming line goes (a console line, not an event). Default `console.warn`. */
+  readonly tierSlowdownLine?: (line: string) => void;
+  /** PR-466: test seam for the host readers (`/proc/pressure/cpu` some avg60, `/proc/loadavg` load1). `null` is "unreadable". */
+  readonly tierSlowdownHost?: {
+    readonly psi?: () => number | null;
+    readonly load1?: () => number | null;
+  };
   /** Machine-local durable-quarantine base directory (spec §9). Defaults to
    *  `~/.lethal/quarantine` via `defaultQuarantineDir()` when omitted; tests inject a scratch dir
    *  so quarantine state never leaks across test runs or into the real user's home directory. */
@@ -3912,9 +3939,13 @@ export interface LeaseSessionDeps {
   readonly windowMark: () => DegradedWindowMark;
   /**
    * R1227: called once, at the stop, with the window. Writes it to the store at once, like `onLost`;
-   * the session's teardown writes again (`invalidateDegradedWindow`). Must not throw.
+   * the session's teardown writes again (`invalidateDegradedWindow`). Must not throw. PR-466 (B1): it may
+   * return the window that STANDS (the earlier one wins), which the warning names.
    */
-  readonly onDegraded: (window: DegradedWindowStart, note: string) => void;
+  readonly onDegraded: (
+    window: DegradedWindowStart,
+    note: string,
+  ) => { readonly afterMutantId: number; readonly afterSeq: number } | undefined;
 }
 
 /** R1227: where the run stood when a renew began. */
@@ -4159,12 +4190,17 @@ export class LeaseSession {
     };
     const note = degradedWindowNote(streak, seconds, since);
     this.#degraded = { ...start, note };
-    this.d.onDegraded(start, note);
+    // PR-466 (B1): the STORED window may be an earlier one (the slowdown stop's): the warning names that one.
+    const stored = this.d.onDegraded(start, note) ?? start;
     this.d.emit({ type: "degraded-window", afterSeq: start.afterSeq, reason: note });
+    const earlier =
+      stored.afterMutantId < start.afterMutantId
+        ? ` An EARLIER degraded window (the tier-slowdown stop's) already stands: the drop starts there, not at row ${start.afterMutantId}.`
+        : "";
     this.d.emit({
       type: "warning",
       code: "lease-renew-unanswered-stop",
-      message: `[lethal] the control app stopped answering lease renews: ${streak} in a row, no answer for ${seconds} s since ${since}. The session stops scoring. Mutant rows recorded after row ${start.afterMutantId} (after event ${start.afterSeq}) were measured while the tier was degraded: they are dropped from the report and from --resume. Restart the service tier (R1227).`,
+      message: `[lethal] the control app stopped answering lease renews: ${streak} in a row, no answer for ${seconds} s since ${since}. The session stops scoring. Mutant rows recorded after row ${stored.afterMutantId} (after event ${stored.afterSeq}) were measured while the tier was degraded: they are dropped from the report and from --resume. Restart the service tier (R1227).${earlier}`,
     });
   }
 
@@ -5090,12 +5126,16 @@ function resolveResume(
   },
   /** PR-472: the digest with `--no-kill-ledger` the other way, and this session's state of it; set only on bcdev. */
   ledgerFlag?: { readonly otherFingerprint: string; readonly killLedgerOff: boolean },
+  /** PR-466: the digest with `--tier-slowdown-stop` the other way, and this session's state of it; set only on bcdev. */
+  slowdownFlag?: { readonly otherFingerprint: string; readonly stopOn: boolean },
 ):
   | {
       runId: number;
       index: ResumeIndex;
       carryHidden: CarryHidden;
       recorded: RecordedCarrySide;
+      /** PR-505: the prior run's `numbering_digest` (R443); null when not recorded. */
+      priorNumberingDigest: string | null;
       /** R969: the `resume-across-lease-reset` text; the session emits it after its own checks. */
       leaseResetWarning?: string;
       /** PR-456: set when the prior run measured on another database (restart mode: survivors only). */
@@ -5153,6 +5193,8 @@ function resolveResume(
   // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
   let recorded: RecordedCarrySide;
   let priorHidden: CarryHidden | null;
+  // PR-505: the resumed run's numbering output digest (R443), for the unchanged-numbering carry rule.
+  let priorNumberingDigest: string | null;
   // R601: the resumed run's recorded test-app identity, for the `resume-reusing-run` clause.
   let priorTestAppHash: string | null;
   let priorAcrossRestart = false;
@@ -5215,6 +5257,22 @@ function resolveResume(
         if (other !== null)
           throw new KillLedgerResumeError(
             killLedgerResumeMessage(`--resume found run ${other}`, ledgerFlag.killLedgerOff),
+          );
+      }
+      // PR-466: likewise for an unfinished run recorded with `--tier-slowdown-stop` the other way.
+      if (slowdownFlag !== undefined) {
+        const other = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: slowdownFlag.otherFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          ...(lendingSession?.runnerBuild !== undefined
+            ? { runnerBuild: lendingSession.runnerBuild }
+            : {}),
+        });
+        if (other !== null)
+          throw new TierSlowdownResumeError(
+            tierSlowdownResumeMessage(`--resume found run ${other}`, slowdownFlag.stopOn),
           );
       }
       // PR-347: likewise for an unfinished run recorded with `refusedCutTail` the other way (the default flipped).
@@ -5344,6 +5402,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume: run ${found} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(foundRow);
+    priorNumberingDigest = foundRow.numberingDigest;
     priorTestAppHash = foundRow.testAppHash;
     priorAcrossRestart = foundRow.resumedAcrossRestart;
   } else {
@@ -5418,6 +5477,11 @@ function resolveResume(
           killLedgerResumeMessage(`--resume-run ${id}`, ledgerFlag.killLedgerOff),
         );
       }
+      if (slowdownFlag !== undefined && row.configFingerprint === slowdownFlag.otherFingerprint) {
+        throw new TierSlowdownResumeError(
+          tierSlowdownResumeMessage(`--resume-run ${id}`, slowdownFlag.stopOn),
+        );
+      }
       if (
         olderDefaultFingerprint !== undefined &&
         row.configFingerprint === olderDefaultFingerprint
@@ -5444,6 +5508,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume-run ${id} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(row);
+    priorNumberingDigest = row.numberingDigest;
     priorTestAppHash = row.testAppHash;
     priorAcrossRestart = row.resumedAcrossRestart;
     priorRunId = id;
@@ -5536,7 +5601,7 @@ function resolveResume(
     emit({
       type: "warning",
       code: "resume-degraded-window",
-      message: `[lethal] --resume: run ${priorRunId}'s BC tier stopped answering lease renews part way (R1227). ${index.degradedWindowRows} mutant(s) it recorded from then on are dropped and will be re-executed; they are part of the 'error' verdict count above, not extra. A mutant stranded in that window is re-run once too, not skipped.`,
+      message: `[lethal] --resume: run ${priorRunId}'s BC tier was degraded part way (its window's note: "${cfg.store.degradedWindowOf(priorRunId)?.note ?? "none stored"}"; R1227, PR-466). ${index.degradedWindowRows} mutant(s) it recorded from then on are dropped and will be re-executed; they are part of the 'error' verdict count above, not extra. A mutant stranded in that window is re-run once too, not skipped.`,
     });
   }
   // resume-resolved: emitted before any mutant event (this function runs before the batch loop
@@ -5556,6 +5621,7 @@ function resolveResume(
     index,
     carryHidden: priorHidden,
     recorded,
+    priorNumberingDigest,
     priorAcrossRestart,
     ...(leaseResetWarning !== undefined ? { leaseResetWarning } : {}),
     ...(restart !== undefined ? { restart } : {}),
@@ -5565,6 +5631,29 @@ function resolveResume(
 /** R557 C1: up to five test names for a warning, `, ...` when there are more. */
 function namesSample(tests: readonly string[]): string {
   return `${tests.slice(0, 5).join(", ")}${tests.length > 5 ? ", ..." : ""}`;
+}
+
+/** PR-505: the most mutant ids one reason of `resume-recorded-not-carried` lists; the count is always whole. */
+export const RECORDED_RERUN_ID_CAP = 200;
+
+/**
+ * PR-505: the `resume-recorded-not-carried` text. It names EVERY mutant with a recorded verdict that this resume
+ * re-runs, grouped by reason, so a re-run is never silent. Each reason's ids are listed up to
+ * `RECORDED_RERUN_ID_CAP`, then `+N more`.
+ */
+export function resumeRecordedNotCarriedMessage(
+  batchIdx: number,
+  priorRunId: number,
+  byReason: ReadonlyMap<string, readonly string[]>,
+): string {
+  const total = [...byReason.values()].reduce((n, ids) => n + ids.length, 0);
+  const parts = [...byReason.entries()].map(([why, ids]) => {
+    const shown = ids.slice(0, RECORDED_RERUN_ID_CAP).join(", ");
+    const more =
+      ids.length > RECORDED_RERUN_ID_CAP ? `, +${ids.length - RECORDED_RERUN_ID_CAP} more` : "";
+    return `${ids.length} ${why}: ${shown}${more}`;
+  });
+  return `[lethal] --resume: batch ${batchIdx}: ${total} mutant(s) with a verdict recorded in run ${priorRunId} are executed, not carried (re-running is cost, never a verdict change): ${parts.join("; ")} (PR-505).`;
 }
 
 /** R391: a run row's side of `carryRecord`. A missing row, like a NULL column, carries nothing. */
@@ -5685,6 +5774,8 @@ interface BatchScope {
   readonly baselineTimeoutMs: number;
   /** R912: the session's `--time-budget` clock; absent without the flag. */
   readonly timeBudget?: TimeBudget;
+  /** PR-466: the tier-slowdown monitor; bcdev sessions only, and never on the named-mutant or verify probes. */
+  readonly slowdown?: TierSlowdownMonitor;
   /**
    * R-236c: `testKeyOf(ref)` to the reason, for each test with a reachable call that may open a
    * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
@@ -5951,6 +6042,38 @@ function applyV3MutantStop(scope: BatchScope, ownDuration: ReadonlyMap<string, n
   return s;
 }
 
+/**
+ * R1227 / PR-466: the lease session's `onDegraded`: writes the renew window at once (the same shape as `onLost`:
+ * synchronous, never throws, the teardown writes again) and returns the window that STANDS, which may be an
+ * earlier one (the tier-slowdown stop's, whose event seq `slowdownWindow` gives).
+ */
+export function renewWindowWriter(a: {
+  readonly store: ResultsStore;
+  readonly runId: number;
+  readonly emit: RunEmitter;
+  readonly slowdownWindow?: (() => TierSlowdownStop | undefined) | undefined;
+}): LeaseSessionDeps["onDegraded"] {
+  return (w, note) => {
+    try {
+      const stored = a.store.markDegradedWindow(a.runId, w.afterMutantId, w.afterSnapshotId, note);
+      return {
+        afterMutantId: stored.afterMutantId,
+        afterSeq:
+          stored.afterMutantId < w.afterMutantId
+            ? (a.slowdownWindow?.()?.afterSeq ?? w.afterSeq)
+            : w.afterSeq,
+      };
+    } catch (err) {
+      a.emit({
+        type: "warning",
+        code: "degraded-window-store-not-corrected",
+        message: `[lethal] could not drop run ${a.runId}'s verdicts after mutant row ${w.afterMutantId} for the degraded window it opened (${messageOf(err)}); the session's teardown tries again. Its note: ${note}`,
+      });
+      return undefined;
+    }
+  };
+}
+
 /** C02-04: acquire, bind and start the session's lease (design section 6 step 1). */
 async function openLeaseScope(a: {
   lease: LeaseSessionConfig | undefined;
@@ -5964,6 +6087,8 @@ async function openLeaseScope(a: {
   emit: RunEmitter;
   /** R1227: the `seq` of the last `mutant-scored` event emitted so far (0 before any). */
   scoredSeq: () => number;
+  /** PR-466: the tier-slowdown stop's window, when it fired (a renew window that is not the earlier one names it). */
+  slowdownWindow?: () => TierSlowdownStop | undefined;
 }): Promise<{
   leaseSession: LeaseSession | undefined;
   resyncOpSeq: (() => Promise<void>) | undefined;
@@ -6020,17 +6145,7 @@ async function openLeaseScope(a: {
       },
       // R1227: the same shape as `onLost`: synchronous, never throws, the teardown writes again.
       windowMark: () => ({ ...a.store.windowMark(a.runId), scoredSeq: a.scoredSeq() }),
-      onDegraded: (w, note) => {
-        try {
-          a.store.markDegradedWindow(a.runId, w.afterMutantId, w.afterSnapshotId, note);
-        } catch (err) {
-          a.emit({
-            type: "warning",
-            code: "degraded-window-store-not-corrected",
-            message: `[lethal] could not drop run ${a.runId}'s verdicts after mutant row ${w.afterMutantId} at the renew stop (${messageOf(err)}); the session's teardown tries again`,
-          });
-        }
-      },
+      onDegraded: renewWindowWriter(a),
     });
     leaseSession = session;
     resyncSessionOpSeq = () => session.resyncOpSeq(a.backend);
@@ -6128,7 +6243,7 @@ function surfaceLateRefusal(
 
 /** R1227: the note a degraded window's verdicts carry, in the report and in the store. */
 function degradedWindowNote(streak: number, seconds: number, since: string): string {
-  return `${RENEW_UNANSWERED_REASON_PREFIX} the BC tier stopped answering lease renews (${streak} in a row, no answer for ${seconds} s since ${since}); this verdict was recorded after the window began and is dropped (R1227) — re-run it with --resume once the service tier is restarted`;
+  return `${RENEW_UNANSWERED_REASON_PREFIX} the BC tier stopped answering lease renews (${streak} in a row, no answer for ${seconds} s since ${since}); this verdict was recorded after the window began and is dropped (R1227) — re-run it with --resume (restart the service tier first if it still does not answer)`;
 }
 
 /**
@@ -6139,9 +6254,10 @@ export class DegradedWindowNotStoredError extends Error {
   constructor(
     readonly runId: number,
     cause: unknown,
+    note?: string,
   ) {
     super(
-      `run ${runId}: the BC tier stopped answering lease renews, and the stored verdicts from that window were NOT dropped (${messageOf(cause)}); do not --resume run ${runId}`,
+      `run ${runId}: its BC tier was degraded${note !== undefined ? ` (${note})` : ""}, and the stored verdicts from that window were NOT dropped (${messageOf(cause)}); do not --resume run ${runId}`,
       { cause },
     );
     this.name = "DegradedWindowNotStoredError";
@@ -6160,11 +6276,22 @@ export function invalidateDegradedWindow(
   emit: RunEmitter,
   late: Error | undefined,
   earlier: { readonly error: unknown } | undefined,
+  slowdown?: TierSlowdownMonitor,
 ): void {
   const w = leaseSession?.degradedWindow;
-  if (w === undefined) return;
+  const s = slowdown?.stop;
+  if (w === undefined && s === undefined) return;
+  // PR-466: the renew window AND the slowdown window are both written; the store keeps the earlier one.
+  let note: string | undefined;
   try {
-    store.markDegradedWindow(runId, w.afterMutantId, w.afterSnapshotId, w.note);
+    if (w !== undefined) {
+      note = w.note;
+      store.markDegradedWindow(runId, w.afterMutantId, w.afterSnapshotId, w.note);
+    }
+    if (s !== undefined) {
+      note = tierSlowdownNote(s);
+      store.markDegradedWindow(runId, s.afterMutantId, s.afterSnapshotId, note);
+    }
   } catch (err) {
     if (earlier !== undefined) {
       emit({
@@ -6180,8 +6307,150 @@ export function invalidateDegradedWindow(
         message: `[lethal] ${late.message}`,
       });
     }
-    throw new DegradedWindowNotStoredError(runId, err);
+    throw new DegradedWindowNotStoredError(runId, err, note);
   }
+}
+
+/**
+ * PR-466 (R1228): what the tier-slowdown stop does the moment it fires, synchronously, from the `record()` row loop.
+ * It spends the budget (`stopForTierSlowdown`: no new mutant, the work in flight finishes; NOT a signal, so no
+ * quarantine), writes the window at once (never throws: a failed write warns, the teardown writes again), then says it.
+ * `renewWindow` is the lease session's own window, for the warning when that one is the earlier.
+ */
+export function onTierSlowdownStop(
+  d: {
+    readonly store: ResultsStore;
+    readonly runId: number;
+    readonly timeBudget: TimeBudget;
+    readonly emit: RunEmitter;
+    readonly renewWindow?: () => { readonly afterSeq: number } | undefined;
+  },
+  stop: TierSlowdownStop,
+): void {
+  d.timeBudget.stopForTierSlowdown(stop);
+  const note = tierSlowdownNote(stop);
+  let stored = { afterMutantId: stop.afterMutantId, afterSeq: stop.afterSeq };
+  try {
+    const w = d.store.markDegradedWindow(d.runId, stop.afterMutantId, stop.afterSnapshotId, note);
+    if (w.afterMutantId < stop.afterMutantId) {
+      stored = {
+        afterMutantId: w.afterMutantId,
+        afterSeq: d.renewWindow?.()?.afterSeq ?? stop.afterSeq,
+      };
+    }
+  } catch (err) {
+    d.emit({
+      type: "warning",
+      code: "degraded-window-store-not-corrected",
+      message: `[lethal] could not drop run ${d.runId}'s verdicts after mutant row ${stop.afterMutantId} for the tier-slowdown window (${messageOf(err)}); the session's teardown tries again. Its note: ${note}`,
+    });
+  }
+  d.emit({ type: "degraded-window", afterSeq: stop.afterSeq, reason: note });
+  d.emit({
+    type: "warning",
+    code: "tier-slowdown-stop",
+    message: tierSlowdownWarning(stop, stored),
+  });
+}
+
+/**
+ * PR-466 (r5): the SHADOW trigger, the default. It records the figures (an event that is NOT a warning, so no gate's
+ * warning set moves, and one console line) and does NOTHING else: no budget stop, no window, no store write.
+ */
+export function onTierSlowdownShadow(
+  emit: RunEmitter,
+  line: (l: string) => void,
+  stop: TierSlowdownStop,
+): void {
+  emit({
+    type: "tier-slowdown-would-stop",
+    atMs: stop.atMs,
+    median: stop.median,
+    rows: stop.rows,
+    spanMs: stop.spanMs,
+    psi: stop.psi,
+    load1: stop.load1,
+    onsetMutantId: stop.afterMutantId + 1,
+    onsetSeq: stop.afterSeq + 1,
+  });
+  line(tierSlowdownWouldStopLine(stop));
+}
+
+/**
+ * R1014: does the spent budget cut a mutant's walk between two covering steps (the mutant is then dropped unrecorded)?
+ * Not for the memory guard's stop, nor PR-250's churn stop, nor PR-466's tier-slowdown stop unless a real signal came
+ * too: those kill nothing, so the walk in flight finishes (and a slowdown's rows land inside its window).
+ */
+export function budgetCutsWalk(b: TimeBudget | undefined): boolean {
+  return (
+    b?.exhausted === true &&
+    b.memory === undefined &&
+    (b.churn === undefined || b.signalled) &&
+    (b.slowdown === undefined || b.signalled)
+  );
+}
+
+/**
+ * PR-466 (R1228): one stored test row, offered to the monitor. Only a PASSING row that carries a mutant code and an
+ * own duration counts: failed, timed-out and unmutated confirmation rows (no mutant code) never feed the window.
+ * The caller records the row first, so a mutant's rows reach the monitor contiguously, in recording order.
+ * Review S1: in SHADOW mode (the default) an error in the monitor, its store reads or its trigger is caught and
+ * counted (`noteShadowError`), never rethrown, so the default mode cannot fail a session. The opt-in stop rethrows.
+ */
+export function feedTierSlowdown(
+  monitor: TierSlowdownMonitor | undefined,
+  t: {
+    readonly mutantCode: string | null;
+    readonly outcome: string;
+    readonly ownDurationMs?: number;
+    readonly ref: TestMethodRef;
+  },
+  batchIndex: number,
+  mutantRowId: number,
+): void {
+  if (monitor === undefined || t.mutantCode === null || t.outcome !== "pass") return;
+  if (t.ownDurationMs === undefined) return;
+  const row = {
+    codeunitId: t.ref.codeunitId,
+    method: t.ref.method,
+    batchIndex,
+    ownMs: t.ownDurationMs,
+  };
+  if (monitor.stopMode) {
+    monitor.feed(row, mutantRowId);
+    return;
+  }
+  try {
+    monitor.feed(row, mutantRowId);
+  } catch (e) {
+    monitor.noteShadowError(e);
+  }
+}
+
+/** PR-466: the `time-budget-reached` field a slowdown stop adds (nothing when none fired). */
+function slowdownFields(b: TimeBudget): {
+  readonly stoppedByTierSlowdown?: {
+    readonly median: number;
+    readonly rows: number;
+    readonly spanMs: number;
+    readonly psi: number;
+    readonly afterMutantId: number;
+    readonly afterSeq: number;
+  };
+} {
+  const s = b.slowdown;
+  return s === undefined
+    ? {}
+    : {
+        stoppedByTierSlowdown: {
+          median: s.median,
+          rows: s.rows,
+          spanMs: s.spanMs,
+          psi: s.psi,
+          afterMutantId: s.afterMutantId,
+          afterSeq: s.afterSeq,
+        },
+      };
 }
 
 /** The note a lease-lost batch's verdicts carry, in the report and in the store. */
@@ -6238,6 +6507,7 @@ export function correctStoreAtEnd(
   emit: RunEmitter,
   late: Error | undefined,
   earlier: { readonly error: unknown } | undefined,
+  slowdown?: TierSlowdownMonitor,
 ): void {
   let lostFailure: { readonly error: unknown } | undefined;
   try {
@@ -6246,7 +6516,7 @@ export function correctStoreAtEnd(
     lostFailure = { error: err };
   }
   try {
-    invalidateDegradedWindow(store, runId, leaseSession, emit, late, earlier);
+    invalidateDegradedWindow(store, runId, leaseSession, emit, late, earlier, slowdown);
   } catch (err) {
     if (lostFailure === undefined) throw err;
     emit({
@@ -6968,6 +7238,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
   const baselineElapsedMs = monoNow() - baselineStartedMs;
   emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
+  scope.slowdown?.noteBaselineEnd(); // PR-466: the host's PSI when the first baseline ended, for the arming line
   if (safety.isUnsafe) return "unsafe"; // the caller stops the session: no mutant scheduling, no next batch
   // R192 (second half): a baseline that ran EVERY test to a verdict is recorded under its two
   // hashes for the next resume. `baseline.length === tests.length` is what "completed" means
@@ -7341,6 +7612,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     baselineReach,
     ...(scope.reachTrace !== undefined ? { reachTrace: scope.reachTrace } : {}),
     ...(scope.timeBudget !== undefined ? { timeBudget: scope.timeBudget } : {}),
+    ...(scope.slowdown !== undefined ? { slowdown: scope.slowdown } : {}),
     ...(scope.carryWalk === true ? { carryWalk: true as const } : {}), // PR-340
   };
   if (scope.parallel !== undefined) {
@@ -7927,6 +8199,9 @@ async function runSessionBody(
       );
     }
   }
+  // PR-466: likewise for `--tier-slowdown-stop` (headless bcdev only, so a bcdev-client run refuses it too).
+  if (cfg.tierSlowdownStop === true && !isBcdev(caps.kind))
+    throw new TierSlowdownFlagBackendError(caps.kind);
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   if (
     cfg.timeBudgetSeconds !== undefined &&
@@ -8670,15 +8945,19 @@ async function runSessionBody(
   const cutTailOn = cfg.backend.refusedCutTail === true;
   // PR-472: `--no-kill-ledger` (bcdev only, checked above); in the digest only when on.
   const ledgerOffOn = cfg.killLedger === false;
+  // PR-466: `--tier-slowdown-stop` (bcdev only, checked above); in the digest only when on.
+  const slowdownStopOn = cfg.tierSlowdownStop === true;
   const fingerprintWith = (
     prune: boolean,
     carryOn: boolean = carryWalk,
     cutTail: boolean = cutTailOn,
     ledgerOff: boolean = ledgerOffOn,
+    slowdownStop: boolean = slowdownStopOn,
   ) =>
     sessionFingerprint({
       ...fingerprintBase,
       ...(ledgerOff ? { killLedgerOff: true as const } : {}), // PR-472
+      ...(slowdownStop ? { tierSlowdownStop: true as const } : {}), // PR-466
       ...(cutTail ? { v3RefusedCutTail: true as const } : {}), // PR-297
       ...(prune ? { v3ReachPrune: true as const } : {}),
       ...(carryApplies && !carryOn ? { v3CarryWalkOff: true as const } : {}),
@@ -8697,6 +8976,7 @@ async function runSessionBody(
           ...(carryApplies && !carryWalk ? { v3CarryWalkOff: true as const } : {}),
           ...(carryApplies && !carrySkip ? { v3CarrySkipOff: true as const } : {}), // PR-410
           ...(ledgerOffOn ? { killLedgerOff: true as const } : {}), // PR-472
+          ...(slowdownStopOn ? { tierSlowdownStop: true as const } : {}), // PR-466
         })
       : undefined;
   const resolvedResume = resolveResume(
@@ -8734,6 +9014,19 @@ async function runSessionBody(
       ? {
           otherFingerprint: fingerprintWith(reachPrune, carryWalk, cutTailOn, !ledgerOffOn),
           killLedgerOff: ledgerOffOn,
+        }
+      : undefined,
+    // PR-466: bcdev only; the flag is refused elsewhere.
+    isBcdev(caps.kind)
+      ? {
+          otherFingerprint: fingerprintWith(
+            reachPrune,
+            carryWalk,
+            cutTailOn,
+            ledgerOffOn,
+            !slowdownStopOn,
+          ),
+          stopOn: slowdownStopOn,
         }
       : undefined,
   );
@@ -8846,6 +9139,37 @@ async function runSessionBody(
     });
     timeBudget.stopForChurn(s);
   };
+  // PR-466 (R1228): the tier-slowdown monitor. bcdev sessions only (al-runner builds none); the probes of
+  // `runNamedMutants` never receive it. It reads the reference from the store, so a --resume sees its prior run's.
+  const slowdownMonitor: TierSlowdownMonitor | undefined = isBcdev(caps.kind)
+    ? new TierSlowdownMonitor({
+        reference: storeReference(cfg.store, runId, resolvedResume?.runId),
+        scoredSeq: () => lastScoredSeq,
+        snapshotId: () => cfg.store.windowMark(runId).snapshotId,
+        now: monoNow,
+        psi: cfg.tierSlowdownHost?.psi ?? (() => readPsiCpuAvg60()),
+        load1: cfg.tierSlowdownHost?.load1 ?? (() => readLoad1()),
+        stopMode: cfg.tierSlowdownStop === true,
+        onTrigger: (stop) => {
+          if (cfg.tierSlowdownStop === true) {
+            onTierSlowdownStop(
+              {
+                store: cfg.store,
+                runId,
+                timeBudget,
+                emit,
+                renewWindow: () => leaseSession?.degradedWindow,
+              },
+              stop,
+            );
+          } else {
+            onTierSlowdownShadow(emit, cfg.tierSlowdownLine ?? ((l) => console.warn(l)), stop);
+          }
+        },
+        // r5 amendment 1: in BOTH modes, the first hot window the PSI guard suppressed; it changes nothing.
+        onGuarded: (g) => emit({ type: "tier-slowdown-guarded", ...g }),
+      })
+    : undefined;
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = monoNow();
   const {
@@ -8978,11 +9302,30 @@ async function runSessionBody(
       );
     }
     const union = new Set([...prior.tuples, ...carryHidden.tuples]);
+    // PR-505: when the resumed run numbered exactly as this session did (R443's digest, the hidden tuples and the
+    // twin sites, all known and equal), every recorded key names the same site, so R307's refusal is not needed on
+    // resume. A `--lines` resume hides every site outside its range, and without this its in-range twins never
+    // carry. Any missing or different fact keeps the refusal (fail closed).
+    const keepRefusal = !numberingUnchanged(
+      {
+        digest: resolvedResume.priorNumberingDigest,
+        hidden: prior.tuples,
+        twins: resolvedResume.recorded.twins,
+      },
+      { digest: numberingDigest, hidden: carryHidden.tuples, twins: carryCurrent.twins },
+    );
+    if (union.size > 0 && !keepRefusal) {
+      emit({
+        type: "warning",
+        code: "resume-numbering-unchanged",
+        message: `[lethal] --resume: run ${resolvedResume.runId} numbered this scope exactly as this session does (the same numbering digest, ${union.size} hidden tuple(s) and twin sites), so mutants sharing a tuple with a site neither run numbered may carry (PR-505; R307 still applies to history and equivalence marks).`,
+      });
+    }
     resumeState = {
       ...resolvedResume,
       index: {
         ...resolvedResume.index,
-        ...(union.size > 0 ? { carryDisabled: union } : {}),
+        ...(union.size > 0 && keepRefusal ? { carryDisabled: union } : {}),
         // R391: the resumed run's generation facts against this session's.
         carryRule: { recorded: resolvedResume.recorded, current: carryCurrent },
       },
@@ -9270,6 +9613,7 @@ async function runSessionBody(
     nowIso,
     emit,
     scoredSeq: () => lastScoredSeq,
+    slowdownWindow: () => slowdownMonitor?.stop,
   }));
   if (leaseSession !== undefined) {
     const ending = leaseSession;
@@ -9587,6 +9931,7 @@ async function runSessionBody(
         ? { restart: { priorRunId: resolvedResume.runId } }
         : {}),
       ...(timeBudget !== undefined ? { timeBudget } : {}),
+      ...(slowdownMonitor !== undefined ? { slowdown: slowdownMonitor } : {}),
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
         : {}),
@@ -10805,6 +11150,15 @@ async function runSessionBody(
           toExecute = [];
           const carryNotFaced: MutantManifestEntry[] = [];
           const carryNoRecord: MutantManifestEntry[] = [];
+          // PR-505: every mutant with a RECORDED verdict that this resume re-runs, by reason, so a re-run is never
+          // silent (R1229's first live proof re-ran 54 survivors with no word). `not-faced` and `no-record` keep
+          // their own warnings above; these are the rest.
+          const recordedRerun = new Map<string, string[]>();
+          const rerunBecause = (why: string, m: MutantManifestEntry) => {
+            const list = recordedRerun.get(why) ?? [];
+            list.push(m.mutantId);
+            recordedRerun.set(why, list);
+          };
           // PR-456: a resume across a restart that lost the database carries SURVIVORS only, and only
           // of a batch whose fresh baseline equalled the prior run's (`restartDecision.carry`).
           const restartMode = resumeState.restart !== undefined;
@@ -10818,6 +11172,16 @@ async function runSessionBody(
             // R53's stranded skips were recorded at step 1b', before coverage (R-646c).
             const carried = carriedVerdictFor(resumeState.index, m);
             if (carried === undefined) {
+              // PR-505: a recorded verdict exists for this mutant, by key or by rule 2's member site, yet it is not
+              // carried: say why. (A recorded `no-coverage` is never carried by design, R621, and is not counted.)
+              const rec = recordedVerdictOf(resumeState.index, m);
+              if (rec !== undefined && rec !== "no-coverage")
+                rerunBecause(
+                  isCarryDisabled(m, resumeState.index.carryDisabled)
+                    ? "carry-disabled (R307: shares a tuple with a site a run numbered no ordinal for)"
+                    : "carry-refused (R391: the recorded key may name another mutant)",
+                  m,
+                );
               toExecute.push(m);
               continue;
             }
@@ -10854,7 +11218,14 @@ async function runSessionBody(
               }
               if (act.kind === "rerun") {
                 if (act.why === "no-record") carryNoRecord.push(m);
-                if (act.why === "not-faced") carryNotFaced.push(m);
+                else if (act.why === "not-faced") carryNotFaced.push(m);
+                else
+                  rerunBecause(
+                    act.why === "batch"
+                      ? "restart-batch (PR-456: this batch's fresh baseline did not equal the prior run's)"
+                      : `restart-${act.why} (PR-456)`,
+                    m,
+                  );
                 toExecute.push(m);
                 continue;
               }
@@ -10959,6 +11330,13 @@ async function runSessionBody(
               type: "warning",
               code: "resume-tests-not-faced",
               message: `[lethal] --resume: batch ${batchIdx}: ${carryNotFaced.length} survivor(s) of run ${resumeState.runId} are covered now by a test they were not run against there (a test red at that run's baseline, or coverage that changed), so they are executed, not carried: ${namesSample(carryNotFaced.map((m) => m.mutantId))} (R646).`,
+            });
+          }
+          if (recordedRerun.size > 0) {
+            emit({
+              type: "warning",
+              code: "resume-recorded-not-carried",
+              message: resumeRecordedNotCarriedMessage(batchIdx, resumeState.runId, recordedRerun),
             });
           }
         }
@@ -11106,7 +11484,24 @@ async function runSessionBody(
       // R508: in the store too, and in a `finally` so it runs even when the session is failing or
       // the teardown throws. After `closeLeaseScope` so the teardown and the lease release always
       // run, even if this write throws.
-      correctStoreAtEnd(cfg.store, runId, leaseSession, safety, emit, late, failure);
+      // PR-466: the slowdown stop's window is written again too, for a row an in-flight worker recorded after it.
+      try {
+        correctStoreAtEnd(
+          cfg.store,
+          runId,
+          leaseSession,
+          safety,
+          emit,
+          late,
+          failure,
+          slowdownMonitor,
+        );
+      } finally {
+        // PR-466 (S5): one console line, never an event: no warning set moves.
+        if (slowdownMonitor !== undefined) {
+          (cfg.tierSlowdownLine ?? ((l: string) => console.warn(l)))(slowdownMonitor.armingLine());
+        }
+      }
     }
     surfaceLateRefusal(late, failing, safety, emit);
   }
@@ -11121,6 +11516,7 @@ async function runSessionBody(
         : {}),
       ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
       ...(timeBudget.churn !== undefined ? { stoppedByDaemonChurn: timeBudget.churn } : {}),
+      ...slowdownFields(timeBudget),
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
       ...(timeBudget.reached.baselineStopped !== undefined
@@ -11213,7 +11609,8 @@ async function runSessionBody(
       );
     }
     // R912: a run stopped by its time budget is NOT finished, so `--resume` continues it.
-    if (timeBudget?.reached === undefined) {
+    // PR-466 (r2a-1): nor one a tier-slowdown stop ended, even on the last row of the last batch.
+    if (timeBudget?.reached === undefined && timeBudget.slowdown === undefined) {
       cfg.store.finishRun(runId, {
         batchCount: artifacts.length,
         baselineGreen: baselineGreenOverall,
@@ -11259,7 +11656,22 @@ async function runSessionBody(
   // PR-277: a signal that came after the main pass's last check (during the recheck, or just before it) still makes
   // the report a signal stop, so the CLI exits with the stop's code. Nothing was left unscheduled.
   // The churn guard too, when it tripped on the last mutant (no check came after it).
-  if (
+  // PR-466 (r2a-1): a slowdown stop that came with nothing left to schedule NEVER finishes the run (its window's
+  // rows are `error`, so `--resume` has work): the same event, with no `afterMainPass`.
+  if (timeBudget.slowdown !== undefined && timeBudget.reached === undefined) {
+    emit({
+      type: "time-budget-reached",
+      budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
+      ...(timeBudget.signalled && timeBudget.memory === undefined
+        ? { stoppedBySignal: true as const }
+        : {}),
+      ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
+      ...(timeBudget.churn !== undefined ? { stoppedByDaemonChurn: timeBudget.churn } : {}),
+      ...slowdownFields(timeBudget),
+      unscheduledCount: 0,
+      batchesNotStarted: 0,
+    });
+  } else if (
     (timeBudget.signalled || timeBudget.churn !== undefined) &&
     timeBudget.reached === undefined
   ) {
@@ -12424,6 +12836,28 @@ export class KillLedgerResumeError extends Error {
 
 function killLedgerResumeMessage(subject: string, nowOff: boolean): string {
   return `kill-ledger-resume-refused: ${subject} was recorded with --no-kill-ledger ${nowOff ? "off" : "on"}, and this session has it ${nowOff ? "on" : "off"}. A kill or survivor scored in one order must never be carried into a run with the other (PR-472). Pass the flag as that run had it, or drop the resume flag to run from scratch.`;
+}
+
+/** PR-466: a resume across a change of `--tier-slowdown-stop`. Extends `Error` directly. */
+export class TierSlowdownResumeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TierSlowdownResumeError";
+  }
+}
+
+function tierSlowdownResumeMessage(subject: string, nowOn: boolean): string {
+  return `tier-slowdown-resume-refused: ${subject} was recorded with --tier-slowdown-stop ${nowOn ? "off" : "on"}, and this session has it ${nowOn ? "on" : "off"}. A run that stops on a tier slowdown and one that only watches it must not share rows (PR-466). Pass the flag as that run had it, or drop the resume flag to run from scratch.`;
+}
+
+/** PR-466: `--tier-slowdown-stop` on a backend that is not bcdev. Extends `Error` directly. */
+export class TierSlowdownFlagBackendError extends Error {
+  constructor(backendKind: string) {
+    super(
+      `tier-slowdown-flag-backend: --tier-slowdown-stop is for the bcdev backend only (the monitor reads BC test own durations); this run's backend is ${backendKind}. Drop the flag.`,
+    );
+    this.name = "TierSlowdownFlagBackendError";
+  }
 }
 
 /** PR-303 rule 6: why a resume across a flag change is refused. */
@@ -14442,6 +14876,8 @@ interface RunMutantsArgs {
   readonly skipPrefetch?: boolean;
   /** R912: the session's `--time-budget` clock, when the flag is set. */
   readonly timeBudget?: TimeBudget | undefined;
+  /** PR-466: fed by the test-row loop of `commitRecord`; absent for probes (`runNamedMutants`) and al-runner. */
+  readonly slowdown?: TierSlowdownMonitor | undefined;
   /** PR-340: the carry walk is allowed (al-runner-v3 and `LETHAL_V3_CARRY_WALK` not `off`). */
   readonly carryWalk?: true;
   readonly safety: SessionSafety;
@@ -14909,10 +15345,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // signal came too) ran out between two covering steps. The mutant is dropped unrecorded; see the exit
     // right after the `for await`.
     let budgetCut = false;
-    const clockSpent = (): boolean =>
-      args.timeBudget?.exhausted === true &&
-      args.timeBudget.memory === undefined &&
-      (args.timeBudget.churn === undefined || args.timeBudget.signalled);
+    const clockSpent = (): boolean => budgetCutsWalk(args.timeBudget);
     // PR-81 (R1066): the mutant-level fields now; one copy per step start and one per held error.
     type WalkSnap = HeldTimeout["snap"];
     const snapNow = (): WalkSnap => ({
@@ -16046,6 +16479,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         );
         // PR-247: the rows written against a mutant, counted where they are written. Only rows that
         // carry a mutant code: the unmutated confirmation rows are not mutation time under a mutant.
+        // PR-466 (R1228): fed after the row and its `mutant-scored` exist, synchronously with them.
+        feedTierSlowdown(args.slowdown, t, args.batchIndex, mutantRowId);
         if (t.mutantCode === null) continue;
         const test = qualifiedTestName(t.ref);
         const key = `${args.batchIndex}\0${test}`;

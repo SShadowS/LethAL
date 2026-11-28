@@ -9,6 +9,7 @@ import { ENTRIES_CHUNK_CAP } from "./al-runner-v3-entries";
 import type { TestMethodRef } from "./backend";
 import type { RunEvent } from "./events";
 import { testKeyOf } from "./selection";
+import type { TierSlowdownStop } from "./tier-slowdown";
 
 /** A window holds mutants until their estimated covering-test time would pass this. */
 export const WINDOW_TIME_CAP_MS = 600_000;
@@ -244,8 +245,16 @@ export class TimeBudget {
   stopForChurn(info: DaemonChurnStop): void {
     this.churn ??= info;
   }
+  /**
+   * PR-466 (R1228): set by the tier-slowdown stop. Spends the budget like the churn guard and, like it, is NOT a
+   * signal: no quarantine, and a later real signal or quarantine keeps its own meaning.
+   */
+  slowdown: TierSlowdownStop | undefined;
+  stopForTierSlowdown(info: TierSlowdownStop): void {
+    this.slowdown ??= info;
+  }
   remainingMs(): number {
-    if (this.signalled || this.churn !== undefined) return 0;
+    if (this.signalled || this.churn !== undefined || this.slowdown !== undefined) return 0;
     return this.startMs + this.seconds * 1000 - this.now();
   }
   get exhausted(): boolean {

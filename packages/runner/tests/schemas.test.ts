@@ -1030,6 +1030,58 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, doc)).toEqual([]);
   });
 
+  test("PR-466 r5: tierSlowdownWouldStop is additive under v3: optional and absent unless the shadow monitor triggered", () => {
+    const without = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    // the committed sample has no such field and still validates unchanged; the root required list does not name it
+    expect("tierSlowdownWouldStop" in without).toBe(false);
+    expect((reportSchema as { required: string[] }).required).not.toContain(
+      "tierSlowdownWouldStop",
+    );
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const field = {
+      atMs: 5_940_000,
+      median: 6,
+      rows: 61,
+      spanMs: 3_600_000,
+      psi: 5,
+      load1: null,
+      onsetMutantId: 1039,
+      onsetSeq: 10390,
+    };
+    expect(conformsTo(reportSchema, { ...without, tierSlowdownWouldStop: field })).toEqual([]);
+    expect(
+      conformsTo(reportSchema, { ...without, tierSlowdownWouldStop: { ...field, median: "6" } })
+        .length,
+    ).toBeGreaterThan(0);
+    const { load1: _l, ...noLoad } = field;
+    expect(
+      conformsTo(reportSchema, { ...without, tierSlowdownWouldStop: noLoad }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("PR-466 r5: the tier-slowdown-would-stop event validates against the stream schema, and a bad one does not", () => {
+    const event = {
+      type: "tier-slowdown-would-stop",
+      seq: 9,
+      atMs: 5_940_000,
+      median: 6,
+      rows: 61,
+      spanMs: 3_600_000,
+      psi: 5,
+      load1: 1.5,
+      onsetMutantId: 1039,
+      onsetSeq: 10390,
+    } as Record<string, unknown>;
+    expect(conformsTo(streamSchema, event)).toEqual([]);
+    expect(conformsTo(streamSchema, { ...event, median: "6" }).length).toBeGreaterThan(0);
+    expect(conformsTo(streamSchema, { ...event, surprise: 1 }).length).toBeGreaterThan(0);
+  });
+
   test("PR-247: costlyTests is additive under v3: optional; a report WITH it validates, a bad one does not", () => {
     const without = JSON.parse(
       readFileSync(

@@ -355,6 +355,41 @@ export type RunEventInput =
     }
   | {
       /**
+       * PR-466 (R1228, r5): the tier-slowdown monitor, in its default SHADOW mode, saw the trigger: the median ratio of a
+       * passing mutant row's own duration to its baseline own duration, over the passing rows of the last 60 minutes, is
+       * at or over the threshold while the host's CPU pressure is low. NOTHING was stopped, dropped or changed. Not a
+       * `warning`, so no gate's warning set moves. At most once per session. `atMs` is the monotonic time from the
+       * session's first fed row to the check; `load1` is `null` when `/proc/loadavg` was unreadable.
+       */
+      readonly type: "tier-slowdown-would-stop";
+      readonly atMs: number;
+      readonly median: number;
+      readonly rows: number;
+      readonly spanMs: number;
+      readonly psi: number;
+      readonly load1: number | null;
+      /** The onset row's mutant row id and its `mutant-scored` seq (the window would start at them). */
+      readonly onsetMutantId: number;
+      readonly onsetSeq: number;
+    }
+  | {
+      /**
+       * PR-466 (r5 amendment 1): a check where every trigger condition held (a full 60-minute window, at least 50 rows,
+       * a median at or over the threshold) EXCEPT the host's CPU pressure, which was at or over the guard or unreadable
+       * (`psi: null`). In BOTH modes nothing was stopped, dropped or changed, and a later check can still trigger. Not a
+       * `warning` and not a report field, so no gate moves. At most once per session (the first guarded check); the
+       * arming line counts them all. It lets a quiet shadow tell "not slow" from "guarded out".
+       */
+      readonly type: "tier-slowdown-guarded";
+      readonly atMs: number;
+      readonly median: number;
+      readonly rows: number;
+      readonly spanMs: number;
+      readonly psi: number | null;
+      readonly load1: number | null;
+    }
+  | {
+      /**
        * The moment of observation is the batch's baseline RETURNING, not each test inside it: the
        * silence is inside the backend call, so per-test events would buy no liveness. Carries
        * per-test rows, not aggregates — `baselineGreen` and the pass/fail counts are folded from
@@ -766,6 +801,19 @@ export type RunEventInput =
       };
       /** PR-250: present when the daemon-churn guard stopped the session: the lane, and its daemon closes in a row with no mutant scored. */
       readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
+      /**
+       * PR-466 (R1228, r5): present when `--tier-slowdown-stop` stopped the session: the window's median ratio (a passing
+       * mutant row's own duration to its baseline own duration), its row count and span, the host's CPU pressure, and
+       * where the dropped window starts. The run is never finished by it: `--resume` re-runs the window.
+       */
+      readonly stoppedByTierSlowdown?: {
+        readonly median: number;
+        readonly rows: number;
+        readonly spanMs: number;
+        readonly psi: number;
+        readonly afterMutantId: number;
+        readonly afterSeq: number;
+      };
       /** PR-277: the stop came after the main pass scored every mutant: nothing left out, the run finished, nothing to resume. */
       readonly afterMainPass?: true;
     }

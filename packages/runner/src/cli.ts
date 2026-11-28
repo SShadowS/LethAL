@@ -475,6 +475,7 @@ export const DRY_RUN_REFUSED = [
   "no-kill-ledger",
   // PR-479: a dry run builds no backend, so the experimental gate has nothing to open.
   "experimental-client-mode",
+  "tier-slowdown-stop",
   "fresh-probe",
   "isolate-tests",
   "fail-on-survivors",
@@ -676,6 +677,8 @@ export interface RunCliConfig {
    * (`BcdevClientExperimentalError`, in `buildBackend`).
    */
   readonly experimentalClientMode?: true;
+  /** PR-466: `--tier-slowdown-stop`, bcdev only; see `SessionConfig.tierSlowdownStop`. */
+  readonly tierSlowdownStop?: true;
   /** R762: `--fresh-probe`, al-runner-v3 only: run the contract probe instead of replaying a cached pass. */
   readonly freshProbe?: boolean;
   /**
@@ -1311,6 +1314,14 @@ RUN — cost and recovery
                              in the config's bcdev section. Refuses --stop-hung-sessions, --workers
                              above 1 and a run whose tests write the Company table (unless
                              --keep-company-tests). Round 1 has no driver yet
+  --tier-slowdown-stop       bcdev only. STOP the session when the BC tier slows down: the median
+                             passing test of the last 60 minutes (50 rows or more, the window full)
+                             runs at 2.5x its baseline own duration or more while the host's CPU
+                             pressure is under 20%. A spent budget, not a quarantine: the rows from
+                             the window's start are dropped as error, and --resume re-runs them after
+                             you restart the tier yourself (exit code 7). Without the flag the monitor
+                             only SHADOWS: a tier-slowdown-would-stop event and a report field, nothing
+                             stopped. A first cut (R1228). A resume must use the same setting
   --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
                              backend, with serve-entries and a build whose pin retires the §6
                              Sleep rule (else refused by name). The first latch or stop ends the
@@ -1617,6 +1628,8 @@ export const RUN_FLAGS = {
   "no-kill-ledger": { type: "boolean", default: false },
   // PR-479: see `RunCliConfig.experimentalClientMode`.
   "experimental-client-mode": { type: "boolean", default: false },
+  // PR-466: see `RunCliConfig.tierSlowdownStop`.
+  "tier-slowdown-stop": { type: "boolean", default: false },
   // R48: see `RunCliConfig.allowLargeRun`.
   "allow-large-run": { type: "boolean", default: false },
   // R762: see `RunCliConfig.freshProbe`.
@@ -1696,6 +1709,7 @@ const RUN_ONLY_FLAGS = [
   "stop-hung-sessions",
   "no-kill-ledger",
   "experimental-client-mode",
+  "tier-slowdown-stop",
   "keep-company-tests",
   "ci-session-kind",
   "allow-large-run",
@@ -2716,6 +2730,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["experimental-client-mode"] === true
       ? { experimentalClientMode: true as const }
       : {}),
+    ...(values["tier-slowdown-stop"] === true ? { tierSlowdownStop: true as const } : {}),
     ...(values["keep-company-tests"] === true ? { keepCompanyTests: true } : {}),
     ...(ciSessionKindFlag !== undefined ? { ciSessionKind: ciSessionKindFlag } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
@@ -5235,6 +5250,7 @@ export async function runFromCliWithAccept(
                   }
                 : {}),
               ...(parsed.killLedger === false ? { killLedger: false as const } : {}),
+              ...(parsed.tierSlowdownStop === true ? { tierSlowdownStop: true as const } : {}),
               ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
               ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
               ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),

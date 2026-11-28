@@ -81,6 +81,13 @@ const GATED_COMMIT = "abcdef1234567abcdef1234567abcdef12345678";
 const FIXED_COMMIT = "fedcba7654321fedcba7654321fedcba76543210";
 const REGATE_COMMIT = "1234567abcdef1234567abcdef1234567abcdef1";
 
+/**
+ * R1243 (PR-506): the pid a fake OTHER holder of the gate lock carries. `takeGateLock` treats a holder whose pid is
+ * `process.pid` as this process's own lock, never a live other update, so a fixed 4242 read "pass" on a CI worker whose
+ * real pid was 4242 (four skip-path tests on one attempt). Read at call time, never equal to this process's pid.
+ */
+const otherPid = (): number => (process.pid === 4242 ? 4243 : 4242);
+
 let root = "";
 afterEach(async () => {
   if (root !== "") await rm(root, { recursive: true, force: true });
@@ -1302,19 +1309,51 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
 
   test("L1: a live holder: skipped, exit 2, the gate never runs; the log names the lock, pid and the clear step", async () => {
     await setup();
-    await holder(4242);
-    const { deps, seen } = regate({ procs: { 4242: "bun scripts/al-runner-v3-update.ts --edge" } });
+    const pid = otherPid();
+    await holder(pid);
+    const { deps, seen } = regate({
+      procs: { [pid]: "bun scripts/al-runner-v3-update.ts --edge" },
+    });
     const out = await updateOnce(deps, { regateAt: REGATE_COMMIT });
     expect(out).toEqual(["skipped"]);
     expect(updateExitCode(true, out)).toBe(2);
     expect(seen.gates).toEqual([]);
-    expect(seen.logs.join("\n")).toContain(`${lockPath()} is held by pid 4242`);
+    expect(seen.logs.join("\n")).toContain(`${lockPath()} is held by pid ${pid}`);
     expect(seen.logs.join("\n")).toContain(`rm ${lockPath()}`);
+  });
+
+  // R1243 guard (PR-506). Red: otherPid() returns a fixed 4242 (this test then reads "pass", as CI's flaky attempt did).
+  test("R1243: a live other holder is skipped even when this process's own pid is 4242 (the CI collision)", async () => {
+    const real = Object.getOwnPropertyDescriptor(process, "pid");
+    const realPid = process.pid;
+    Object.defineProperty(process, "pid", { value: 4242, configurable: true });
+    try {
+      await setup();
+      const pid = otherPid();
+      expect(pid).not.toBe(process.pid);
+      await holder(pid);
+      const { deps, seen } = regate({
+        procs: { [pid]: "bun scripts/al-runner-v3-update.ts --edge" },
+      });
+      expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["skipped"]);
+      expect(seen.gates).toEqual([]);
+    } finally {
+      if (real !== undefined) Object.defineProperty(process, "pid", real);
+      else Reflect.deleteProperty(process, "pid"); // pid was inherited: drop the forced own property
+    }
+    expect(process.pid).toBe(realPid); // restored
+  });
+
+  // R1243 guard (PR-506). Red: write a fake holder with a literal pid again, on one line or as the formatter wraps it.
+  test("R1243: no test in this file writes a fake holder or lock with a literal pid", async () => {
+    const src = await readFile(join(import.meta.dir, "al-runner-v3-update.test.ts"), "utf8");
+    expect(src.match(/procs:\s*\{\s*"?\d+"?\s*:/g) ?? []).toEqual([]);
+    expect(src.match(/holder\(\d+\)|\bpid:\s*\d+\s*,\s*startedAt/g) ?? []).toEqual([]);
   });
 
   test("L2: a dead holder AND a process with its cwd under the gate worktree: skipped, the orphan named", async () => {
     await setup();
-    await holder(4242);
+    await holder(otherPid());
     const { deps, seen } = regate({ orphans: [777] });
     expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["skipped"]);
     expect(seen.gates).toEqual([]);
@@ -1323,7 +1362,7 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
 
   test("L3: a dead holder, no orphan: taken over (renamed, then linked), gated, and released", async () => {
     await setup();
-    await holder(4242);
+    await holder(otherPid());
     const { deps, seen } = regate({});
     expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
     expect(seen.gates).toEqual([REGATE_COMMIT]);
@@ -1343,8 +1382,8 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
 
   test("L5: a live pid running ANOTHER program (pid reuse) is stale: gated", async () => {
     await setup();
-    await holder(4242);
-    const { deps, seen } = regate({ procs: { 4242: "/usr/bin/vim notes.txt" } });
+    await holder(otherPid());
+    const { deps, seen } = regate({ procs: { [otherPid()]: "/usr/bin/vim notes.txt" } });
     expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
     expect(seen.gates).toEqual([REGATE_COMMIT]);
   });
@@ -1361,7 +1400,7 @@ linuxOnly("R639 the gate lock (L1-L6)", () => {
 
   test("L6: a lock that is no longer ours is left alone at release; our own is removed", async () => {
     await setup();
-    const other = JSON.stringify({ pid: 99, startedAt: "x", argv: [] });
+    const other = JSON.stringify({ pid: otherPid(), startedAt: "x", argv: [] });
     const { deps } = regate({ onGate: () => writeFile(lockPath(), other) });
     await updateOnce(deps, { regateAt: REGATE_COMMIT });
     expect(await readFile(lockPath(), "utf8")).toBe(other);
@@ -1424,10 +1463,13 @@ linuxOnly("R639 --edge-rejudge (R1-R9)", () => {
     for (const o of [
       { heavy: 3 },
       { free: 9 },
-      { procs: { 4242: "bun al-runner-v3-update.ts" } },
+      { procs: { [otherPid()]: "bun al-runner-v3-update.ts" } },
     ]) {
       await setupKept();
-      await writeFile(join(root, ".gate.lock"), JSON.stringify({ pid: 4242, startedAt: "t" }));
+      await writeFile(
+        join(root, ".gate.lock"),
+        JSON.stringify({ pid: otherPid(), startedAt: "t" }),
+      );
       const { deps, seen } = rj(o);
       const out = await edgeRejudge(deps, EDGE);
       expect(out).toBe("skipped");
@@ -2463,8 +2505,10 @@ linuxOnly("PR-255: --main", () => {
 
   test("the lock: a held .gate.lock skips the run, gates nothing", async () => {
     const bin = await setupEdge();
-    await writeFile(join(root, ".gate.lock"), JSON.stringify({ pid: 4242, startedAt: "t" }));
-    const { deps, seen } = mainFake({ procs: { 4242: "bun scripts/al-runner-v3-update.ts" } });
+    await writeFile(join(root, ".gate.lock"), JSON.stringify({ pid: otherPid(), startedAt: "t" }));
+    const { deps, seen } = mainFake({
+      procs: { [otherPid()]: "bun scripts/al-runner-v3-update.ts" },
+    });
     expect(await mainOnce(deps, bin)).toBe("skipped");
     expect(seen.gates).toEqual([]);
   });
@@ -2997,9 +3041,9 @@ linuxOnly("R859: refreshRows", () => {
     expect(await refreshRows(busy.deps, ["edge-aaaaaaaaa"])).toEqual(["skipped"]);
     await writeFile(
       join(root, ".gate.lock"),
-      JSON.stringify({ pid: 4242, startedAt: "2026-10-20T00:00:00Z", argv: [] }),
+      JSON.stringify({ pid: otherPid(), startedAt: "2026-10-20T00:00:00Z", argv: [] }),
     );
-    const held = mk(p, { procs: { 4242: "bun scripts/al-runner-v3-update.ts --edge" } });
+    const held = mk(p, { procs: { [otherPid()]: "bun scripts/al-runner-v3-update.ts --edge" } });
     expect(await refreshRows(held.deps, ["edge-aaaaaaaaa"])).toEqual(["skipped"]);
     expect(busy.seen.gates.length + held.seen.gates.length).toBe(0);
     expect(await readFile(p, "utf8")).toBe(before);
@@ -4096,7 +4140,7 @@ linuxOnly("PR-226: privateGateOnce", () => {
     await mkdir(priv, { recursive: true });
     await writeFile(
       join(priv, ".gate.lock"),
-      JSON.stringify({ pid: 4242, startedAt: "2026-10-20T00:00:00Z", argv: [] }),
+      JSON.stringify({ pid: otherPid(), startedAt: "2026-10-20T00:00:00Z", argv: [] }),
     );
     expect((await w.run()).outcome).toBe("skipped");
     expect(w.calls.cwd).toEqual([join(priv, "gate-worktree")]);
@@ -4113,7 +4157,7 @@ linuxOnly("PR-226: privateGateOnce", () => {
     const f = fake({ outcome: "pass" });
     await writeFile(
       join(root, ".gate.lock"),
-      JSON.stringify({ pid: 4242, startedAt: "2026-10-20T00:00:00Z", argv: [] }),
+      JSON.stringify({ pid: otherPid(), startedAt: "2026-10-20T00:00:00Z", argv: [] }),
     );
     const deps = {
       ...f.deps,

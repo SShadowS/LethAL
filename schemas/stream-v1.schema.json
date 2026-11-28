@@ -1126,6 +1126,103 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "atMs",
+        "median",
+        "rows",
+        "spanMs",
+        "psi",
+        "load1",
+        "onsetMutantId",
+        "onsetSeq",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "tier-slowdown-would-stop"
+        },
+        "atMs": {
+          "type": "number"
+        },
+        "median": {
+          "type": "number"
+        },
+        "rows": {
+          "type": "number"
+        },
+        "spanMs": {
+          "type": "number"
+        },
+        "psi": {
+          "type": "number"
+        },
+        "load1": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "onsetMutantId": {
+          "type": "number"
+        },
+        "onsetSeq": {
+          "type": "number"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "atMs",
+        "median",
+        "rows",
+        "spanMs",
+        "psi",
+        "load1",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "tier-slowdown-guarded"
+        },
+        "atMs": {
+          "type": "number"
+        },
+        "median": {
+          "type": "number"
+        },
+        "rows": {
+          "type": "number"
+        },
+        "spanMs": {
+          "type": "number"
+        },
+        "psi": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "load1": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "batchIndex",
         "verdicts",
         "seq"
@@ -2814,6 +2911,38 @@
               "type": "number"
             },
             "closes": {
+              "type": "number"
+            }
+          }
+        },
+        "stoppedByTierSlowdown": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "median",
+            "rows",
+            "spanMs",
+            "psi",
+            "afterMutantId",
+            "afterSeq"
+          ],
+          "properties": {
+            "median": {
+              "type": "number"
+            },
+            "rows": {
+              "type": "number"
+            },
+            "spanMs": {
+              "type": "number"
+            },
+            "psi": {
+              "type": "number"
+            },
+            "afterMutantId": {
+              "type": "number"
+            },
+            "afterSeq": {
               "type": "number"
             }
           }

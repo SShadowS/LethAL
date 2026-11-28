@@ -1909,6 +1909,38 @@
             }
           }
         },
+        "stoppedByTierSlowdown": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "median",
+            "rows",
+            "spanMs",
+            "psi",
+            "afterMutantId",
+            "afterSeq"
+          ],
+          "properties": {
+            "median": {
+              "type": "number"
+            },
+            "rows": {
+              "type": "number"
+            },
+            "spanMs": {
+              "type": "number"
+            },
+            "psi": {
+              "type": "number"
+            },
+            "afterMutantId": {
+              "type": "number"
+            },
+            "afterSeq": {
+              "type": "number"
+            }
+          }
+        },
         "afterMainPass": {
           "const": true
         }
@@ -1955,6 +1987,49 @@
         },
         "detail": {
           "type": "string"
+        }
+      }
+    },
+    "tierSlowdownWouldStop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "atMs",
+        "median",
+        "rows",
+        "spanMs",
+        "psi",
+        "load1",
+        "onsetMutantId",
+        "onsetSeq"
+      ],
+      "properties": {
+        "atMs": {
+          "type": "number"
+        },
+        "median": {
+          "type": "number"
+        },
+        "rows": {
+          "type": "number"
+        },
+        "spanMs": {
+          "type": "number"
+        },
+        "psi": {
+          "type": "number"
+        },
+        "load1": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "onsetMutantId": {
+          "type": "number"
+        },
+        "onsetSeq": {
+          "type": "number"
         }
       }
     },

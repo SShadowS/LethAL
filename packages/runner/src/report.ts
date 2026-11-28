@@ -47,6 +47,7 @@ import {
   TESTPAGE_DIAGNOSIS,
   TESTPAGE_REFUSED_DIAGNOSIS,
 } from "./testpage-unsupported";
+import { TIER_SLOWDOWN_REASON_PREFIX } from "./tier-slowdown";
 
 export type { BatchArtifact };
 
@@ -763,7 +764,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "the verdicts already scored and running only the rest. Except when `timeBudget.afterMainPass` is set " +
       "(PR-277): a signal (or guard) came after the main pass had scored every mutant, so nothing was left out, " +
       "the run is finished and there is nothing to resume; only the withheld-kill recheck was cut short or not " +
-      "started, so its withheld kills stay error.",
+      "started, so its withheld kills stay error. When `timeBudget.stoppedByTierSlowdown` is set (PR-466, " +
+      "a first cut), the BC tier slowed down and the rows from the window's start on ARE in this report, " +
+      "as `error` with the slowdown note; `--resume` re-runs them.",
     entailedNegative:
       "Not a statement about any mutant that was left out. Not a wrong verdict: every mutant that is " +
       "in the report ran to completion. Its test run was never cut short by the budget; only a " +
@@ -2417,6 +2420,19 @@ export interface SessionReport {
     /** PR-250: the daemon-churn guard stopped the run: the lane whose al-runner-v3 serve daemon closed, and how many times in a row with no mutant scored. */
     readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
     /**
+     * PR-466 (R1228, r5): `--tier-slowdown-stop` stopped the run: the window's median ratio (a passing mutant row's own
+     * duration over its baseline own duration), its row count and span, the host's CPU pressure (percent), and where
+     * the dropped window starts (mutant row id, event seq). The run is not finished: `--resume` re-runs the window.
+     */
+    readonly stoppedByTierSlowdown?: {
+      readonly median: number;
+      readonly rows: number;
+      readonly spanMs: number;
+      readonly psi: number;
+      readonly afterMutantId: number;
+      readonly afterSeq: number;
+    };
+    /**
      * PR-277: the stop came after the main pass had scored every mutant (during the withheld-kill recheck, or just
      * before it). Nothing was left out, the run is finished and there is nothing to resume; only the recheck was cut
      * short, so its withheld kills stay error.
@@ -2449,6 +2465,22 @@ export interface SessionReport {
    * visibly distinct from a measured clean result.
    */
   readonly permissionCanary?: PermissionCanaryResult;
+  /**
+   * PR-466 (R1228, r5): present only when the tier-slowdown monitor, in its default SHADOW mode, triggered: the figures
+   * at the check (monotonic ms since the first fed row, the window's median ratio, row count and span, the host's CPU
+   * pressure in percent, load1 or `null`) and the onset's mutant row id and event seq. NOTHING else changed: no stop, no
+   * dropped window, no verdict, no exit code. Absent on every run that did not trigger, and on reports from before r5.
+   */
+  readonly tierSlowdownWouldStop?: {
+    readonly atMs: number;
+    readonly median: number;
+    readonly rows: number;
+    readonly spanMs: number;
+    readonly psi: number;
+    readonly load1: number | null;
+    readonly onsetMutantId: number;
+    readonly onsetSeq: number;
+  };
   /**
    * R896: al-runner v3 under `alRunnerV3.isolation: "auto"` only (absent on every other run, and on
    * reports from before R896). One row per CANDIDATE test codeunit (one with a test red at the
@@ -4125,6 +4157,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
     ...(input.timeBudget !== undefined ? { timeBudget: input.timeBudget } : {}),
+    ...(input.tierSlowdownWouldStop !== undefined
+      ? { tierSlowdownWouldStop: input.tierSlowdownWouldStop }
+      : {}),
     ...(daemonCloses !== undefined ? { v3DaemonCloses: daemonCloses } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
     ...(input.isolation !== undefined ? { isolation: input.isolation } : {}),
@@ -4824,7 +4859,9 @@ export function renderConsole(r: SessionReport): string {
         ? "THE MEMORY GUARD"
         : r.timeBudget.stoppedByDaemonChurn !== undefined
           ? "THE DAEMON-CHURN GUARD"
-          : "SIGNAL (SIGTERM or SIGINT)";
+          : r.timeBudget.stoppedByTierSlowdown !== undefined
+            ? "THE TIER-SLOWDOWN STOP"
+            : "SIGNAL (SIGTERM or SIGINT)";
     lines.push(
       `STOPPED BY ${by} AFTER THE MAIN PASS: every mutant was scored, so the stop left nothing unscheduled; the run is finished and there is nothing to resume. Only the withheld-kill recheck was cut short or not started, so its withheld kills stay error (PR-277).`,
     );
@@ -4832,7 +4869,24 @@ export function renderConsole(r: SessionReport): string {
     const bs = r.timeBudget.baselineStopped;
     const mem = r.timeBudget.stoppedByMemory;
     const churn = r.timeBudget.stoppedByDaemonChurn;
-    if (churn !== undefined) {
+    const slow = r.timeBudget.stoppedByTierSlowdown;
+    if (slow !== undefined) {
+      // PR-466 (R1228): a spent budget, not a quarantine. N1/N2: nothing here speaks for rows BEFORE the window
+      // (the ratios rose for hours before the stop in the measurements); kill confirmation guards those.
+      const inWindow = r.mutants.filter(
+        (m) => m.failureNote?.startsWith(TIER_SLOWDOWN_REASON_PREFIX) === true,
+      ).length;
+      lines.push(
+        `STOPPED BY THE TIER-SLOWDOWN STOP (a first cut, R1228): passing tests ran at ${slow.median.toFixed(1)}× their baseline own duration (the median of the last ${slow.rows} passing rows over ${Math.round(slow.spanMs / 60_000)} min, host CPU pressure ${slow.psi.toFixed(1)}%), so the session stopped scheduling. Mutant rows after row ${slow.afterMutantId} (events after ${slow.afterSeq}) are in this report as error: ${inWindow} row(s) in the window. Continue with --resume, which re-runs them. This says nothing about verdicts before the window.`,
+        `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, apart from those ${inWindow} row(s), and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score.`,
+      );
+      // NIT 5: a window that starts at the first mutant leaves a report of errors only: "nothing scored" (exit 4) wins.
+      if (inWindow > 0 && inWindow === r.mutants.length) {
+        lines.push(
+          "NOTHING SCORED: every mutant in this report is in the slowdown window, so all of them read as error and the run measured nothing before it (exit code 4, not the time-budget one). Continue with --resume.",
+        );
+      }
+    } else if (churn !== undefined) {
       // PR-250: the churn guard happens in the mutant phase only, so no baseline was stopped.
       lines.push(
         `STOPPED BY THE DAEMON-CHURN GUARD: lane ${churn.lane}'s al-runner-v3 serve daemon closed ${churn.closes} times in a row with no mutant scored anywhere in the session (al-runner-v3-daemon-churn, PR-250); the --time-budget did not run out. Read the serve-daemon-closed events for the refusal that keeps closing it, then continue with --resume.`,
@@ -4878,7 +4932,12 @@ export function renderConsole(r: SessionReport): string {
         `TIME BUDGET REACHED IN THE BASELINE: --time-budget ${r.timeBudget.budgetSeconds} s ran out after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score. Raise --time-budget or narrow the run (--tests-only).`,
       );
     }
-    if (mem === undefined && churn === undefined && r.timeBudget.stoppedBySignal !== true) {
+    if (
+      mem === undefined &&
+      churn === undefined &&
+      slow === undefined &&
+      r.timeBudget.stoppedBySignal !== true
+    ) {
       lines.push(
         `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
       );
@@ -4919,6 +4978,13 @@ export function renderConsole(r: SessionReport): string {
   if (r.permissionCanary !== undefined) {
     lines.push("");
     lines.push(...permissionCanaryWarnings(r.permissionCanary));
+  }
+  // PR-466 (r5): the shadow monitor's record. One line; it says plainly that nothing was changed.
+  const would = r.tierSlowdownWouldStop;
+  if (would !== undefined) {
+    lines.push(
+      `TIER-SLOWDOWN (shadow, a first cut, R1228): the median passing test ran at ${would.median.toFixed(1)}× its baseline own duration over the last ${would.rows} passing rows (${Math.round(would.spanMs / 60_000)} min, host CPU pressure ${would.psi.toFixed(1)}%), after row ${would.onsetMutantId - 1}. The BC tier may have slowed down. NOTHING was stopped or dropped: every verdict above stands. --tier-slowdown-stop would have stopped the session here.`,
+    );
   }
   return lines.join("\n");
 }
