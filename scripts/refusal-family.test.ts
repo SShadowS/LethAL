@@ -2415,30 +2415,107 @@ describe("PR-500: the errors-temp-2 family", () => {
 
   // Red: a DeleteAll on a real table in any cell (a write before Codeunit.Run's return value is used), or two cells counting
   // the same key range, or a cell writing a key outside its own range.
-  test("no real-table DeleteAll, every key range is its own, and every key a cell writes is in it", () => {
+  // PR-500 review: the writers are found in the support code too (a Run target or helper procedure that Inserts, Modifies,
+  // Deletes, Renames or Validates a non-temporary record), and every cell that reaches one must declare its own range.
+  // Red: plant `Rec.Insert();` in "E2 Run Probe" or "E2 Run Nest" (a cell then writes with no range).
+  test("no real-table DeleteAll; every cell that writes a real table (directly or through support code) declares its own key range and keeps every 4-digit key in it", () => {
+    const WRITE = /\b(\w+)\.(Insert|Modify|ModifyAll|Delete|DeleteAll|Rename|Validate)\(/g;
+    const recVars = (text: string, base: string[]): Map<string, string> => {
+      const m = new Map<string, string>(base.map((n) => [n, "E2 Row"]));
+      for (const d of text.matchAll(/(\w+): Record "([^"]+)"( temporary)?/g))
+        if (d[3]) m.delete(d[1] ?? "");
+        else m.set(d[1] ?? "", d[2] ?? "");
+      return m;
+    };
+    // support units: helper procedures and Run-target codeunits, each with the real tables it writes and what it calls
+    type Unit = { name: string; text: string; tables: Set<string>; calls: string[] };
+    const units: Unit[] = [];
+    const sup = f.support;
+    for (const cu of sup.matchAll(/^codeunit \d+ "([^"]+)"\n\{\n([\s\S]*?)^\}$/gm)) {
+      const [, cuName = "", text = ""] = cu;
+      if (cuName === "E2 Helper") {
+        for (const p of text.split(/^ {4}procedure /m).slice(1))
+          units.push({ name: `H.${p.split("(")[0]}`, text: p, tables: new Set(), calls: [] });
+      } else {
+        units.push({ name: cuName, text, tables: new Set(), calls: [] });
+      }
+    }
+    expect(units.length).toBeGreaterThanOrEqual(10 + 17);
+    const direct = (u: Unit): void => {
+      const vars = recVars(u.text, u.name.startsWith("H.") ? [] : ["Rec"]);
+      for (const m of u.text.matchAll(WRITE)) {
+        const t = vars.get(m[1] ?? "");
+        if (t) u.tables.add(t);
+      }
+      for (const m of u.text.matchAll(/Codeunit::"([^"]+)"/g)) u.calls.push(m[1] ?? "");
+      for (const m of u.text.matchAll(/(?<![\w."])(\w+)\(/g)) u.calls.push(`H.${m[1]}`);
+    };
+    for (const u of units) direct(u);
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const u of units)
+        for (const c of u.calls)
+          for (const t of units.find((x) => x.name === c)?.tables ?? [])
+            if (!u.tables.has(t)) {
+              u.tables.add(t);
+              changed = true;
+            }
+    }
+    const cellTables = (c: (typeof f.cells)[number]): Set<string> => {
+      const body = stmts(c);
+      const out = new Set<string>();
+      const vars = recVars((c.vars ?? []).join("\n"), []);
+      for (const m of body.matchAll(WRITE)) {
+        const t = vars.get(m[1] ?? "");
+        if (t) out.add(t);
+      }
+      for (const m of body.matchAll(/Codeunit::"([^"]+)"/g))
+        for (const t of units.find((x) => x.name === m[1])?.tables ?? []) out.add(t);
+      for (const m of body.matchAll(/\bH\.(\w+)\(/g))
+        for (const t of units.find((x) => x.name === `H.${m[1]}`)?.tables ?? []) out.add(t);
+      return out;
+    };
     const ranges: string[] = [];
+    const writers: string[] = [];
+    const autoWriters: string[] = [];
+    const rangeOnly: string[] = [];
     for (const c of f.cells) {
       const body = stmts(c);
       expect({ cell: c.method, del: /\b(Row|Row2|RA|RA2)\.DeleteAll/.test(body) }).toEqual({
         cell: c.method,
         del: false,
       });
+      const tables = cellTables(c);
+      if (tables.delete("E2 Auto")) autoWriters.push(c.method);
       const own = [...body.matchAll(/Row2\.SetRange\("Key", (\d+), (\d+)\)/g)];
       for (const m of own) ranges.push(m[1] ?? "");
+      if (tables.size > 0) writers.push(c.method);
+      // a cell that writes a real table declares exactly one range
+      if (tables.size > 0)
+        expect({ cell: c.method, writes: [...tables], ranges: own.length }).toEqual({
+          cell: c.method,
+          writes: [...tables],
+          ranges: 1,
+        });
+      else if (own.length > 0) rangeOnly.push(c.method);
       if (own.length === 0) continue;
       const lo = Number(own[0]?.[1]);
       const hi = Number(own[0]?.[2]);
-      // every 4-digit key written in setup (InsertRow(k), Row."Key" := k, TryInsert...(k)) lies in the range
-      for (const m of (c.setup ?? []).join("\n").matchAll(/(?<![\d.])(\d{4})(?!\d)/g)) {
-        const n = Number(m[1]);
+      // every 4-digit key in setup AND call (InsertRow(k), Row."Key" := k, TryInsert...(k)) lies in the range
+      const keys = [...body.matchAll(/(?<![\d.])(\d{4})(?!\d)/g)].map((m) => Number(m[1]));
+      expect({ cell: c.method, hasKey: keys.length > 0 }).toEqual({ cell: c.method, hasKey: true });
+      for (const n of keys)
         expect({ cell: c.method, n, inRange: n >= lo && n <= hi }).toEqual({
           cell: c.method,
           n,
           inRange: true,
         });
-      }
     }
-    // 8 cells count a key range (Try 2, Run 4, Assert 1, Temp RealToTempParam 1)
+    // the one cell that writes the AutoIncrement table has no key to range (its rows roll back with the test)
+    expect(autoWriters).toEqual(["RealAfterRollback"]);
+    // 7 cells write a real keyed table (Try 2, Run 4, Assert 1); RealToTempParam only counts (its by-value temp copy is no write)
+    expect(rangeOnly).toEqual(["RealToTempParam"]);
+    expect(writers).toHaveLength(7);
     expect(ranges).toHaveLength(8);
     expect(new Set(ranges).size).toBe(ranges.length);
   });
@@ -2446,10 +2523,13 @@ describe("PR-500: the errors-temp-2 family", () => {
   // Red (each separately): `Format(R)` without `, 0, 9`; `R` or a bare Boolean as a V:[...] argument.
   test("every Format is Format(x, 0, 9) and no Boolean or enum is printed bare", () => {
     for (const c of f.cells) expect(c.depends).toBeUndefined();
-    const all = f.cells.map(stmts).join("\n");
+    // the cells and the support code (the E2 Helper procedures and Run targets, where most of the answers are built)
+    const cellsText = f.cells.map(stmts).join("\n");
+    const all = `${cellsText}\n${f.support}`;
     const args = formatArgList(all);
-    // every Format the 45 cells hold (a scan that finds none would make the check below vacuous)
-    expect(args.length).toBe(25);
+    // every Format the 45 cells and the support code hold (a scan that finds none would make the check below vacuous)
+    expect(formatArgList(cellsText).length).toBe(25);
+    expect(args.length).toBe(40); // 25 in the cells, 15 in the support code
     expect(args.filter((a) => !a.endsWith(", 0, 9"))).toEqual([]);
     expect(all).not.toMatch(/Error\('V:\[[^']*'(, [^,;]+)*, R[,)]/);
     expect(all).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
@@ -2512,7 +2592,7 @@ describe("PR-500: the io-streams-2 family", () => {
         expect({ cell: c.method, f9: a.endsWith(", 0, 9") }).toEqual({ cell: c.method, f9: true });
       }
     }
-    expect(formats).toBeGreaterThan(40);
+    expect(formats).toBe(52);
     // 3 Temp Blob cells and 13 XMLport cells take a key each
     expect(byKey.size).toBe(16);
     for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });

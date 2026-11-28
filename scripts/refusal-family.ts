@@ -8586,8 +8586,8 @@ codeunit ${IO_HELPER} "IO Helper"
 
 /**
  * PR-500: errors-temp-2, R1236's follow-up items 2-11 as a second per-cell BC differential. Same rules as errors-temp: a cell
- * that writes a real table counts its own key range (`e2Key`) and never DeleteAll; booleans and numbers go through
- * Format(x, 0, 9); each cell reports through `Error('V:[...]')` or fails with the runtime's own error. The two kinds of cell
+ * that writes a real table counts its own key range (`e2Key`) and never DeleteAll; booleans go through Format(x, 0, 9),
+ * while counts and keys are printed bare through %1 (all below 1000, so no locale grouping); each cell reports through `Error('V:[...]')` or fails with the runtime's own error. The two kinds of cell
  * that stopped early on both runtimes in errors-temp are re-shaped: a write inside a try with the return value UNUSED, and
  * Codeunit.Run after a Commit (not after an uncommitted write). Cells that Commit (Run.AfterCommit*, Run.CommitInTarget*,
  * Assert.CommitInside) leave rows behind: on BC run the app again only after uninstalling it WITH its data. Cell i is
