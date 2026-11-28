@@ -10,6 +10,7 @@ import {
   startClientDriver,
 } from "../src/client-driver";
 import {
+  CLIENT_ATTESTATION_PAGE_ROWS,
   type ClientRunCheckInput,
   ClientRunFailure,
   type ClientRunFailureReason,
@@ -439,6 +440,42 @@ describe("PR-479 amendment 8: readAllAttestationPages", () => {
       [10, 10],
       [20, 10],
     ]);
+  });
+
+  // R1244: the page bound in BYTES. On bcwin the smallest answer that never arrived was about 29.7 KB of decoded body
+  // (68 rows); 67 rows (29,256 bytes) arrived. The wire body is never larger than the decoded text: measured uncompressed
+  // it is the same UTF-8 bytes, and with the client's default Accept-Encoding bcwin sends it Brotli-compressed. So a
+  // page bounded in decoded bytes is bounded on the wire. The worst page here: every text field at its maximum length,
+  // a 128-character non-ASCII method name escaped as \uXXXX, then escaped again inside OData's `value` string.
+  test("the worst-case page is under 16 KiB of OData body, about half the smallest answer bcwin never delivered", () => {
+    const esc = (s: string) =>
+      s.replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    const worst = row({
+      attemptId: "a".repeat(64),
+      opSeq: Number.MAX_SAFE_INTEGER,
+      codeunitId: 2147483647,
+      method: "æ".repeat(128),
+      loadedGeneration: Number.MAX_SAFE_INTEGER,
+      loadedMutantId: "M".repeat(64),
+      testMethodRuns: 2147483647,
+      sessionId: 2147483647,
+      serverGeneration: "g".repeat(32),
+      databaseId: "d".repeat(32),
+    });
+    const page = {
+      read: true,
+      total: 2147483647,
+      from: 2147483647,
+      rows: Array.from({ length: CLIENT_ATTESTATION_PAGE_ROWS }, () => worst),
+    };
+    const inner = esc(JSON.stringify(page));
+    const body = JSON.stringify({
+      "@odata.context": `http://192.168.2.99:7048/BC/ODataV4/$metadata#Edm.String${"x".repeat(200)}`,
+      value: inner,
+    });
+    const bytes = Buffer.byteLength(body);
+    expect(bytes).toBeLessThan(16 * 1024);
+    expect(bytes * 1.8).toBeLessThan(29_700); // a clear margin under the smallest measured failure
   });
 
   test("an exact multiple stops at total; total 0 is one page and an empty read", async () => {
