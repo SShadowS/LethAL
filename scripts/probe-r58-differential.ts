@@ -184,6 +184,20 @@ class CoverageRecordingBackend implements ExecutionBackend {
   setLease(lease: Parameters<BcDevMcpBackend["setLease"]>[0]): void {
     this.inner.setLease(lease);
   }
+  // R1131: the orchestrator brackets each baseline through these optional hooks. Without them the inner backend never
+  // learns the batch's baseline WorkDate, and its guard refuses the first answer (NoBaselineWorkDateError).
+  baselinePhase(on: boolean) {
+    return this.inner.baselinePhase(on);
+  }
+  batchWorkDate(): string | undefined {
+    return this.inner.batchWorkDate();
+  }
+  refuseReusedBaselineDate(snapshotWorkDate: string | undefined): string | undefined {
+    return this.inner.refuseReusedBaselineDate(snapshotWorkDate);
+  }
+  noteReusedBaseline(baseline: Parameters<BcDevMcpBackend["noteReusedBaseline"]>[0]): void {
+    this.inner.noteReusedBaseline(baseline);
+  }
 }
 
 /**
