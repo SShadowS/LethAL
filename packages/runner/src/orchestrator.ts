@@ -427,9 +427,12 @@ import {
 import {
   TierSlowdownMonitor,
   type TierSlowdownStop,
+  readLoad1,
+  readPsiCpuAvg60,
   storeReference,
   tierSlowdownNote,
   tierSlowdownWarning,
+  tierSlowdownWouldStopLine,
 } from "./tier-slowdown";
 import { reachPruneMessage } from "./timing-summary";
 import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
@@ -1984,6 +1987,13 @@ export interface SessionConfig {
    */
   readonly killLedger?: false;
   /**
+   * PR-466 (R1228, r5), `--tier-slowdown-stop`, OPT-IN, bcdev only. `true`: a tier-slowdown trigger STOPS the session
+   * (a spent budget, the window dropped, resumable). Absent: the monitor only SHADOWS (an event and a report field,
+   * nothing else). In the run's identity only when on, and a `--resume` across the flag is refused by name. Any other
+   * backend refuses it by name.
+   */
+  readonly tierSlowdownStop?: true;
+  /**
    * R198: how a mutant's covering tests are dispatched on a backend that has `runMany`.
    * `maxMethodsPerCall` caps one call (default unbounded; the gates force chunking with 2);
    * `requestCeilingMs` bounds one call (default `REQUEST_CEILING_MS`). `enabled: false` keeps
@@ -2087,6 +2097,11 @@ export interface SessionConfig {
   readonly workers?: number;
   /** PR-466: where the tier-slowdown monitor's session-end arming line goes (a console line, not an event). Default `console.warn`. */
   readonly tierSlowdownLine?: (line: string) => void;
+  /** PR-466: test seam for the host readers (`/proc/pressure/cpu` some avg60, `/proc/loadavg` load1). `null` is "unreadable". */
+  readonly tierSlowdownHost?: {
+    readonly psi?: () => number | null;
+    readonly load1?: () => number | null;
+  };
   /** Machine-local durable-quarantine base directory (spec §9). Defaults to
    *  `~/.lethal/quarantine` via `defaultQuarantineDir()` when omitted; tests inject a scratch dir
    *  so quarantine state never leaks across test runs or into the real user's home directory. */
@@ -5077,6 +5092,8 @@ function resolveResume(
   },
   /** PR-472: the digest with `--no-kill-ledger` the other way, and this session's state of it; set only on bcdev. */
   ledgerFlag?: { readonly otherFingerprint: string; readonly killLedgerOff: boolean },
+  /** PR-466: the digest with `--tier-slowdown-stop` the other way, and this session's state of it; set only on bcdev. */
+  slowdownFlag?: { readonly otherFingerprint: string; readonly stopOn: boolean },
 ):
   | {
       runId: number;
@@ -5202,6 +5219,22 @@ function resolveResume(
         if (other !== null)
           throw new KillLedgerResumeError(
             killLedgerResumeMessage(`--resume found run ${other}`, ledgerFlag.killLedgerOff),
+          );
+      }
+      // PR-466: likewise for an unfinished run recorded with `--tier-slowdown-stop` the other way.
+      if (slowdownFlag !== undefined) {
+        const other = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: slowdownFlag.otherFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          ...(lendingSession?.runnerBuild !== undefined
+            ? { runnerBuild: lendingSession.runnerBuild }
+            : {}),
+        });
+        if (other !== null)
+          throw new TierSlowdownResumeError(
+            tierSlowdownResumeMessage(`--resume found run ${other}`, slowdownFlag.stopOn),
           );
       }
       // PR-347: likewise for an unfinished run recorded with `refusedCutTail` the other way (the default flipped).
@@ -5394,6 +5427,11 @@ function resolveResume(
       if (ledgerFlag !== undefined && row.configFingerprint === ledgerFlag.otherFingerprint) {
         throw new KillLedgerResumeError(
           killLedgerResumeMessage(`--resume-run ${id}`, ledgerFlag.killLedgerOff),
+        );
+      }
+      if (slowdownFlag !== undefined && row.configFingerprint === slowdownFlag.otherFingerprint) {
+        throw new TierSlowdownResumeError(
+          tierSlowdownResumeMessage(`--resume-run ${id}`, slowdownFlag.stopOn),
         );
       }
       if (
@@ -6173,7 +6211,7 @@ export function invalidateDegradedWindow(
       store.markDegradedWindow(runId, w.afterMutantId, w.afterSnapshotId, w.note);
     }
     if (s !== undefined) {
-      note = tierSlowdownNote(s.medians);
+      note = tierSlowdownNote(s);
       store.markDegradedWindow(runId, s.afterMutantId, s.afterSnapshotId, note);
     }
   } catch (err) {
@@ -6212,7 +6250,7 @@ export function onTierSlowdownStop(
   stop: TierSlowdownStop,
 ): void {
   d.timeBudget.stopForTierSlowdown(stop);
-  const note = tierSlowdownNote(stop.medians);
+  const note = tierSlowdownNote(stop);
   let stored = { afterMutantId: stop.afterMutantId, afterSeq: stop.afterSeq };
   try {
     const w = d.store.markDegradedWindow(d.runId, stop.afterMutantId, stop.afterSnapshotId, note);
@@ -6235,6 +6273,29 @@ export function onTierSlowdownStop(
     code: "tier-slowdown-stop",
     message: tierSlowdownWarning(stop, stored),
   });
+}
+
+/**
+ * PR-466 (r5): the SHADOW trigger, the default. It records the figures (an event that is NOT a warning, so no gate's
+ * warning set moves, and one console line) and does NOTHING else: no budget stop, no window, no store write.
+ */
+export function onTierSlowdownShadow(
+  emit: RunEmitter,
+  line: (l: string) => void,
+  stop: TierSlowdownStop,
+): void {
+  emit({
+    type: "tier-slowdown-would-stop",
+    atMs: stop.atMs,
+    median: stop.median,
+    rows: stop.rows,
+    spanMs: stop.spanMs,
+    psi: stop.psi,
+    load1: stop.load1,
+    onsetMutantId: stop.afterMutantId + 1,
+    onsetSeq: stop.afterSeq + 1,
+  });
+  line(tierSlowdownWouldStopLine(stop));
 }
 
 /**
@@ -6278,7 +6339,10 @@ export function feedTierSlowdown(
 /** PR-466: the `time-budget-reached` field a slowdown stop adds (nothing when none fired). */
 function slowdownFields(b: TimeBudget): {
   readonly stoppedByTierSlowdown?: {
-    readonly medians: readonly number[];
+    readonly median: number;
+    readonly rows: number;
+    readonly spanMs: number;
+    readonly psi: number;
     readonly afterMutantId: number;
     readonly afterSeq: number;
   };
@@ -6288,7 +6352,10 @@ function slowdownFields(b: TimeBudget): {
     ? {}
     : {
         stoppedByTierSlowdown: {
-          medians: [...s.medians],
+          median: s.median,
+          rows: s.rows,
+          spanMs: s.spanMs,
+          psi: s.psi,
           afterMutantId: s.afterMutantId,
           afterSeq: s.afterSeq,
         },
@@ -7077,6 +7144,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
   const baselineElapsedMs = monoNow() - baselineStartedMs;
   emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
+  scope.slowdown?.noteBaselineEnd(); // PR-466: the host's PSI when the first baseline ended, for the arming line
   if (safety.isUnsafe) return "unsafe"; // the caller stops the session: no mutant scheduling, no next batch
   // R192 (second half): a baseline that ran EVERY test to a verdict is recorded under its two
   // hashes for the next resume. `baseline.length === tests.length` is what "completed" means
@@ -7597,6 +7665,9 @@ async function runSessionBody(
   // PR-472: refused by name before any run on a backend that never re-walks.
   if (cfg.killLedger === false && !isBcdev(caps.kind))
     throw new KillLedgerFlagBackendError(caps.kind);
+  // PR-466: likewise for `--tier-slowdown-stop`.
+  if (cfg.tierSlowdownStop === true && !isBcdev(caps.kind))
+    throw new TierSlowdownFlagBackendError(caps.kind);
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   if (
     cfg.timeBudgetSeconds !== undefined &&
@@ -8302,15 +8373,19 @@ async function runSessionBody(
   const cutTailOn = cfg.backend.refusedCutTail === true;
   // PR-472: `--no-kill-ledger` (bcdev only, checked above); in the digest only when on.
   const ledgerOffOn = cfg.killLedger === false;
+  // PR-466: `--tier-slowdown-stop` (bcdev only, checked above); in the digest only when on.
+  const slowdownStopOn = cfg.tierSlowdownStop === true;
   const fingerprintWith = (
     prune: boolean,
     carryOn: boolean = carryWalk,
     cutTail: boolean = cutTailOn,
     ledgerOff: boolean = ledgerOffOn,
+    slowdownStop: boolean = slowdownStopOn,
   ) =>
     sessionFingerprint({
       ...fingerprintBase,
       ...(ledgerOff ? { killLedgerOff: true as const } : {}), // PR-472
+      ...(slowdownStop ? { tierSlowdownStop: true as const } : {}), // PR-466
       ...(cutTail ? { v3RefusedCutTail: true as const } : {}), // PR-297
       ...(prune ? { v3ReachPrune: true as const } : {}),
       ...(carryApplies && !carryOn ? { v3CarryWalkOff: true as const } : {}),
@@ -8329,6 +8404,7 @@ async function runSessionBody(
           ...(carryApplies && !carryWalk ? { v3CarryWalkOff: true as const } : {}),
           ...(carryApplies && !carrySkip ? { v3CarrySkipOff: true as const } : {}), // PR-410
           ...(ledgerOffOn ? { killLedgerOff: true as const } : {}), // PR-472
+          ...(slowdownStopOn ? { tierSlowdownStop: true as const } : {}), // PR-466
         })
       : undefined;
   const resolvedResume = resolveResume(
@@ -8366,6 +8442,19 @@ async function runSessionBody(
       ? {
           otherFingerprint: fingerprintWith(reachPrune, carryWalk, cutTailOn, !ledgerOffOn),
           killLedgerOff: ledgerOffOn,
+        }
+      : undefined,
+    // PR-466: bcdev only; the flag is refused elsewhere.
+    isBcdev(caps.kind)
+      ? {
+          otherFingerprint: fingerprintWith(
+            reachPrune,
+            carryWalk,
+            cutTailOn,
+            ledgerOffOn,
+            !slowdownStopOn,
+          ),
+          stopOn: slowdownStopOn,
         }
       : undefined,
   );
@@ -8485,17 +8574,26 @@ async function runSessionBody(
         reference: storeReference(cfg.store, runId, resolvedResume?.runId),
         scoredSeq: () => lastScoredSeq,
         snapshotId: () => cfg.store.windowMark(runId).snapshotId,
-        onStop: (stop) =>
-          onTierSlowdownStop(
-            {
-              store: cfg.store,
-              runId,
-              timeBudget,
-              emit,
-              renewWindow: () => leaseSession?.degradedWindow,
-            },
-            stop,
-          ),
+        now: monoNow,
+        psi: cfg.tierSlowdownHost?.psi ?? (() => readPsiCpuAvg60()),
+        load1: cfg.tierSlowdownHost?.load1 ?? (() => readLoad1()),
+        stopMode: cfg.tierSlowdownStop === true,
+        onTrigger: (stop) => {
+          if (cfg.tierSlowdownStop === true) {
+            onTierSlowdownStop(
+              {
+                store: cfg.store,
+                runId,
+                timeBudget,
+                emit,
+                renewWindow: () => leaseSession?.degradedWindow,
+              },
+              stop,
+            );
+          } else {
+            onTierSlowdownShadow(emit, cfg.tierSlowdownLine ?? ((l) => console.warn(l)), stop);
+          }
+        },
       })
     : undefined;
   emit({ type: "phase-entered", phase: "generate" });
@@ -12103,6 +12201,28 @@ export class KillLedgerResumeError extends Error {
 
 function killLedgerResumeMessage(subject: string, nowOff: boolean): string {
   return `kill-ledger-resume-refused: ${subject} was recorded with --no-kill-ledger ${nowOff ? "off" : "on"}, and this session has it ${nowOff ? "on" : "off"}. A kill or survivor scored in one order must never be carried into a run with the other (PR-472). Pass the flag as that run had it, or drop the resume flag to run from scratch.`;
+}
+
+/** PR-466: a resume across a change of `--tier-slowdown-stop`. Extends `Error` directly. */
+export class TierSlowdownResumeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TierSlowdownResumeError";
+  }
+}
+
+function tierSlowdownResumeMessage(subject: string, nowOn: boolean): string {
+  return `tier-slowdown-resume-refused: ${subject} was recorded with --tier-slowdown-stop ${nowOn ? "off" : "on"}, and this session has it ${nowOn ? "on" : "off"}. A run that stops on a tier slowdown and one that only watches it must not share rows (PR-466). Pass the flag as that run had it, or drop the resume flag to run from scratch.`;
+}
+
+/** PR-466: `--tier-slowdown-stop` on a backend that is not bcdev. Extends `Error` directly. */
+export class TierSlowdownFlagBackendError extends Error {
+  constructor(backendKind: string) {
+    super(
+      `tier-slowdown-flag-backend: --tier-slowdown-stop is for the bcdev backend only (the monitor reads BC test own durations); this run's backend is ${backendKind}. Drop the flag.`,
+    );
+    this.name = "TierSlowdownFlagBackendError";
+  }
 }
 
 /** PR-303 rule 6: why a resume across a flag change is refused. */

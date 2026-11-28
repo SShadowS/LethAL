@@ -162,6 +162,12 @@ export function createProgressRenderer(
       case "quarantined":
         write(`QUARANTINED: ${event.reason}`);
         break;
+      case "tier-slowdown-would-stop":
+        // PR-466 (r5): shadow mode; nothing was stopped.
+        write(
+          `TIER SLOWDOWN (shadow, nothing stopped): passing tests at ${event.median.toFixed(1)}x their baseline over ${Math.round(event.spanMs / 60_000)} min, host CPU pressure ${event.psi.toFixed(1)}%.`,
+        );
+        break;
       case "time-budget-reached": {
         // R966: say what stopped the run. A signal or the memory guard spends the budget to stop
         // through R955's path, but the budget itself was not used up.

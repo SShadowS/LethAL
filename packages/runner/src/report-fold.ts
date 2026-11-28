@@ -27,8 +27,8 @@ import {
   withheldKillOf,
 } from "./report";
 import type { BatchArtifact, CarryHidden } from "./store";
-import { TIER_SLOWDOWN_REASON_PREFIX } from "./tier-slowdown";
 import { describeRequestPageRefusal, describeTestPageUnsupported } from "./testpage-unsupported";
+import { TIER_SLOWDOWN_REASON_PREFIX, type TierSlowdownWouldStop } from "./tier-slowdown";
 
 /** R443: this run's numbering facts, from `mutation-set-generated`. All three or none. */
 export interface FoldedNumbering {
@@ -291,12 +291,17 @@ export interface FoldedReport {
     };
     readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
     readonly stoppedByTierSlowdown?: {
-      readonly medians: readonly number[];
+      readonly median: number;
+      readonly rows: number;
+      readonly spanMs: number;
+      readonly psi: number;
       readonly afterMutantId: number;
       readonly afterSeq: number;
     };
     readonly afterMainPass?: true;
   };
+  /** PR-466 (r5): see `SessionReport.tierSlowdownWouldStop`. Absent unless the shadow monitor triggered. */
+  readonly tierSlowdownWouldStop?: TierSlowdownWouldStop;
   readonly permissionCanary?: PermissionCanaryResult;
   /** R896 — see `SessionReport.isolation`. */
   readonly isolation?: { readonly mode: "auto"; readonly codeunits: readonly IsolationChoiceRow[] };
@@ -564,13 +569,17 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         stoppedByMemory?: { usedBytes: number; boundBytes: number; source: string };
         stoppedByDaemonChurn?: { lane: number; closes: number };
         stoppedByTierSlowdown?: {
-          medians: readonly number[];
+          median: number;
+          rows: number;
+          spanMs: number;
+          psi: number;
           afterMutantId: number;
           afterSeq: number;
         };
         afterMainPass?: true;
       }
     | undefined;
+  let tierSlowdownWouldStop: TierSlowdownWouldStop | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
   let isolationRows: IsolationChoiceRow[] | undefined;
   let resumeFromRunId: number | undefined;
@@ -896,6 +905,19 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "degraded-window":
         degradedWindows.push({ afterSeq: e.afterSeq, reason: e.reason });
         break;
+      case "tier-slowdown-would-stop":
+        // PR-466 (r5): the shadow monitor's one record. It moves no verdict, window or exit code.
+        tierSlowdownWouldStop ??= {
+          atMs: e.atMs,
+          median: e.median,
+          rows: e.rows,
+          spanMs: e.spanMs,
+          psi: e.psi,
+          load1: e.load1,
+          onsetMutantId: e.onsetMutantId,
+          onsetSeq: e.onsetSeq,
+        };
+        break;
       case "recheck-baseline-finished":
         // PR-144: the recheck's own baseline. Deliberately read into NOTHING: the session's baseline
         // figures (`baselineGreen`, unsupported tests, timings) are the main pass's alone.
@@ -1183,6 +1205,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     artifacts: [...artifactsByBatch.values()].sort((a, b) => a.batchIndex - b.batchIndex),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
     ...(timeBudget !== undefined ? { timeBudget } : {}),
+    ...(tierSlowdownWouldStop !== undefined ? { tierSlowdownWouldStop } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(isolationRows !== undefined
       ? { isolation: { mode: "auto" as const, codeunits: isolationRows } }

@@ -1125,6 +1125,57 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "atMs",
+        "median",
+        "rows",
+        "spanMs",
+        "psi",
+        "load1",
+        "onsetMutantId",
+        "onsetSeq",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "tier-slowdown-would-stop"
+        },
+        "atMs": {
+          "type": "number"
+        },
+        "median": {
+          "type": "number"
+        },
+        "rows": {
+          "type": "number"
+        },
+        "spanMs": {
+          "type": "number"
+        },
+        "psi": {
+          "type": "number"
+        },
+        "load1": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "onsetMutantId": {
+          "type": "number"
+        },
+        "onsetSeq": {
+          "type": "number"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "batchIndex",
         "verdicts",
         "seq"
@@ -2818,16 +2869,25 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "medians",
+            "median",
+            "rows",
+            "spanMs",
+            "psi",
             "afterMutantId",
             "afterSeq"
           ],
           "properties": {
-            "medians": {
-              "type": "array",
-              "items": {
-                "type": "number"
-              }
+            "median": {
+              "type": "number"
+            },
+            "rows": {
+              "type": "number"
+            },
+            "spanMs": {
+              "type": "number"
+            },
+            "psi": {
+              "type": "number"
             },
             "afterMutantId": {
               "type": "number"

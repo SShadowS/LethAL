@@ -2359,12 +2359,15 @@ export interface SessionReport {
     /** PR-250: the daemon-churn guard stopped the run: the lane whose al-runner-v3 serve daemon closed, and how many times in a row with no mutant scored. */
     readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
     /**
-     * PR-466 (R1228): the tier-slowdown stop stopped the run: the three block medians (a passing mutant row's own
-     * duration over its baseline own duration) and where the dropped window starts (mutant row id, event seq).
-     * The run is not finished: `--resume` re-runs the window.
+     * PR-466 (R1228, r5): `--tier-slowdown-stop` stopped the run: the window's median ratio (a passing mutant row's own
+     * duration over its baseline own duration), its row count and span, the host's CPU pressure (percent), and where
+     * the dropped window starts (mutant row id, event seq). The run is not finished: `--resume` re-runs the window.
      */
     readonly stoppedByTierSlowdown?: {
-      readonly medians: readonly number[];
+      readonly median: number;
+      readonly rows: number;
+      readonly spanMs: number;
+      readonly psi: number;
       readonly afterMutantId: number;
       readonly afterSeq: number;
     };
@@ -2401,6 +2404,22 @@ export interface SessionReport {
    * visibly distinct from a measured clean result.
    */
   readonly permissionCanary?: PermissionCanaryResult;
+  /**
+   * PR-466 (R1228, r5): present only when the tier-slowdown monitor, in its default SHADOW mode, triggered: the figures
+   * at the check (monotonic ms since the first fed row, the window's median ratio, row count and span, the host's CPU
+   * pressure in percent, load1 or `null`) and the onset's mutant row id and event seq. NOTHING else changed: no stop, no
+   * dropped window, no verdict, no exit code. Absent on every run that did not trigger, and on reports from before r5.
+   */
+  readonly tierSlowdownWouldStop?: {
+    readonly atMs: number;
+    readonly median: number;
+    readonly rows: number;
+    readonly spanMs: number;
+    readonly psi: number;
+    readonly load1: number | null;
+    readonly onsetMutantId: number;
+    readonly onsetSeq: number;
+  };
   /**
    * R896: al-runner v3 under `alRunnerV3.isolation: "auto"` only (absent on every other run, and on
    * reports from before R896). One row per CANDIDATE test codeunit (one with a test red at the
@@ -4064,6 +4083,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
     ...(input.timeBudget !== undefined ? { timeBudget: input.timeBudget } : {}),
+    ...(input.tierSlowdownWouldStop !== undefined
+      ? { tierSlowdownWouldStop: input.tierSlowdownWouldStop }
+      : {}),
     ...(daemonCloses !== undefined ? { v3DaemonCloses: daemonCloses } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
     ...(input.isolation !== undefined ? { isolation: input.isolation } : {}),
@@ -4771,7 +4793,7 @@ export function renderConsole(r: SessionReport): string {
         (m) => m.failureNote?.startsWith(TIER_SLOWDOWN_REASON_PREFIX) === true,
       ).length;
       lines.push(
-        `STOPPED BY THE TIER-SLOWDOWN STOP (a first cut, R1228): passing tests ran at ${slow.medians.map((m) => `${m.toFixed(1)}×`).join(", ")} their baseline own duration in three blocks of 50 rows in a row, so the session stopped scheduling. Mutant rows after row ${slow.afterMutantId} (events after ${slow.afterSeq}) are in this report as error: ${inWindow} row(s) in the window. Continue with --resume, which re-runs them. This says nothing about verdicts before the window.`,
+        `STOPPED BY THE TIER-SLOWDOWN STOP (a first cut, R1228): passing tests ran at ${slow.median.toFixed(1)}× their baseline own duration (the median of the last ${slow.rows} passing rows over ${Math.round(slow.spanMs / 60_000)} min, host CPU pressure ${slow.psi.toFixed(1)}%), so the session stopped scheduling. Mutant rows after row ${slow.afterMutantId} (events after ${slow.afterSeq}) are in this report as error: ${inWindow} row(s) in the window. Continue with --resume, which re-runs them. This says nothing about verdicts before the window.`,
         `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, apart from those ${inWindow} row(s), and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score.`,
       );
       // NIT 5: a window that starts at the first mutant leaves a report of errors only: "nothing scored" (exit 4) wins.
@@ -4872,6 +4894,13 @@ export function renderConsole(r: SessionReport): string {
   if (r.permissionCanary !== undefined) {
     lines.push("");
     lines.push(...permissionCanaryWarnings(r.permissionCanary));
+  }
+  // PR-466 (r5): the shadow monitor's record. One line; it says plainly that nothing was changed.
+  const would = r.tierSlowdownWouldStop;
+  if (would !== undefined) {
+    lines.push(
+      `TIER-SLOWDOWN (shadow, a first cut, R1228): the median passing test ran at ${would.median.toFixed(1)}× its baseline own duration over the last ${would.rows} passing rows (${Math.round(would.spanMs / 60_000)} min, host CPU pressure ${would.psi.toFixed(1)}%), after row ${would.onsetMutantId - 1}. The BC tier may have slowed down. NOTHING was stopped or dropped: every verdict above stands. --tier-slowdown-stop would have stopped the session here.`,
+    );
   }
   return lines.join("\n");
 }

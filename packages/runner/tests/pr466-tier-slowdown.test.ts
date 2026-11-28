@@ -1,5 +1,6 @@
-// PR-466 part 2 (R1228): the tier-slowdown STOP. Spec: docs/superpowers/specs/2026-11-27-pr466-tier-slowdown-stop.md
-// (r2 and its r2a section). Stateful fakes and call counters only: no clock, no /coord.
+// PR-466 part 2 (R1228): the tier-slowdown monitor. Spec: docs/superpowers/specs/2026-11-27-pr466-tier-slowdown-stop.md
+// (r2, r2a, r3 and r5: a sliding 60-minute median, SHADOW by default, `--tier-slowdown-stop` opt-in).
+// Stateful fakes and call counters only: every clock here is an injected one, never the wall clock; no /coord.
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +14,12 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { TIME_BUDGET_EXIT_CODE, exitCodeForReport } from "../src/cli";
+import {
+  TIME_BUDGET_EXIT_CODE,
+  exitCodeForReport,
+  parseCliConfig,
+  runFromCliWithAccept,
+} from "../src/cli";
 import { clock } from "../src/clock";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { createEmitter } from "../src/events";
@@ -21,6 +27,7 @@ import type { LeaseApi } from "../src/lease";
 import { TimeBudget } from "../src/mutant-windows";
 import {
   LeaseSession,
+  TierSlowdownFlagBackendError,
   budgetCutsWalk,
   correctStoreAtEnd,
   feedTierSlowdown,
@@ -34,20 +41,25 @@ import type { SessionConfig } from "../src/orchestrator";
 import { createProgressRenderer } from "../src/progress-renderer";
 import { QuarantineStore } from "../src/quarantine-store";
 import { renderConsole } from "../src/report";
-import type { SessionOutcome, SessionReport } from "../src/report";
+import type { SessionOutcome } from "../src/report";
 import { foldEvents } from "../src/report-fold";
 import type { FoldStatics } from "../src/report-fold";
-import { CARRYABLE_VERDICTS } from "../src/resume";
+import { CARRYABLE_VERDICTS, sessionFingerprint } from "../src/resume";
 import { SessionSafety } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
 import {
-  TIER_SLOWDOWN_BLOCK,
-  TIER_SLOWDOWN_HOLD,
+  TIER_SLOWDOWN_CHECK_EVERY,
+  TIER_SLOWDOWN_MAX_PSI,
   TIER_SLOWDOWN_MIN_REF_MS,
+  TIER_SLOWDOWN_MIN_ROWS,
   TIER_SLOWDOWN_REASON_PREFIX,
   TIER_SLOWDOWN_STOP,
+  TIER_SLOWDOWN_WINDOW_MS,
   TierSlowdownMonitor,
   type TierSlowdownStop,
+  parsePsiCpuAvg60,
+  readLoad1,
+  readPsiCpuAvg60,
   storeReference,
   tierSlowdownNote,
   tierSlowdownWarning,
@@ -61,129 +73,257 @@ beforeAll(async () => {
   await initParser();
 });
 
+const MIN = 60_000;
+
 // ---------------------------------------------------------------------------------------------
-// The monitor alone: a stateful fake feeds it rows, a counter says where the stream stands.
+// The monitor alone: a stateful fake feeds it rows on an injected clock.
 // ---------------------------------------------------------------------------------------------
 
 /** Reference 100 ms for every test, so a row's ratio is its own ms / 100. */
 function monitorRig(
-  reference: (cu: number, m: string, b: number) => number | undefined = () => 100,
+  opts: {
+    reference?: (cu: number, m: string, b: number) => number | undefined;
+    stopMode?: boolean;
+  } = {},
 ) {
-  const stops: TierSlowdownStop[] = [];
-  const state = { seq: 0, snapshot: 7 };
+  const triggers: TierSlowdownStop[] = [];
+  const state = {
+    seq: 0,
+    snapshot: 7,
+    t: 0,
+    psi: 5 as number | null,
+    load1: 1.5 as number | null,
+    fedCalls: 0,
+  };
   const mon = new TierSlowdownMonitor({
-    reference,
+    reference: opts.reference ?? (() => 100),
     scoredSeq: () => state.seq,
     snapshotId: () => state.snapshot,
-    onStop: (s) => stops.push(s),
+    now: () => state.t,
+    psi: () => state.psi,
+    load1: () => state.load1,
+    stopMode: opts.stopMode ?? true,
+    onTrigger: (s) => triggers.push(s),
   });
-  /** One block of 50 rows at `ratio`; mutant row ids run from `firstId`, the scored seq is ten times the id. */
-  const block = (ratio: number, firstId: number) => {
-    for (let i = 0; i < TIER_SLOWDOWN_BLOCK; i++) {
+  /**
+   * `n` rows at `ratio`, one every `stepMs` on the injected clock (the row is fed, THEN the clock moves, so row i of a
+   * call is at `t0 + i * stepMs`). Row ids run from `firstId`; the scored seq is ten times the id; the snapshot id is
+   * 7 + the row's index in the whole feed, so a mark taken at another moment reads another number.
+   */
+  const rows = (n: number, ratio: number, firstId: number, stepMs = MIN) => {
+    for (let i = 0; i < n; i++) {
       state.seq = (firstId + i) * 10;
+      state.snapshot = 7 + state.fedCalls;
+      state.fedCalls += 1;
       mon.feed({ codeunitId: 1, method: "T", batchIndex: 0, ownMs: ratio * 100 }, firstId + i);
+      state.t += stepMs;
     }
   };
-  return { mon, stops, state, block };
+  return { mon, triggers, state, rows };
 }
 
-describe("PR-466 constants", () => {
-  test("the first-cut values are exported", () => {
+describe("PR-466 r5 constants", () => {
+  test("the values are exported", () => {
     expect([
-      TIER_SLOWDOWN_BLOCK,
+      TIER_SLOWDOWN_WINDOW_MS,
+      TIER_SLOWDOWN_CHECK_EVERY,
+      TIER_SLOWDOWN_MIN_ROWS,
       TIER_SLOWDOWN_STOP,
-      TIER_SLOWDOWN_HOLD,
+      TIER_SLOWDOWN_MAX_PSI,
       TIER_SLOWDOWN_MIN_REF_MS,
-    ]).toEqual([50, 4.0, 3, 50]);
+    ]).toEqual([3_600_000, 50, 50, 2.5, 20, 50]);
   });
 });
 
-describe("PR-466 test 1: the HOLD", () => {
-  test("the 3rd consecutive block at 4.0 or over stops; the 2nd does not; the stop names the first block's mark", () => {
+describe("PR-466 r5 rule: the trigger", () => {
+  test("a trigger needs the 100th row here: not at row 99, and the figures and the onset mark are the window's", () => {
     const r = monitorRig();
-    r.block(5, 1000);
-    r.block(6, 1050);
-    expect(r.stops).toHaveLength(0);
-    r.block(7, 1100);
-    expect(r.stops).toHaveLength(1);
-    const [s] = r.stops;
-    expect(s?.medians).toEqual([5, 6, 7]);
-    // the mark of the FIRST block's first row: row id 1000 -> 999, its scored seq 10000 -> 9999, the snapshot id then
-    expect(s?.afterMutantId).toBe(999);
-    expect(s?.afterSeq).toBe(9999);
-    expect(s?.afterSnapshotId).toBe(7);
-    expect(r.mon.stop).toBe(s);
+    r.rows(99, 6, 1000);
+    expect(r.triggers).toHaveLength(0); // a check runs only after every 50th fed row
+    r.rows(1, 6, 1099);
+    expect(r.triggers).toHaveLength(1);
+    const [s] = r.triggers;
+    // row i is at i minutes; the 100th row is at 99 min; W = the rows at or after 39 min = rows 39..99 = 61 rows
+    expect(s?.rows).toBe(61);
+    expect(s?.median).toBe(6);
+    expect(s?.spanMs).toBe(60 * MIN);
+    expect(s?.atMs).toBe(99 * MIN);
+    expect(s?.psi).toBe(5);
+    expect(s?.load1).toBe(1.5);
+    // the onset is W's FIRST row (id 1039): the mark is its id - 1, its scored seq - 1, the snapshot id when IT was fed
+    expect(s?.afterMutantId).toBe(1038);
+    expect(s?.afterSeq).toBe(10389);
+    expect(s?.afterSnapshotId).toBe(7 + 39);
+    expect(r.mon.triggered).toBe(s);
+    expect(r.mon.stop).toBe(s); // stop mode
   });
 
-  test("a block under 4.0 resets the streak", () => {
+  test("no trigger while the window is not full: the first fed row is under 60 min old", () => {
     const r = monitorRig();
-    r.block(5, 1);
-    r.block(5, 51);
-    r.block(1, 101); // resets
-    r.block(5, 151);
-    r.block(5, 201);
-    expect(r.stops).toHaveLength(0);
-    r.block(5, 251); // the third in a row since the reset
-    expect(r.stops).toHaveLength(1);
-    expect(r.stops[0]?.afterMutantId).toBe(150); // the mark of the block at 151, not of the first 5
+    // 100 rows over 49.5 min: every other condition holds (50+ rows, median 6, PSI 5)
+    r.rows(100, 6, 1, 30_000);
+    expect(r.triggers).toHaveLength(0);
+    // 50 rows later the first row is 74.5 min old: the check at row 150 fires
+    r.rows(50, 6, 101, 30_000);
+    expect(r.triggers).toHaveLength(1);
   });
 
-  test("exactly 4.0 counts (at or over), and once stopped the monitor feeds no more", () => {
+  test("no trigger with fewer than 50 rows in W, even with the window full and a median of 6", () => {
     const r = monitorRig();
-    r.block(4, 1);
-    r.block(4, 51);
-    r.block(4, 101);
-    expect(r.stops).toHaveLength(1);
-    r.block(9, 151);
-    r.block(9, 201);
-    r.block(9, 251);
-    expect(r.stops).toHaveLength(1);
-    expect(r.mon.fed).toBe(150);
+    r.rows(49, 6, 1, 1000);
+    r.state.t += 61 * MIN; // the 50th row comes an hour later: only it is left in W
+    r.rows(1, 6, 50, 1000);
+    expect(r.mon.checks).toBe(1);
+    expect(r.triggers).toHaveLength(0);
+  });
+
+  test("the median is compared with >=: 2.5 triggers, 2.49 does not", () => {
+    const at = (ratio: number) => {
+      const r = monitorRig();
+      r.rows(120, ratio, 1);
+      return r.triggers.length;
+    };
+    expect(at(2.49)).toBe(0);
+    expect(at(2.5)).toBe(1);
+  });
+
+  test("the median decides, not the mean or the max: 30 rows at 20x and 31 at 1x in W is a median of 1", () => {
+    const low = monitorRig();
+    low.rows(39, 1, 1);
+    low.rows(30, 20, 40);
+    low.rows(31, 1, 70);
+    expect(low.triggers).toHaveLength(0);
+    // the other side: 31 rows at 20x and 30 at 1x
+    const high = monitorRig();
+    high.rows(39, 1, 1);
+    high.rows(31, 20, 40);
+    high.rows(30, 1, 71);
+    expect(high.triggers).toHaveLength(1);
+    expect(high.triggers[0]?.median).toBe(20);
+  });
+
+  test("PSI 20 or more never triggers (19.9 does); an unreadable PSI (null) never triggers and is counted", () => {
+    const at = (psi: number | null) => {
+      const r = monitorRig();
+      r.state.psi = psi;
+      r.rows(120, 6, 1);
+      return r;
+    };
+    expect(at(20).triggers).toHaveLength(0);
+    expect(at(95).triggers).toHaveLength(0);
+    expect(at(19.9).triggers).toHaveLength(1);
+    const unreadable = at(null);
+    expect(unreadable.triggers).toHaveLength(0);
+    expect(unreadable.mon.psiUnreadable).toBe(2); // the checks at rows 50 and 100
+  });
+
+  test("an unreadable load1 is null in the figures, never 0", () => {
+    const r = monitorRig();
+    r.state.load1 = null;
+    r.rows(120, 6, 1);
+    expect(r.triggers[0]?.load1).toBeNull();
+  });
+
+  test("it triggers once per session: later checks do nothing, rows are still counted", () => {
+    const r = monitorRig();
+    r.rows(300, 6, 1);
+    expect(r.triggers).toHaveLength(1);
+    expect(r.mon.fed).toBe(300);
+  });
+
+  test("the onset is the window's first row: a row exactly 60 min old is IN, one a millisecond older is OUT", () => {
+    const at = (lastT: number) => {
+      const r = monitorRig();
+      r.rows(1, 6, 1, 0); // t = 0
+      r.state.t = 1000;
+      r.rows(98, 6, 2, 0);
+      r.state.t = lastT;
+      r.rows(1, 6, 100, 0); // the 100th row is the check
+      return r.triggers[0];
+    };
+    // now = 60 min, cutoff = 0: the row at t = 0 is in W, so row id 1 is the onset
+    expect(at(3_600_000)?.afterMutantId).toBe(0);
+    expect(at(3_600_000)?.rows).toBe(100);
+    // now = 60 min + 1 ms, cutoff = 1 ms: the row at t = 0 is OUT, the onset is row id 2
+    expect(at(3_600_001)?.afterMutantId).toBe(1);
+    expect(at(3_600_001)?.rows).toBe(99);
+  });
+
+  test("healthy-like streams never trigger: 2.4 for five hours, and short bursts that never fill a window's median", () => {
+    const flat = monitorRig();
+    flat.rows(300, 2.4, 1);
+    expect(flat.triggers).toHaveLength(0);
+    // an 11-row burst at 6x in every 60 rows
+    const burst = monitorRig();
+    for (let k = 0; k < 6; k++) {
+      burst.rows(11, 6, 1 + k * 60);
+      burst.rows(49, 1, 12 + k * 60);
+    }
+    expect(burst.triggers).toHaveLength(0);
+  });
+
+  test("the arming line says the mode, the counts, the highest median, the unreadable PSI count and the baseline PSI", () => {
+    const r = monitorRig({
+      reference: (cu) => (cu === 1 ? 100 : cu === 2 ? undefined : 10),
+      stopMode: false,
+    });
+    r.mon.feed({ codeunitId: 2, method: "T", batchIndex: 0, ownMs: 1 }, 1);
+    r.mon.feed({ codeunitId: 3, method: "T", batchIndex: 0, ownMs: 1 }, 2);
+    expect(r.mon.armingLine()).toBe(
+      "[lethal] tier-slowdown monitor: mode shadow; fed 0 passing rows, skipped 2 (no reference 1, under 50 ms 1); 0 check(s), highest window median none, PSI unreadable 0 time(s), baseline PSI unread; not triggered",
+    );
+    r.state.psi = 3.5;
+    r.mon.noteBaselineEnd();
+    r.state.psi = null;
+    r.mon.noteBaselineEnd(); // only the first call counts
+    r.rows(50, 2, 1);
+    expect(r.mon.armingLine()).toBe(
+      "[lethal] tier-slowdown monitor: mode shadow; fed 50 passing rows, skipped 2 (no reference 1, under 50 ms 1); 1 check(s), highest window median 2.00×, PSI unreadable 1 time(s), baseline PSI 3.5%; not triggered",
+    );
+    const s = monitorRig({ stopMode: true });
+    s.rows(120, 6, 1);
+    expect(s.mon.armingLine()).toContain("mode stop;");
+    expect(s.mon.armingLine()).toContain("; TRIGGERED");
+    expect(s.mon.armingLine()).toContain("highest window median 6.00×");
+  });
+
+  test("shadow mode: the trigger is recorded but `stop` stays undefined", () => {
+    const r = monitorRig({ stopMode: false });
+    r.rows(120, 6, 1);
+    expect(r.triggers).toHaveLength(1);
+    expect(r.mon.triggered).toBe(r.triggers[0]);
+    expect(r.mon.stop).toBeUndefined();
   });
 });
 
-describe("PR-466 test 2: healthy-like streams never stop", () => {
-  test("3.9 throughout, 20 blocks", () => {
-    const r = monitorRig();
-    for (let i = 0; i < 20; i++) r.block(3.9, 1 + i * 50);
-    expect(r.stops).toHaveLength(0);
+describe("PR-466 r3 host readers: a read error is null, never 0", () => {
+  test("/proc/pressure/cpu: some avg60 in percent", () => {
+    const text =
+      "some avg10=0.00 avg60=12.34 avg300=1.00 total=123456\nfull avg10=0.00 avg60=9.99 avg300=0.00 total=0\n";
+    expect(parsePsiCpuAvg60(text)).toBe(12.34);
+    expect(parsePsiCpuAvg60("nothing here")).toBeNull();
+    expect(parsePsiCpuAvg60("")).toBeNull();
+    expect(readPsiCpuAvg60(() => text)).toBe(12.34);
+    expect(
+      readPsiCpuAvg60(() => {
+        throw new Error("ENOENT");
+      }),
+    ).toBeNull();
   });
-
-  test("alternating blocks of 3.6 and 1.0", () => {
-    const r = monitorRig();
-    for (let i = 0; i < 20; i++) r.block(i % 2 === 0 ? 3.6 : 1.0, 1 + i * 50);
-    expect(r.stops).toHaveLength(0);
-  });
-
-  test("the block's MEDIAN decides, not its mean or max: 24 rows at 20x and 26 at 1x is a median of 1", () => {
-    const r = monitorRig();
-    for (let b = 0; b < 6; b++) {
-      for (let i = 0; i < TIER_SLOWDOWN_BLOCK; i++) {
-        r.state.seq = b * 50 + i + 1;
-        r.mon.feed(
-          { codeunitId: 1, method: "T", batchIndex: 0, ownMs: i < 24 ? 2000 : 100 },
-          b * 50 + i + 1,
-        );
-      }
-    }
-    expect(r.stops).toHaveLength(0);
-    // the other side: 26 rows at 20x is a median of 20
-    const q = monitorRig();
-    for (let b = 0; b < 3; b++) {
-      for (let i = 0; i < TIER_SLOWDOWN_BLOCK; i++) {
-        q.state.seq = b * 50 + i + 1;
-        q.mon.feed(
-          { codeunitId: 1, method: "T", batchIndex: 0, ownMs: i < 26 ? 2000 : 100 },
-          b * 50 + i + 1,
-        );
-      }
-    }
-    expect(q.stops).toHaveLength(1);
+  test("/proc/loadavg: load1", () => {
+    expect(readLoad1(() => "0.52 0.40 0.30 1/200 123\n")).toBe(0.52);
+    expect(readLoad1(() => "")).toBeNull();
+    expect(readLoad1(() => "abc 1 2")).toBeNull();
+    expect(
+      readLoad1(() => {
+        throw new Error("EACCES");
+      }),
+    ).toBeNull();
   });
 });
 
 // ---------------------------------------------------------------------------------------------
-// The record() path: two workers, a block boundary inside one mutant's rows.
+// The record() path: two workers, the window's first row inside one mutant's rows.
 // ---------------------------------------------------------------------------------------------
 
 const STATICS: FoldStatics = {
@@ -272,6 +412,7 @@ function baselineRow(store: ResultsStore, runId: number, method: string, ownMs: 
 
 describe("PR-466 test 3: the window boundary through the real record() path, 2 workers", () => {
   const ROWS_PER_MUTANT = 3;
+  const ROW_STEP_MS = 20_000; // one row every 20 s: a mutant is 60 s
 
   async function twoWorkerRun() {
     const store = new ResultsStore(":memory:");
@@ -286,16 +427,22 @@ describe("PR-466 test 3: the window boundary through the real record() path, 2 w
     ]);
     for (const h of HEAD_EVENTS) emit(h);
     const timeBudget = new TimeBudget(Number.POSITIVE_INFINITY, 0, () => 0);
+    let nowMs = 0;
     const monitor = new TierSlowdownMonitor({
       reference: () => 100,
       scoredSeq: () => lastScoredSeq,
       snapshotId: () => store.windowMark(runId).snapshotId,
-      onStop: (s) => onTierSlowdownStop({ store, runId, timeBudget, emit }, s),
+      now: () => nowMs,
+      psi: () => 4,
+      load1: () => 1,
+      stopMode: true,
+      onTrigger: (s) => onTierSlowdownStop({ store, runId, timeBudget, emit }, s),
     });
     const outcomes: SessionOutcome[] = [];
     let ordinal = 0; // the recording order, across both workers
-    const SLOW_FROM = 18; // row 52: the 2nd block's first row is row 51, the 3rd row of mutant 17
-    const worker = async (name: string) => {
+    let rowNo = 0;
+    const SLOW_FROM = 18; // from row 52 on
+    const worker = async () => {
       for (;;) {
         await Promise.resolve(); // the other worker records in between; nothing awaits inside one record
         if (timeBudget.exhausted || ordinal >= 90) return;
@@ -321,20 +468,23 @@ describe("PR-466 test 3: the window boundary through the real record() path, 2 w
             undefined,
             row.ownDurationMs,
           );
+          rowNo += 1;
+          nowMs = rowNo * ROW_STEP_MS;
           feedTierSlowdown(monitor, row, 0, id);
         }
-        void name;
       }
     };
-    await Promise.all([worker("a"), worker("b")]);
+    await Promise.all([worker(), worker()]);
     emit({ type: "session-finished", elapsedMs: 1 });
     return { store, runId, events, outcomes, monitor, timeBudget };
   }
 
   test("the store's in-window mutants equal the fold's dropped ones, and both start at the onset mutant", async () => {
     const { store, runId, events, monitor, timeBudget } = await twoWorkerRun();
-    // the stop: rows 51-200 are 3 blocks at 6x (row 51 is mutant 17's 3rd row: the boundary splits that mutant)
-    expect(monitor.stop?.medians).toEqual([6, 6, 6]);
+    // The check is at row 200 (the 2nd row of mutant 67, at 66.7 min): the window is full (first row at 20 s). The cutoff
+    // is 6.7 min = 400 s = row 20, the 2nd row of mutant 7 (rows 19-21): the onset SPLITS mutant 7's rows.
+    expect(monitor.stop?.rows).toBe(181);
+    expect(monitor.stop?.median).toBe(6);
     expect(timeBudget.slowdown).toBe(monitor.stop);
     const inStore = (
       store.db
@@ -348,9 +498,9 @@ describe("PR-466 test 3: the window boundary through the real record() path, 2 w
       .filter((o) => o.verdict === "error")
       .map((o) => o.mutant.mutantId)
       .sort();
-    expect(inStore.length).toBeGreaterThan(40);
-    expect(inStore[0]).toBe("M0017"); // the onset mutant is INSIDE the window
-    expect(inStore.at(-1)).toBe("M0067"); // the mutant whose 2nd row completed the 3rd block
+    expect(inStore[0]).toBe("M0007"); // the onset mutant is INSIDE the window
+    expect(inStore.at(-1)).toBe("M0067"); // the mutant whose 2nd row made the check
+    expect(inStore).toHaveLength(61);
     expect(inFold).toEqual(inStore);
     // before the onset nothing is dropped, in either place
     const kept = (
@@ -360,11 +510,11 @@ describe("PR-466 test 3: the window boundary through the real record() path, 2 w
         )
         .all(runId) as Array<{ c: string }>
     ).map((r) => r.c);
-    expect(kept).toHaveLength(16);
-    expect(kept.at(-1)).toBe("M0016");
+    expect(kept).toHaveLength(6);
+    expect(kept.at(-1)).toBe("M0006");
     // the dropped rows carry the slowdown note
-    expect(folded.outcomes.find((o) => o.mutant.mutantId === "M0017")?.failureNote).toBe(
-      tierSlowdownNote([6, 6, 6]),
+    expect(folded.outcomes.find((o) => o.mutant.mutantId === "M0007")?.failureNote).toBe(
+      monitor.stop === undefined ? "" : tierSlowdownNote(monitor.stop),
     );
   });
 });
@@ -383,23 +533,30 @@ describe("PR-466 test 4: the reference", () => {
     baselineRow(store, own, "T1", opts.ownBaseline);
     return { store, prior, own };
   }
-  const feedRows = (ref: ReturnType<typeof storeReference>, ownMs: number, rows = 150) => {
-    const stops: TierSlowdownStop[] = [];
+  /** 120 rows a minute apart, so the window is full and a median over the threshold triggers. */
+  const feedRows = (ref: ReturnType<typeof storeReference>, ownMs: number, rows = 120) => {
+    const triggers: TierSlowdownStop[] = [];
+    let t = 0;
     const mon = new TierSlowdownMonitor({
       reference: ref,
       scoredSeq: () => 1,
       snapshotId: () => 0,
-      onStop: (s) => stops.push(s),
+      now: () => t,
+      psi: () => 1,
+      load1: () => 1,
+      stopMode: true,
+      onTrigger: (s) => triggers.push(s),
     });
     for (let i = 0; i < rows; i++) {
       mon.feed({ codeunitId: T_REF.codeunitId, method: "T1", batchIndex: 0, ownMs }, i + 1);
+      t += MIN;
     }
-    return stops;
+    return triggers;
   };
 
-  test("a resume with a slow own baseline stops against the prior's faster one", () => {
+  test("a resume with a slow own baseline triggers against the prior's faster one", () => {
     const { store, prior, own } = resumePair({ ownBaseline: 400 });
-    // 450 ms is 1.1x the own baseline (no stop) and 4.5x the prior's
+    // 450 ms is 1.1x the own baseline (no trigger) and 4.5x the prior's
     expect(feedRows(storeReference(store, own, undefined), 450)).toHaveLength(0);
     expect(feedRows(storeReference(store, own, prior), 450)).toHaveLength(1);
   });
@@ -482,7 +639,7 @@ describe("PR-466 test 5: non-feeding rows", () => {
     ...over,
   });
 
-  test("failed rows, rows without a mutant code, and rows without an own time never move a block", () => {
+  test("failed rows, rows without a mutant code, and rows without an own time never feed", () => {
     const r = monitorRig();
     feedTierSlowdown(r.mon, row({ outcome: "fail" }), 0, 1);
     feedTierSlowdown(r.mon, row({ outcome: "timeout" }), 0, 1);
@@ -498,11 +655,18 @@ describe("PR-466 test 5: non-feeding rows", () => {
   });
 
   test("a missing reference and a reference under 50 ms are skipped and counted apart", () => {
-    const r = monitorRig((cu) => (cu === 1 ? undefined : cu === 2 ? 49 : 50));
+    const r = monitorRig({ reference: (cu) => (cu === 1 ? undefined : cu === 2 ? 49 : 50) });
     r.mon.feed({ codeunitId: 1, method: "T", batchIndex: 0, ownMs: 9999 }, 1);
     r.mon.feed({ codeunitId: 2, method: "T", batchIndex: 0, ownMs: 9999 }, 2);
     r.mon.feed({ codeunitId: 3, method: "T", batchIndex: 0, ownMs: 9999 }, 3);
     expect([r.mon.skippedNoReference, r.mon.skippedUnderMin, r.mon.fed]).toEqual([1, 1, 1]);
+  });
+
+  test("skipped rows never move a window: 100 skipped rows at 6x trigger nothing", () => {
+    const r = monitorRig({ reference: () => 49 });
+    r.rows(200, 600, 1);
+    expect(r.mon.fed).toBe(0);
+    expect(r.triggers).toHaveLength(0);
   });
 
   test("the probes of runNamedMutants are given no monitor", () => {
@@ -550,12 +714,18 @@ const verdictsOf = (store: ResultsStore, runId: number): string[] =>
       .all(runId) as Array<{ v: string }>
   ).map((r) => r.v);
 
+/** A trigger with figures and a window mark after `afterMutantId` / `afterSeq`. */
 const stopAt = (
   afterMutantId: number,
   afterSeq: number,
   afterSnapshotId = 0,
 ): TierSlowdownStop => ({
-  medians: [5, 6, 7],
+  median: 5,
+  rows: 120,
+  spanMs: 3_700_000,
+  psi: 4,
+  atMs: 3_700_000,
+  load1: 1,
   afterMutantId,
   afterSeq,
   afterSnapshotId,
@@ -625,7 +795,7 @@ function renewRig(
 }
 
 describe("PR-466 test 6 (B1): the earlier window wins, in either order", () => {
-  const sloNote = tierSlowdownNote([5, 6, 7]);
+  const sloNote = tierSlowdownNote(stopAt(0, 0));
   const scoredEvents = (n: number): RunEventInput[] =>
     Array.from({ length: n }, (_, i) => ({
       type: "mutant-scored" as const,
@@ -801,31 +971,40 @@ describe("PR-466 r2a-4: markDegradedWindow keeps the earlier window per column",
   });
 });
 
-/** A store with one early row, then 150 passing rows at 6x fed through a real monitor: its stop has fired and been written. */
-function firedMonitor() {
+/**
+ * A store with one early row, then 150 passing rows at 6x a minute apart fed through a real monitor in STOP mode: its
+ * trigger fires at the 100th row (the onset is the 40th of them, row id 41), and has been written.
+ */
+function firedMonitor(stopMode = true) {
   const store = new ResultsStore(":memory:");
   const runId = newRun(store);
   addRow(store, runId, "M1");
   let seq = 0;
+  let t = 0;
   const timeBudget = new TimeBudget(Number.POSITIVE_INFINITY, 0, () => 0);
   const monitor = new TierSlowdownMonitor({
     reference: () => 100,
     scoredSeq: () => seq,
     snapshotId: () => 0,
-    onStop: (s) => onTierSlowdownStop({ store, runId, timeBudget, emit: () => {} }, s),
+    now: () => t,
+    psi: () => 3,
+    load1: () => 1,
+    stopMode,
+    onTrigger: (s) => onTierSlowdownStop({ store, runId, timeBudget, emit: () => {} }, s),
   });
   for (let i = 0; i < 150; i++) {
     const id = addRow(store, runId, `R${i}`);
     seq = id;
     monitor.feed({ codeunitId: 1, method: "T", batchIndex: 0, ownMs: 600 }, id);
+    t += MIN;
   }
-  expect(monitor.stop?.afterMutantId).toBe(1);
   return { store, runId, monitor, timeBudget };
 }
 
 describe("PR-466 test 7: the teardown writes the slowdown window again", () => {
   test("a row an in-flight worker records after the stop reads error in the raw mutants table", () => {
     const { store, runId, monitor } = firedMonitor();
+    expect(monitor.stop?.afterMutantId).toBe(40); // rows 1..40 are before the onset (row id 41)
     const late = addRow(store, runId, "LATE"); // recorded by a worker still in flight after the stop
     expect(verdictsOf(store, runId).at(-1)).toBe("survived");
     // without the monitor the teardown writes nothing (no renew window either)
@@ -842,7 +1021,12 @@ describe("PR-466 test 7: the teardown writes the slowdown window again", () => {
       monitor,
     );
     expect(verdictsOf(store, runId).at(-1)).toBe("error");
-    expect(verdictsOf(store, runId)[0]).toBe("survived"); // M1, before the onset
+    expect(
+      verdictsOf(store, runId)
+        .slice(0, 40)
+        .every((v) => v === "survived"),
+    ).toBe(true);
+    expect(verdictsOf(store, runId)[40]).toBe("error"); // the onset row
     expect(late).toBeGreaterThan(150);
   });
 
@@ -860,6 +1044,40 @@ describe("PR-466 test 7: the teardown writes the slowdown window again", () => {
     expect((err as Error).message).toContain(`run ${runId}`);
     expect((err as Error).message).toContain("do not --resume");
     expect((err as Error).message).toContain(TIER_SLOWDOWN_REASON_PREFIX);
+  });
+
+  test("in SHADOW mode the teardown writes nothing: the monitor's `stop` is undefined", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = newRun(store);
+    for (let i = 0; i < 3; i++) addRow(store, runId, `R${i}`);
+    let t = 0;
+    const monitor = new TierSlowdownMonitor({
+      reference: () => 100,
+      scoredSeq: () => 1,
+      snapshotId: () => 0,
+      now: () => t,
+      psi: () => 3,
+      load1: () => 1,
+      stopMode: false,
+      onTrigger: () => {},
+    });
+    for (let i = 0; i < 120; i++) {
+      monitor.feed({ codeunitId: 1, method: "T", batchIndex: 0, ownMs: 600 }, 1);
+      t += MIN;
+    }
+    expect(monitor.triggered).toBeDefined();
+    correctStoreAtEnd(
+      store,
+      runId,
+      undefined,
+      new SessionSafety(),
+      () => {},
+      undefined,
+      undefined,
+      monitor,
+    );
+    expect(verdictsOf(store, runId)).toEqual(["survived", "survived", "survived"]);
+    expect(store.degradedWindowOf(runId)).toBeNull();
   });
 });
 
@@ -912,14 +1130,16 @@ describe("PR-466 test 8 (unit): the stop spends the budget and is not a signal o
 // ---------------------------------------------------------------------------------------------
 
 describe("PR-466 test 9: the texts", () => {
-  test("the warning names the ratios, the window and FIRST CUT, and gives no restart instruction", () => {
+  test("the warning names the figures, the window and FIRST CUT, and gives no restart instruction", () => {
     const text = tierSlowdownWarning(
-      { medians: [4.9, 7.1, 4.5], afterMutantId: 12, afterSeq: 40, afterSnapshotId: 0 },
+      { median: 4.9, rows: 140, spanMs: 3_600_000, psi: 7.5, afterMutantId: 12 },
       { afterMutantId: 12, afterSeq: 40 },
     );
     expect(text).toContain("tier-slowdown-stop");
-    expect(text).toContain("4.9×, 7.1× and 4.5×");
-    expect(text).toContain("last 150 passing rows");
+    expect(text).toContain("4.9×");
+    expect(text).toContain("the median of the last 140 passing rows over 60 min");
+    expect(text).toContain("threshold 2.5");
+    expect(text).toContain("host CPU pressure 7.5%");
     expect(text).toContain("FIRST CUT");
     expect(text).toContain("after row 12 (events after 40)");
     expect(text).toContain("Whether the tier needs a restart is not measured");
@@ -929,26 +1149,20 @@ describe("PR-466 test 9: the texts", () => {
 
   test("the warning says when an earlier window stands", () => {
     const text = tierSlowdownWarning(
-      { medians: [4, 4, 4], afterMutantId: 20, afterSeq: 90, afterSnapshotId: 0 },
+      { median: 4, rows: 100, spanMs: 3_600_000, psi: 1, afterMutantId: 20 },
       { afterMutantId: 7, afterSeq: 30 },
     );
     expect(text).toContain("after row 7 (events after 30)");
     expect(text).toContain("EARLIER");
   });
 
-  test("the arming line: not armed under 150 fed rows, armed from 150, skips counted by reason", () => {
-    const r = monitorRig((cu) => (cu === 1 ? undefined : cu === 2 ? 10 : 100));
-    r.mon.feed({ codeunitId: 1, method: "T", batchIndex: 0, ownMs: 1 }, 1);
-    r.mon.feed({ codeunitId: 2, method: "T", batchIndex: 0, ownMs: 1 }, 2);
-    r.mon.feed({ codeunitId: 3, method: "T", batchIndex: 0, ownMs: 1 }, 3);
-    expect(r.mon.armingLine()).toBe(
-      "[lethal] tier-slowdown monitor: fed 1 passing rows, skipped 2 (no reference 1, under 50 ms 1); not armed (< 150 fed)",
-    );
-    for (let i = 0; i < 149; i++)
-      r.mon.feed({ codeunitId: 3, method: "T", batchIndex: 0, ownMs: 1 }, 10 + i);
-    expect(r.mon.armingLine()).toContain("fed 150 passing rows");
-    expect(r.mon.armingLine()).toContain("; armed");
-    expect(r.mon.armingLine()).not.toContain("not armed");
+  test("the note carries the median, the rows, the minutes and the PSI", () => {
+    const note = tierSlowdownNote({ median: 3.2, rows: 77, spanMs: 90 * MIN, psi: 12 });
+    expect(note.startsWith(TIER_SLOWDOWN_REASON_PREFIX)).toBe(true);
+    expect(note).toContain("3.2×");
+    expect(note).toContain("last 77 passing rows over 90 min");
+    expect(note).toContain("12.0%");
+    expect(note).toContain("re-run it with --resume");
   });
 });
 
@@ -1010,11 +1224,13 @@ async function makeProject() {
 
 /**
  * A bcdev-shaped fake: every test passes. A baseline call (no mutant active) answers 100 ms of own time; a mutant call
- * answers `ownMs(n, k)` for the n-th activated mutant's k-th call (undefined: no own time at all).
+ * answers `ownMs(n, k)` for the n-th activated mutant's k-th call (undefined: no own time at all). `onActivate(n)` moves
+ * the injected clock when the n-th mutant is activated.
  */
 function slowBackend(
   ownMs: (mutant: number, call: number) => number | undefined,
   kind: "bcdev" | "al-runner-v3" = "bcdev",
+  onActivate: (mutant: number) => void = () => {},
 ) {
   let active: string | null = null;
   let mutants = 0;
@@ -1045,6 +1261,7 @@ function slowBackend(
       if (active !== null) {
         mutants += 1;
         calls = 0;
+        onActivate(mutants);
       }
     },
     run: async (ref, opts): Promise<TestVerdict> => {
@@ -1067,6 +1284,15 @@ function slowBackend(
   });
 }
 
+/** The injected monotonic clock of a session test: it moves only when a backend's `onActivate` moves it. */
+function injectedClock() {
+  const c = { t: 1_000_000 };
+  clock.mono = () => c.t;
+  return c;
+}
+
+const HOST_QUIET = { psi: () => 5 as number | null, load1: () => 2 as number | null };
+
 async function session(
   backend: ExecutionBackend,
   over: Partial<SessionConfig> = {},
@@ -1086,6 +1312,7 @@ async function session(
     quarantineDir: scratch("pr466-q-"),
     emit: [(e) => events.push(e)],
     tierSlowdownLine: (l) => lines.push(l),
+    tierSlowdownHost: HOST_QUIET,
     ...over,
   });
   return { report, events, lines, store, dirs: project };
@@ -1094,25 +1321,149 @@ async function session(
 const warningsOf = (events: readonly RunEvent[], code: string): string[] =>
   events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
 
-describe("PR-466: a whole bcdev session", () => {
-  test("a healthy run builds a monitor, never stops, and prints the arming line once", async () => {
-    const { report, events, lines } = await session(slowBackend(() => 100));
+const wouldStopOf = (events: readonly RunEvent[]) =>
+  events.filter((e) => e.type === "tier-slowdown-would-stop");
+
+/** From the 18th mutant on, every call runs at 6x its baseline; a mutant takes 2 minutes of the injected clock. */
+const slowFrom18 = () => {
+  const c = injectedClock();
+  return slowBackend(
+    (n) => (n >= 18 ? 600 : 100),
+    "bcdev",
+    () => {
+      c.t += 2 * MIN;
+    },
+  );
+};
+
+describe("PR-466 r5: a whole bcdev session, SHADOW (the default)", () => {
+  test("a healthy run builds a monitor, never triggers, and prints the arming line once", async () => {
+    const c = injectedClock();
+    const { report, events, lines } = await session(
+      slowBackend(
+        () => 100,
+        "bcdev",
+        () => {
+          c.t += 2 * MIN;
+        },
+      ),
+    );
     expect(report.timeBudget).toBeUndefined();
+    expect(report.tierSlowdownWouldStop).toBeUndefined();
+    expect("tierSlowdownWouldStop" in report).toBe(false);
+    expect(wouldStopOf(events)).toHaveLength(0);
     expect(warningsOf(events, "tier-slowdown-stop")).toHaveLength(0);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(
-      /^\[lethal\] tier-slowdown monitor: fed \d+ passing rows, skipped 0 \(no reference 0, under 50 ms 0\); (armed|not armed)/,
+      /^\[lethal\] tier-slowdown monitor: mode shadow; fed \d+ passing rows, skipped 0 \(no reference 0, under 50 ms 0\); \d+ check\(s\), highest window median 1\.00×, PSI unreadable 0 time\(s\), baseline PSI 5\.0%; not triggered$/,
     );
     expect(report.mutants.length).toBeGreaterThanOrEqual(60);
   });
 
+  test("a trigger records the event, the report field and one console line, and nothing else", async () => {
+    const { report, events, lines, store } = await session(slowFrom18());
+    const [ev] = wouldStopOf(events);
+    expect(wouldStopOf(events)).toHaveLength(1);
+    expect(ev?.type).toBe("tier-slowdown-would-stop");
+    const w = report.tierSlowdownWouldStop;
+    expect(w).toBeDefined();
+    expect(w?.median).toBe(6);
+    expect(w?.psi).toBe(5);
+    expect(w?.load1).toBe(2);
+    expect(w?.rows).toBeGreaterThanOrEqual(TIER_SLOWDOWN_MIN_ROWS);
+    // the window of 60 min ending at the 100th fed row (mutant 34, at 68 min): the onset is mutant 4 (at 8 min)
+    expect(w?.onsetMutantId).toBe(4);
+    expect(w?.spanMs).toBe(60 * MIN);
+    // the event and the report agree
+    if (ev?.type === "tier-slowdown-would-stop") {
+      expect({ ...w }).toEqual({
+        atMs: ev.atMs,
+        median: ev.median,
+        rows: ev.rows,
+        spanMs: ev.spanMs,
+        psi: ev.psi,
+        load1: ev.load1,
+        onsetMutantId: ev.onsetMutantId,
+        onsetSeq: ev.onsetSeq,
+      });
+    }
+    // NOT a warning, no stop, no window, no quarantine, no change of exit code or finish
+    expect(warningsOf(events, "tier-slowdown-stop")).toHaveLength(0);
+    expect(events.some((e) => e.type === "warning" && e.code.includes("slowdown"))).toBe(false);
+    expect(events.filter((e) => e.type === "degraded-window")).toHaveLength(0);
+    expect(events.some((e) => e.type === "time-budget-reached" || e.type === "quarantined")).toBe(
+      false,
+    );
+    expect(report.timeBudget).toBeUndefined();
+    expect(exitCodeForReport(report)).not.toBe(TIME_BUDGET_EXIT_CODE);
+    expect(store.getRun(1)?.finished).toBe(true);
+    expect(store.degradedWindowOf(1)).toBeNull();
+    expect(report.mutants.some((m) => m.verdict === "error")).toBe(false);
+    // one console line for the trigger, then the arming line
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("tier-slowdown-would-stop (shadow: nothing was stopped");
+    expect(lines[1]).toContain("mode shadow;");
+    expect(lines[1]).toContain("; TRIGGERED");
+    // the banner says it, and says every verdict stands
+    const banner = renderConsole(report);
+    expect(banner).toContain("TIER-SLOWDOWN (shadow");
+    expect(banner).toContain("NOTHING was stopped or dropped");
+    expect(banner).not.toContain("STOPPED BY");
+    // the progress line
+    const out: string[] = [];
+    const render = createProgressRenderer((l) => out.push(l), { heartbeatMs: 30_000 });
+    for (const e of events) render(e);
+    expect(out.some((l) => l.includes("TIER SLOWDOWN (shadow, nothing stopped)"))).toBe(true);
+  });
+
+  test("a session that triggers equals the same session with no trigger: verdicts, notes, exit code, store rows, event types", async () => {
+    // the control: the same stream with an unreadable PSI, which never triggers
+    const trig = await session(slowFrom18());
+    const ctl = await session(slowFrom18(), { tierSlowdownHost: { psi: () => null } });
+    expect(wouldStopOf(trig.events)).toHaveLength(1);
+    expect(wouldStopOf(ctl.events)).toHaveLength(0);
+    expect(trig.report.tierSlowdownWouldStop).toBeDefined();
+    expect(ctl.report.tierSlowdownWouldStop).toBeUndefined();
+    const shape = (r: typeof trig.report) =>
+      r.mutants.map((m) => [m.mutantCode, m.verdict, m.failureNote, m.killingTest ?? null]);
+    expect(shape(trig.report)).toEqual(shape(ctl.report));
+    expect(trig.report.validity.caveats).toEqual(ctl.report.validity.caveats);
+    expect(exitCodeForReport(trig.report)).toBe(exitCodeForReport(ctl.report));
+    expect(trig.report.timeBudget).toEqual(ctl.report.timeBudget);
+    expect(verdictsOf(trig.store, 1)).toEqual(verdictsOf(ctl.store, 1));
+    const count = (s: ResultsStore, table: string) =>
+      (s.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+    expect(count(trig.store, "test_results")).toBe(count(ctl.store, "test_results"));
+    expect(trig.store.getRun(1)?.finished).toBe(ctl.store.getRun(1)?.finished);
+    const types = (es: readonly RunEvent[]) =>
+      es.filter((e) => e.type !== "tier-slowdown-would-stop").map((e) => e.type);
+    expect(types(trig.events)).toEqual(types(ctl.events));
+    // the unreadable PSI is counted in the control's arming line
+    expect(ctl.lines.at(-1)).toMatch(/PSI unreadable [1-9]\d* time\(s\)/);
+  });
+
+  test("a high PSI keeps a slow session quiet too", async () => {
+    const { events, report } = await session(slowFrom18(), { tierSlowdownHost: { psi: () => 40 } });
+    expect(wouldStopOf(events)).toHaveLength(0);
+    expect(report.tierSlowdownWouldStop).toBeUndefined();
+  });
+});
+
+describe("PR-466 r5: a whole bcdev session, --tier-slowdown-stop", () => {
+  const STOP = { tierSlowdownStop: true as const };
+
   test("a sustained slowdown stops the run: a spent budget, the window as error, never finished, resumable, exit 7, no TIME BUDGET text", async () => {
-    // from the 18th mutant on, every call runs at 6x its baseline
-    const { report, events, store } = await session(slowBackend((n) => (n >= 18 ? 600 : 100)));
+    const { report, events, store, lines } = await session(slowFrom18(), STOP);
     const stop = report.timeBudget?.stoppedByTierSlowdown;
-    expect(stop?.medians).toEqual([6, 6, 6]);
+    expect(stop?.median).toBe(6);
+    expect(stop?.psi).toBe(5);
+    expect(stop?.spanMs).toBe(60 * MIN);
+    expect(stop?.afterMutantId).toBe(3); // the window's first row is mutant 4's
     expect(warningsOf(events, "tier-slowdown-stop")).toHaveLength(1);
     expect(events.filter((e) => e.type === "degraded-window")).toHaveLength(1);
+    expect(wouldStopOf(events)).toHaveLength(0); // the stop mode says it with the stop's own events
+    expect(report.tierSlowdownWouldStop).toBeUndefined();
+    expect(lines.at(-1)).toContain("mode stop;");
     // no quarantine, no signal, a time-budget exit code
     expect(report.quarantined).toBeUndefined();
     expect(events.some((e) => e.type === "quarantined")).toBe(false);
@@ -1121,6 +1472,7 @@ describe("PR-466: a whole bcdev session", () => {
     const banner = renderConsole(report);
     expect(banner).toContain("STOPPED BY THE TIER-SLOWDOWN STOP");
     expect(banner).toContain("first cut");
+    expect(banner).toContain("host CPU pressure 5.0%");
     expect(banner).toMatch(/\d+ row\(s\) in the window/);
     expect(banner).not.toContain("TIME BUDGET");
     expect(banner).not.toContain("--time-budget");
@@ -1143,20 +1495,29 @@ describe("PR-466: a whole bcdev session", () => {
     expect(errors.length).toBeGreaterThan(30);
     expect(errors.every((m) => m.failureNote?.startsWith(TIER_SLOWDOWN_REASON_PREFIX))).toBe(true);
     // the first mutants (before the onset) keep their verdicts
-    expect(report.mutants.filter((m) => m.verdict === "survived").length).toBe(16);
+    expect(report.mutants.filter((m) => m.verdict === "survived").length).toBe(3);
     // more mutants than the stop scheduled were left for the resume
     expect(report.timeBudget?.unscheduledCount ?? 0).toBeGreaterThan(0);
   });
 
   test("r2a-1: the stop on the FINAL row of the last batch still leaves the run unfinished, resumable, and exits as a time-budget stop", async () => {
-    // only the last 50 mutants (3 calls each: 150 rows) carry an own time, all at 6x: the stop is the very last row
+    // only the last 50 mutants (3 calls each: 150 rows) carry an own time, all at 6x. A mutant takes 75 s, so the first
+    // fed row is 49 mutants = 61.25 min old at the 150th and last row, and only there is the window full.
     const base = await session(slowBackend(() => 100));
     const total = base.report.mutants.length;
     expect(total).toBeGreaterThan(60);
+    const c = injectedClock();
     const { report, events, store } = await session(
-      slowBackend((n) => (n > total - 50 ? 600 : undefined)),
+      slowBackend(
+        (n) => (n > total - 50 ? 600 : undefined),
+        "bcdev",
+        () => {
+          c.t += 75_000;
+        },
+      ),
+      STOP,
     );
-    expect(report.timeBudget?.stoppedByTierSlowdown?.medians).toEqual([6, 6, 6]);
+    expect(report.timeBudget?.stoppedByTierSlowdown?.median).toBe(6);
     expect(warningsOf(events, "tier-slowdown-stop")).toHaveLength(1);
     expect(report.timeBudget?.afterMainPass).toBeUndefined(); // never "every mutant was scored, nothing to resume"
     expect(report.timeBudget?.unscheduledCount).toBe(0);
@@ -1176,11 +1537,11 @@ describe("PR-466: a whole bcdev session", () => {
   });
 
   test("the resume message quotes the stored note, and the resumed run re-runs the window", async () => {
-    const first = await session(slowBackend((n) => (n >= 18 ? 600 : 100)));
+    const first = await session(slowFrom18(), STOP);
     const store = first.store;
     const second = await session(
       slowBackend(() => 100),
-      { resume: "last" },
+      { resume: "last", ...STOP },
       store,
       first.dirs,
     );
@@ -1193,8 +1554,18 @@ describe("PR-466: a whole bcdev session", () => {
   });
 
   test("NIT 5: a resume whose every scored row lands in a prior window exits as nothing scored", async () => {
-    // the slowdown starts at the first mutant: the window is every row the report has
-    const { report } = await session(slowBackend(() => 600));
+    // the first fed row is exactly 60 min old at the 100th (mutant 34's first call): the window starts at the first mutant
+    const c = injectedClock();
+    const { report } = await session(
+      slowBackend(
+        () => 600,
+        "bcdev",
+        (n) => {
+          c.t = 1_000_000 + (n < 34 ? n * 1000 : 3_600_000 + 1000);
+        },
+      ),
+      STOP,
+    );
     expect(report.timeBudget?.stoppedByTierSlowdown).toBeDefined();
     expect(report.mutants.length).toBeGreaterThan(0);
     expect(report.mutants.every((m) => m.verdict === "error")).toBe(true);
@@ -1204,14 +1575,154 @@ describe("PR-466: a whole bcdev session", () => {
     expect(banner).toContain("NOTHING SCORED");
     expect(banner).not.toContain("TIME BUDGET");
   });
+});
 
-  test("an al-runner session constructs no monitor: no arming line, no stop", async () => {
-    const { lines, report } = await session(slowBackend(() => 100, "al-runner-v3")).catch(
-      (e: unknown) => {
-        throw e;
-      },
-    );
+describe("PR-466 r5: al-runner sessions and the flag's backend", () => {
+  test("an al-runner session constructs no monitor: no arming line, no trigger", async () => {
+    const { lines, report, events } = await session(slowBackend(() => 100, "al-runner-v3"));
     expect(lines).toEqual([]);
+    expect(wouldStopOf(events)).toHaveLength(0);
     expect(report.timeBudget).toBeUndefined();
+  });
+
+  test("--tier-slowdown-stop on a backend that is not bcdev is refused by name, before any run", async () => {
+    const backend = slowBackend(() => 100, "al-runner-v3");
+    const store = new ResultsStore(":memory:");
+    let err: unknown;
+    try {
+      await runSession({
+        backend,
+        store,
+        ...(await makeProject()),
+        selectorIds,
+        tierSlowdownStop: true,
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(TierSlowdownFlagBackendError);
+    expect((err as Error).message).toContain("--tier-slowdown-stop");
+    expect((err as Error).message).toContain("al-runner-v3");
+    store.close();
+  });
+});
+
+describe("PR-466 r5: the flag is in the run's identity", () => {
+  test("a --resume across the flag is refused by name, both ways, by id and as last; the same mode resumes", async () => {
+    for (const [first, second] of [
+      [undefined, true],
+      [true, undefined],
+    ] as const) {
+      const store = new ResultsStore(":memory:");
+      const project = await makeProject();
+      const extraOf = (k: true | undefined, resume?: number | "last") => ({
+        ...(k === true ? { tierSlowdownStop: true as const } : {}),
+        ...(resume !== undefined ? { resume } : {}),
+      });
+      const healthy = () => slowBackend(() => 100);
+      await session(healthy(), extraOf(first), store, project);
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+      await expect(session(healthy(), extraOf(second, 1), store, project)).rejects.toThrow(
+        /tier-slowdown-resume-refused/,
+      );
+      await expect(session(healthy(), extraOf(second, "last"), store, project)).rejects.toThrow(
+        /tier-slowdown-resume-refused/,
+      );
+      const resumed = await session(healthy(), extraOf(first, 1), store, project);
+      expect(resumed.report.resumedFrom?.runId).toBe(1);
+      store.close();
+    }
+  });
+
+  test("the flag changes the stored digest, and flag-off digests are the ones recorded before it existed", () => {
+    const f = {
+      projectDir: "/p",
+      testDir: "/t",
+      backend: "al-runner-v3",
+      skipKnownSurvivors: false,
+      identityScheme: 1,
+      selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+    };
+    const none = sessionFingerprint(f);
+    expect(sessionFingerprint({ ...f, tierSlowdownStop: true })).not.toBe(none);
+    // the digest of these inputs before PR-297 and before PR-466 (pinned in pr297-refused-cut-tail.test.ts too)
+    expect(none).toBe("9349b4c9edc905ff2627fabf927415d531d474d105727b56247fe761be5d5154");
+  });
+
+  test("a default session's stored digest equals the flag-off digest, and a flag-on session's differs", async () => {
+    const project = await makeProject(); // the same project: the digest may differ by the flag alone
+    const off = await session(
+      slowBackend(() => 100),
+      {},
+      new ResultsStore(":memory:"),
+      project,
+    );
+    const off2 = await session(
+      slowBackend(() => 100),
+      {},
+      new ResultsStore(":memory:"),
+      project,
+    );
+    const on = await session(
+      slowBackend(() => 100),
+      { tierSlowdownStop: true },
+      new ResultsStore(":memory:"),
+      project,
+    );
+    const fp = (s: ResultsStore) => s.getRun(1)?.configFingerprint;
+    expect(fp(off.store)).toBeDefined();
+    expect(fp(off2.store)).toBe(fp(off.store));
+    expect(fp(on.store)).not.toBe(fp(off.store));
+  });
+
+  test("the CLI flag sets tierSlowdownStop; absent leaves it out", () => {
+    const base = ["run", "--project", "P", "--tests", "T", "--backend", "bcdev"];
+    const on = parseCliConfig([...base, "--tier-slowdown-stop"]);
+    expect(on.mode === "run" ? on.tierSlowdownStop : "wrong mode").toBe(true);
+    const off = parseCliConfig(base);
+    expect(off.mode === "run" ? "tierSlowdownStop" in off : "wrong mode").toBe(false);
+  });
+
+  test("runFromCliWithAccept hands tierSlowdownStop: true to the session only when the flag is on", async () => {
+    const root = scratch("lethal-pr466-cli-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(testDir, "app.json"), "{}");
+    await Bun.write(join(root, "lethal.config.json"), "{}");
+    const seen = async (stop: true | undefined) => {
+      let got: Parameters<typeof runSession>[0] | undefined;
+      // A canned report, not a throw: a failed run keeps its scratch folder (R358).
+      const canned = { validity: { caveats: [] }, buildSymbols: [], mutants: [] } as never;
+      await runFromCliWithAccept(
+        {
+          mode: "run",
+          projectDir,
+          testDir,
+          // runSession is stubbed, so its bcdev-only refusal is not reached; this backend needs no config section.
+          backendKind: "al-runner-v3",
+          dbPath: ":memory:",
+          configPath: join(root, "lethal.config.json"),
+          skipKnownSurvivors: false,
+          workers: 1,
+          keepEnv: false,
+          allowExpiringEnv: false,
+          ...(stop === true ? { tierSlowdownStop: true as const } : {}),
+        },
+        {
+          validateSelectorIdsForProject: async () => {},
+          buildBackend: async () => ({}) as never,
+          runSession: async (cfg) => {
+            got = cfg;
+            return canned;
+          },
+        },
+      );
+      return got;
+    };
+    const on = await seen(true);
+    expect(on?.tierSlowdownStop).toBe(true);
+    const off = await seen(undefined);
+    expect(off !== undefined && "tierSlowdownStop" in off).toBe(false);
   });
 });
