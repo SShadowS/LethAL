@@ -197,3 +197,49 @@ change, so no 1.0.0.32. These are my calls, from design principles 1 (correct fi
       - a killed sidecar: `in-flight-unknown`;
     - the planted baseline-red case, from a scratch copy of `sandbox-tests` outside the repo: no kill credited to the red
       test.
+
+## Amendment 2 (2026-11-28, the delta review of amendment 1, and two bcwin measurements)
+**Measured.**
+- **The WorkDate:** a `/cs` session's WorkDate equals `HarnessInfo`'s (2026-10-01 both; `/coord/handoff/PR-479/wdprobe/`).
+  Amendment 1, item 4's gate passes.
+- **The company control:** page 130455 has `CurrentCompanyName` on BC 28.4 (the control dump in PR-478's bcwin run). A
+  missing control is still a named refusal, never a skipped check.
+- **F4's premise** (orchestrator ruling) is measured before the build: after End and Deactivate, a guarded call from a
+  page action in the same `/cs` session, and from an `OnCompanyClose` subscriber at its logout, both see no mutant. A
+  positive control, the same check before End, must see it active.
+  - If either sees the mutant, F4 needs the AL latch as 1.0.0.32, with its own pre-commitment and proof.
+  - Evidence: `/coord/handoff/PR-479/f4probe/`.
+
+**Fixes.**
+1. **A login-time load (N1).** A `Loaded` row whose generation is OLDER than Activate's is accepted only when it has
+   `observedAny = false` and no mismatch. Sound, because `IsActive` refreshes before every decision, so a stale cache
+   activated nothing in a method that reached no guard. It never supports a kill.
+2. **One op after another (N2):**
+   - no Activate starts until the previous session's close has returned;
+   - the F4 probe also records whether the `OnCompanyClose` row is already written when the close returns. If it is not,
+     the driver waits until it is, or the risk is named in the caveat.
+   - Between End and close, the driver sends nothing except on the TypeScript side's go. A fake-driver red test covers it.
+3. **Grain-aware reach (N3, and item 12):**
+   - for `statement`-grain mutants, item 3 stands (`observedActive`);
+   - for `enclosing` and `unplaced` grain (no reach marker), a kill needs a row at or before the killer with `Loaded = M`,
+     Activate's generation and `observedAny = true`. Such a kill is labelled `reach-by-any` in the report;
+   - `guardReached` is left ABSENT for those grains, never false.
+4. **The no-mutant confirmation's own checks (F1 holes):**
+   - (a)'s rows pass every item-6 check: (a)'s own generation; `loadedMutantId = ''` wherever Loaded; no mismatch; the
+     manifest join; the bound id; the WorkDate and the company;
+   - (a)'s pass is judged by row AND page together;
+   - EVERY baseline-green method in (a) must pass, not only the killer;
+   - (b)'s reproduction must satisfy the reach rule (item 3 as amended) in its own rows;
+   - a lost Activate answer in (a) or (b) is `client-activation-unknown`, never a pass.
+5. **Empty-true guards (F6):**
+   - the page's read-back method lines must EQUAL the declared list (both ways) before `Run = true` is checked, so an empty
+     list fails;
+   - a codeunit's `OnRun` row, if the runner writes one, is expected, matched by name, and excluded from 1..N. Its absence
+     is not a failure. The bcwin run records which it is.
+6. **TestPage methods** (for example `Data Tests.PageActionComputesNonZero`) still run, since no method is switched off. As
+   headless refuses them, their outcome is never a killer and never counted until 479b. They are listed in the report as
+   `client-ran-testpage-unscored`.
+7. **Named risks added to item 13:**
+   - background sessions, TaskScheduler or a job queue started at login, which can reach a guard during an op;
+   - subscribers to Test Runner - Mgt's per-method events in the test app or target, which run outside isolation (shared
+     with headless).
