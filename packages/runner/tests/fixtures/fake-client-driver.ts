@@ -58,9 +58,7 @@ if (mode === "bad-command") fail("bad-command", "webClientBaseUrl", 5);
 if (mode === "stall-open") await Bun.sleep(60_000);
 if (mode === "open-session-error") fail("session-error", "open session: session state InError", 6);
 out("opened", true, { companyParameter: { reflectedProperties: [], via: "url-query" } });
-await waitGo("bind");
-if (mode === "bind-refused") fail("bind-refused", "Bound=No, Reason=not registered", 3);
-out("bound", true, { bound: "Yes", reason: "" });
+// The read-back refusals come BEFORE ready and before go:bind: no op exists yet, so nothing wedges.
 if (mode === "wrong-company")
   fail("company-mismatch", "CurrentCompanyName reads OTHER, wanted CRONUS", 3);
 if (mode === "run-false") fail("run-flag-false", "Run is not set on: M2", 3);
@@ -69,6 +67,10 @@ if (mode === "missing-row")
 if (mode === "missing-control")
   fail("control-missing", "control 'CurrentCompanyName' not on 'Test Tool'", 3);
 out("readback", true, { methods: ["M1", "M2"] });
+out("ready", true);
+await waitGo("bind");
+if (mode === "bind-refused") fail("bind-refused", "Bound=No, Reason=not registered", 3);
+out("bound", true, { bound: "Yes", reason: "" });
 if (mode === "stall-before-ran") await Bun.sleep(60_000);
 if (mode === "driver-deadline") fail("deadline", "no 'All tests executed.' within 1s", 4);
 out("ran", true, {

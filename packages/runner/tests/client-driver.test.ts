@@ -72,7 +72,8 @@ describe("client driver (fake sidecar)", () => {
   test("happy path: opened, bind, ran, end, close, with the go lines in order", async () => {
     const { s, log } = start("ok");
     expect((await s.opened()).step).toBe("opened");
-    expect((await s.bind()).step).toBe("readback");
+    expect((await s.ready()).step).toBe("ready");
+    expect((await s.bind()).step).toBe("bound");
     const ran = await s.ran();
     expect((ran.detail?.results as string[]).length).toBe(2);
     expect((await s.end()).step).toBe("ended");
@@ -83,6 +84,7 @@ describe("client driver (fake sidecar)", () => {
   test("the command carries the config PATH and no login", async () => {
     const { s, log } = start("ok");
     await s.opened();
+    await s.ready();
     await s.bind();
     const cmd = JSON.parse(log()[0] ?? "{}") as Record<string, unknown>;
     expect(cmd.configPath).toBe(CMD.configPath);
@@ -94,7 +96,7 @@ describe("client driver (fake sidecar)", () => {
     mode: string;
     errorClass: new (...a: never[]) => Error;
     check?: (e: Error) => void;
-    step: "opened" | "bind" | "ran";
+    step: "opened" | "ready" | "bind" | "ran";
   }> = [
     {
       mode: "die-before-opened",
@@ -118,25 +120,25 @@ describe("client driver (fake sidecar)", () => {
     {
       mode: "wrong-company",
       errorClass: ClientDriverRefusedError,
-      step: "bind",
+      step: "ready",
       check: (e) => expect((e as ClientDriverRefusedError).refusal).toBe("company-mismatch"),
     },
     {
       mode: "run-false",
       errorClass: ClientDriverRefusedError,
-      step: "bind",
+      step: "ready",
       check: (e) => expect((e as ClientDriverRefusedError).refusal).toBe("run-flag-false"),
     },
     {
       mode: "missing-row",
       errorClass: ClientDriverRefusedError,
-      step: "bind",
+      step: "ready",
       check: (e) => expect((e as ClientDriverRefusedError).refusal).toBe("methods-mismatch"),
     },
     {
       mode: "missing-control",
       errorClass: ClientDriverRefusedError,
-      step: "bind",
+      step: "ready",
       check: (e) => expect((e as ClientDriverRefusedError).refusal).toBe("control-missing"),
     },
     {
@@ -154,10 +156,12 @@ describe("client driver (fake sidecar)", () => {
   ];
   for (const c of cases) {
     test(`${c.mode} maps to ${c.errorClass.name}`, async () => {
-      const { s } = start(c.mode);
+      const { s, log } = start(c.mode);
       const drive = async (): Promise<void> => {
         await s.opened();
         if (c.step === "opened") return;
+        await s.ready();
+        if (c.step === "ready") return;
         await s.bind();
         if (c.step === "bind") return;
         await s.ran();
@@ -168,6 +172,8 @@ describe("client driver (fake sidecar)", () => {
       );
       expect(e).toBeInstanceOf(c.errorClass);
       c.check?.(e as Error);
+      // A read-back refusal happens before go:bind is ever requested: no op was bound, so nothing wedges.
+      if (c.step === "ready") expect(goLines(log())).toEqual([]);
     });
   }
 
@@ -175,6 +181,7 @@ describe("client driver (fake sidecar)", () => {
     for (const mode of ["stall-before-ran", "driver-deadline"]) {
       const { s, log } = start(mode);
       await s.opened();
+      await s.ready();
       await s.bind();
       await s.ran().then(
         () => undefined,
@@ -190,6 +197,7 @@ describe("client driver (fake sidecar)", () => {
   test("the driver sends nothing between End and close except on go", async () => {
     const { s, log } = start("chatty-after-end");
     await s.opened();
+    await s.ready();
     await s.bind();
     await s.ran();
     await s.end();
@@ -198,8 +206,10 @@ describe("client driver (fake sidecar)", () => {
     expect(log().some((l) => l.includes('"close"'))).toBe(false);
   });
 
-  test("close() before ended is a sequence error, bind() before opened too", async () => {
+  test("close() before ended is a sequence error, bind() before ready too", async () => {
     const { s } = start("ok");
+    await expect(s.bind()).rejects.toBeInstanceOf(ClientDriverSequenceError);
+    await s.opened();
     await expect(s.bind()).rejects.toBeInstanceOf(ClientDriverSequenceError);
     await expect(s.close()).rejects.toBeInstanceOf(ClientDriverSequenceError);
   });

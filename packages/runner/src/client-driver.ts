@@ -6,7 +6,8 @@ import { resolve } from "node:path";
  * Spec: `docs/superpowers/specs/2026-11-28-pr479a-bcdev-client-driver.md`, amendments 1 and 2.
  *
  * Protocol. We write ONE JSON command on the driver's stdin, then one go line per hand-off:
- *   opened -> [go bind] -> bound, readback, ran -> [go end] -> ended -> [go close] -> closed.
+ *   opened, readback, ready -> [go bind] -> bound, ran -> [go end] -> ended -> [go close] -> closed.
+ * The read-back on page 130455 happens BEFORE the op exists (before ready), so a refusal there wedges nothing.
  * The driver answers with JSON lines `{step, ok, ms, detail}`. A failure is `{step:"error", ok:false, detail:{error, message}}`.
  * Rules this class keeps by itself, besides the driver's own:
  *   - `end()` throws `ClientDriverSequenceError` unless `ran()` returned (End only after "All tests executed.");
@@ -27,6 +28,8 @@ export interface ClientDriverCommand {
   readonly opSeq: number;
   readonly suiteName?: string;
   readonly tenant?: string;
+  /** The driver prints the method-line repeater's state at each load strategy to stderr as JSON. */
+  readonly diagnostic?: boolean;
   readonly deadlines?: {
     readonly openSeconds?: number;
     readonly stepSeconds?: number;
@@ -119,7 +122,7 @@ export class ClientDriverNotBuiltError extends Error {
   }
 }
 
-const STEP_ORDER = ["opened", "bound", "readback", "ran", "ended", "closed"] as const;
+const STEP_ORDER = ["opened", "readback", "ready", "bound", "ran", "ended", "closed"] as const;
 const DEFAULT_DRIVER_DLL = resolve(
   import.meta.dir,
   "..",
@@ -319,11 +322,21 @@ export class ClientDriverSession {
     return this.expect("opened", this.t.open);
   }
 
-  /** Go to bind (the caller ran ActivateForClient first). Resolves when the page 130455 read-back passed. */
+  /**
+   * The page 130455 set-up and every read-back passed, with no op bound yet (a refusal there throws here and wedges nothing).
+   * The caller Activates next, then calls bind().
+   */
+  ready(): Promise<ClientDriverStep> {
+    if (this.lastStep < 0) throw new ClientDriverSequenceError("ready() before opened()");
+    return this.expect("ready", this.t.step * 4 + this.t.go);
+  }
+
+  /** Go to bind (the caller ran ActivateForClient first). Resolves when page 91015 answered Bound = Yes. */
   async bind(): Promise<ClientDriverStep> {
-    if (this.lastStep < 0) throw new ClientDriverSequenceError("bind() before opened()");
+    if (this.lastStep < STEP_ORDER.indexOf("ready"))
+      throw new ClientDriverSequenceError("bind() before ready()");
     this.send("bind");
-    return this.expect("readback", this.t.step * 2 + this.t.go);
+    return this.expect("bound", this.t.step * 2 + this.t.go);
   }
 
   /** The codeunit's tests ran to "All tests executed."; `detail.results` has each TestResultJson. */

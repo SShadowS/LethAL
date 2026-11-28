@@ -3,12 +3,14 @@
 //
 // Protocol. stdin line 1 is ONE JSON command:
 //   { configPath, webClientBaseUrl, company, codeunitId, methods: [declared method names, in order], attemptId, opSeq,
-//     suiteName?, tenant?, deadlines?: { openSeconds, stepSeconds, testSeconds, goSeconds } }
+//     suiteName?, tenant?, diagnostic?: true (repeater state to stderr), deadlines?: { openSeconds, stepSeconds, testSeconds, goSeconds } }
 // Later stdin lines are the TypeScript side's go signals: {"go":"bind"}, {"go":"end"}, {"go":"close"}.
-// stdout: JSON lines {step, ok, ms, detail}. Steps: opened, bound, readback, ran, ended, closed, and error (ok=false, detail
-// {error: <name>, message}). stderr: first-chance exceptions and library events by name (R1240); never the login.
-// Order: open -> `opened` -> wait go:bind -> bind (page 91015) -> page 130455 sets + read-back -> run -> `ran` -> wait go:end
+// stdout: JSON lines {step, ok, ms, detail}. Steps: opened, readback, ready, bound, ran, ended, closed, and error (ok=false,
+// detail {error: <name>, message}). stderr: first-chance exceptions and library events by name (R1240); never the login.
+// Order: open -> `opened` -> page 130455 sets + every read-back (form stays open) -> `readback`, `ready` -> wait go:bind
+// -> bind (page 91015, closed) -> re-check range/runner/company on 130455 -> run -> `ran` -> wait go:end
 // -> End (ONLY if "All tests executed." was seen) -> `ended` -> wait go:close -> close -> `closed`.
+// A refusal before `ready` happens with no op bound, so it cannot wedge the server.
 // Any failure or passed deadline, or any exit before "All tests executed.", closes WITHOUT End.
 // The login comes from the bcdev section of the config FILE (username, password); never argv or env; never printed.
 using System.Diagnostics;
@@ -62,6 +64,7 @@ double Dl(string k, double d) => cmd.TryGetProperty("deadlines", out var ds) && 
 
 string baseUrl, company, codeunitId, attemptId, opSeq, suite, tenant;
 List<string> declared;
+bool diagnostic;
 TimeSpan openDl, stepDl, testDl, goDl;
 NetworkCredential cred;
 try
@@ -73,6 +76,7 @@ try
     opSeq = S("opSeq") ?? throw new ArgumentException("opSeq");
     suite = S("suiteName") ?? "DEFAULT";
     tenant = S("tenant") ?? "default";
+    diagnostic = cmd.TryGetProperty("diagnostic", out var dg) && dg.ValueKind == JsonValueKind.True;
     declared = cmd.TryGetProperty("methods", out var ms) && ms.ValueKind == JsonValueKind.Array
         ? ms.EnumerateArray().Select(x => x.GetString()).ToList()
         : throw new ArgumentException("methods");
@@ -151,6 +155,25 @@ async Task WaitGo(string go)
     if (got != go) throw new DriverFailure("unexpected-go", $"expected go:{go}, got {line}", 3);
 }
 
+(string Range, string Runner, string Company) CheckHeader(ClientLogicalForm f)
+{
+    var gotRange = Find(f, "TestCodeunitRangeFilter").StringValue;
+    var gotRunner = Find(f, "TestRunnerCodeunitId").StringValue;
+    var gotCompany = Find(f, "CurrentCompanyName").StringValue;
+    if (gotRange != codeunitId) throw new DriverFailure("range-mismatch", $"codeunit range reads {gotRange}, wanted {codeunitId}", 3);
+    if (gotRunner != "130450") throw new DriverFailure("runner-mismatch", $"runner id reads {gotRunner}, wanted 130450", 3);
+    if (gotCompany != company) throw new DriverFailure("company-mismatch", $"CurrentCompanyName reads {gotCompany}, wanted {company}", 3);
+    return (gotRange, gotRunner, gotCompany);
+}
+
+// diagnostic: true in the command prints the repeater's state at each load strategy to stderr as JSON.
+void Diag(string point, ClientRepeaterControl rep)
+{
+    if (!diagnostic) return;
+    var rows = rep.DefaultViewport.Select(r => r.ContainedControls.Select(c => new { name = c.Name, caption = c.Caption, value = c.StringValue }).ToList()).ToList();
+    Log("diag " + JsonSerializer.Serialize(new { point, totalRowCount = rep.TotalRowCount, offset = rep.Offset, pageSize = rep.PageSize, viewportRows = rows.Count, rows }));
+}
+
 var allExecuted = false;
 var ended = false;
 try
@@ -160,36 +183,37 @@ try
     await Settle(session.OpenSessionAsync(p), openDl, "open session");
     Out("opened", true, new { state = session.State.ToString(), companyParameter = new { reflectedProperties = companyProps, via = "url-query", company } });
 
-    await WaitGo("bind");
-
-    // Bind through page 91015: Bound = Yes and Reason empty, else refuse.
-    var bf = await OpenPage(91015);
-    await Set(bf, "Attempt Id", attemptId);
-    await Set(bf, "Op Seq", opSeq);
-    await Act(bf, "Bind");
-    var bound = Find(bf, "Bound").StringValue;
-    var reason = ReasonOf(bf);
-    if (!Yes(bound) || reason != "") throw new DriverFailure("bind-refused", $"Bound={bound}, Reason={reason}", 3);
-    Out("bound", true, new { bound, reason });
-    await CloseForm(bf);
-
-    // Page 130455: set, READ BACK, then run.
+    // Page 130455: set, READ BACK everything, and keep the form open. All of it happens BEFORE any op exists, so a
+    // refusal here closes the session with nothing bound (nothing to wedge).
     var f = await OpenPage(130455);
     await Set(f, "CurrentSuiteName", suite);
     await Set(f, "TestCodeunitRangeFilter", codeunitId);
     await Set(f, "TestRunnerCodeunitId", "130450");
-    var gotRange = Find(f, "TestCodeunitRangeFilter").StringValue;
-    var gotRunner = Find(f, "TestRunnerCodeunitId").StringValue;
-    var gotCompany = Find(f, "CurrentCompanyName").StringValue;
-    if (gotRange != codeunitId) throw new DriverFailure("range-mismatch", $"codeunit range reads {gotRange}, wanted {codeunitId}", 3);
-    if (gotRunner != "130450") throw new DriverFailure("runner-mismatch", $"runner id reads {gotRunner}, wanted 130450", 3);
-    if (gotCompany != company) throw new DriverFailure("company-mismatch", $"CurrentCompanyName reads {gotCompany}, wanted {company}", 3);
+    var (gotRange, gotRunner, gotCompany) = CheckHeader(f);
 
     // The method lines: a repeater whose rows carry cells "Name" and "Run" (and "Line Type", when present, to skip the
     // codeunit line). Cell names are unmeasured on BC 28.4: a missing column is a named refusal. Only the first viewport is
     // read; more rows than it holds is refused, never skipped.
     var rep = f.ContainedControls.OfType<ClientRepeaterControl>().FirstOrDefault() ?? throw new DriverFailure("control-missing", "no repeater (method lines) on page 130455", 3);
+    Diag("after-range", rep);
     var rows = rep.DefaultViewport.ToList();
+    // The repeater may load lazily. Strategies, in order: (a) the viewport as it is; (b) Scroll when it is empty but
+    // TotalRowCount > 0; (c) the page's Refresh action. Still empty: fall through to the refusal below.
+    if (rows.Count == 0 && rep.TotalRowCount > 0)
+    {
+        try { await Settle(rep.Scroll(0, new ClientInteractionsOptions()), stepDl, "scroll method lines"); }
+        catch (DriverFailure e) when (e.Name == "session-error") { Log($"scroll failed: {e.Message}"); }
+        Diag("after-scroll", rep);
+        rows = rep.DefaultViewport.ToList();
+    }
+    if (rows.Count == 0)
+    {
+        var refresh = f.ContainedControls.FirstOrDefault(c => c.Name == "Refresh" || c.Caption == "Refresh");
+        if (refresh != null) await Do(new InvokeActionInteraction(refresh), "action Refresh");
+        else Log("no Refresh action on page 130455");
+        Diag("after-refresh", rep);
+        rows = rep.DefaultViewport.ToList();
+    }
     if (rep.TotalRowCount > rows.Count) throw new DriverFailure("methods-viewport-incomplete", $"{rep.TotalRowCount} lines, viewport holds {rows.Count}", 3);
     var lines = new List<(string Name, bool Run)>();
     foreach (var row in rows)
@@ -207,6 +231,24 @@ try
     var off = lines.Where(l => !l.Run).Select(l => l.Name).ToList();
     if (off.Count > 0) throw new DriverFailure("run-flag-false", $"Run is not set on: {string.Join(", ", off)}", 3);
     Out("readback", true, new { range = gotRange, runner = gotRunner, company = gotCompany, methods = lines.Select(l => l.Name) });
+
+    // Ready: the TypeScript side Activates, then sends go:bind.
+    Out("ready", true);
+    await WaitGo("bind");
+
+    // Bind through page 91015 (page 130455 stays open beside it): Bound = Yes and Reason empty, else refuse.
+    var bf = await OpenPage(91015);
+    await Set(bf, "Attempt Id", attemptId);
+    await Set(bf, "Op Seq", opSeq);
+    await Act(bf, "Bind");
+    var bound = Find(bf, "Bound").StringValue;
+    var reason = ReasonOf(bf);
+    if (!Yes(bound) || reason != "") throw new DriverFailure("bind-refused", $"Bound={bound}, Reason={reason}", 3);
+    Out("bound", true, new { bound, reason });
+    await CloseForm(bf);
+
+    // A cheap re-check on the still-open page 130455: the bind must not have moved the range, runner or company.
+    CheckHeader(f);
 
     await Act(f, "ClearTestResults");
     var results = new List<string>();
