@@ -11,6 +11,7 @@ import {
   DOTNET_NO_OBJECT,
   EDGE_REFUSALS,
   ERRORS_TEMP,
+  ERRORS_TEMP_2,
   FAMILIES,
   FIELDREF_CONVERT,
   FORMAT_EVALUATE,
@@ -18,6 +19,7 @@ import {
   type Family,
   GET_URL,
   IO_STREAMS,
+  IO_STREAMS_2,
   JSON_TEXT,
   LANGUAGE_REGION,
   NO_CLIENT,
@@ -2094,6 +2096,7 @@ describe("PR-417: BC answers measured on Linux BC", () => {
         FORMAT_EVALUATE,
         FORMAT_REGION,
         IO_STREAMS,
+        IO_STREAMS_2,
         JSON_TEXT,
         LANGUAGE_REGION,
         NUMBERS_TEXT,
@@ -2294,8 +2297,7 @@ describe("PR-489: the io-streams family", () => {
   const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
 
   // Red: insert the family before numbers-text, or drop it from FAMILIES.
-  test("last of FAMILIES (place 30, BC-check number 31): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("io-streams");
+  test("place 30 of FAMILIES (BC-check number 31): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(29);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051031");
   });
@@ -2354,6 +2356,165 @@ describe("PR-489: the io-streams family", () => {
     }
     // 7 Blob-field cells and 5 XMLport cells take a key each (the malformed and empty imports write none)
     expect(byKey.size).toBe(12);
+    for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });
+  });
+});
+
+/** PR-500: each `Format(...)` argument list in a cell's statements, with nested parentheses kept. */
+const formatArgList = (s: string): string[] => {
+  const out: string[] = [];
+  for (let i = s.indexOf("Format("); i >= 0; i = s.indexOf("Format(", i + 1)) {
+    let depth = 0;
+    for (let j = i + "Format".length; j < s.length; j++) {
+      if (s[j] === "(") depth++;
+      if (s[j] === ")" && --depth === 0) {
+        out.push(s.slice(i + "Format(".length, j));
+        break;
+      }
+    }
+  }
+  return out;
+};
+
+describe("PR-500: the errors-temp-2 family", () => {
+  const f = ERRORS_TEMP_2;
+  const al = (): string => emitApp(f)["src/Cells.al"] ?? "";
+  const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
+
+  // Red: insert the family before io-streams, or drop it from FAMILIES.
+  test("place 31 of FAMILIES (BC-check number 32): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(30);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051032");
+  });
+
+  // Red: drop a cell, reuse a type/method pair, or move a support codeunit off the id right after the last cell.
+  test("45 cells with distinct names, 11 support codeunits right after the last cell", () => {
+    expect(f.cells).toHaveLength(45);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(45);
+    const last = BASE_ID + f.cells.length;
+    expect(al()).toContain(`codeunit ${last + 1} "E2 Helper"`);
+    for (const [i, name] of [
+      "Probe",
+      "Last",
+      "Collect",
+      "Err",
+      "Nest",
+      "NestFail",
+      "Commit",
+      "CommitOk",
+      "Ok",
+      "Fail",
+    ].entries())
+      expect(al()).toContain(`codeunit ${last + 2 + i} "E2 Run ${name}"`);
+    expect(f.extraIds).toBe(11);
+    // the cell and support ids are all distinct: every `codeunit <id>` in the app appears once
+    const ids = [...al().matchAll(/^codeunit (\d+) /gm)].map((m) => m[1]);
+    expect(ids).toHaveLength(45 + 11);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  // Red: a DeleteAll on a real table in any cell (a write before Codeunit.Run's return value is used), or two cells counting
+  // the same key range, or a cell writing a key outside its own range.
+  test("no real-table DeleteAll, every key range is its own, and every key a cell writes is in it", () => {
+    const ranges: string[] = [];
+    for (const c of f.cells) {
+      const body = stmts(c);
+      expect({ cell: c.method, del: /\b(Row|Row2|RA|RA2)\.DeleteAll/.test(body) }).toEqual({
+        cell: c.method,
+        del: false,
+      });
+      const own = [...body.matchAll(/Row2\.SetRange\("Key", (\d+), (\d+)\)/g)];
+      for (const m of own) ranges.push(m[1] ?? "");
+      if (own.length === 0) continue;
+      const lo = Number(own[0]?.[1]);
+      const hi = Number(own[0]?.[2]);
+      // every 4-digit key written in setup (InsertRow(k), Row."Key" := k, TryInsert...(k)) lies in the range
+      for (const m of (c.setup ?? []).join("\n").matchAll(/(?<![\d.])(\d{4})(?!\d)/g)) {
+        const n = Number(m[1]);
+        expect({ cell: c.method, n, inRange: n >= lo && n <= hi }).toEqual({
+          cell: c.method,
+          n,
+          inRange: true,
+        });
+      }
+    }
+    // 8 cells count a key range (Try 2, Run 4, Assert 1, Temp RealToTempParam 1)
+    expect(ranges).toHaveLength(8);
+    expect(new Set(ranges).size).toBe(ranges.length);
+  });
+
+  // Red (each separately): `Format(R)` without `, 0, 9`; `R` or a bare Boolean as a V:[...] argument.
+  test("every Format is Format(x, 0, 9) and no Boolean or enum is printed bare", () => {
+    for (const c of f.cells) expect(c.depends).toBeUndefined();
+    const all = f.cells.map(stmts).join("\n");
+    const args = formatArgList(all);
+    // every Format the 45 cells hold (a scan that finds none would make the check below vacuous)
+    expect(args.length).toBe(25);
+    expect(args.filter((a) => !a.endsWith(", 0, 9"))).toEqual([]);
+    expect(all).not.toMatch(/Error\('V:\[[^']*'(, [^,;]+)*, R[,)]/);
+    expect(all).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
+    expect(all).not.toMatch(
+      /(?<!Format\()\b\w+\.(IsTemporary|Collectible|ErrorType|Verbosity)\b(?!\()/,
+    );
+    expect(all).not.toContain("AsInteger");
+  });
+});
+
+describe("PR-500: the io-streams-2 family", () => {
+  const f = IO_STREAMS_2;
+  const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
+
+  // Red: insert the family before errors-temp-2, or drop it from FAMILIES.
+  test("last of FAMILIES (place 32, BC-check number 33): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("io-streams-2");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(31);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051033");
+  });
+
+  // Red: drop a cell, reuse a type/method pair, or move the helper off the id right after the last cell.
+  test("36 cells with distinct names, the helper right after the last cell", () => {
+    expect(f.cells).toHaveLength(36);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(36);
+    const al = emitApp(f)["src/Cells.al"] ?? "";
+    expect(al).toContain(`codeunit ${BASE_ID + 37} "I2 Helper"`);
+    expect(f.extraIds).toBe(1);
+    const ids = [...al.matchAll(/^codeunit (\d+) /gm)].map((m) => m[1]);
+    expect(ids).toHaveLength(37);
+    expect(new Set(ids).size).toBe(37);
+    // the System Application dependency Temp Blob needs
+    expect(f.dependencies?.map((d) => d.name)).toEqual(["System Application"]);
+  });
+
+  // Red: drop `locale` from a code-page cell, or mark an ASCII or UTF cell `locale` (R1210 would read the wrong cells).
+  test("exactly the 2 code-page cells are locale cells", () => {
+    expect(f.cells.filter((c) => c.depends === "locale").map((c) => c.method)).toEqual([
+      "UTF8 ae read as MSDos",
+      "Csv Windows export",
+    ]);
+  });
+
+  // Red: a real-table DeleteAll, a reused key, or a Format without `, 0, 9`.
+  test("no real-table DeleteAll, every real key its own, every Format is format 9", () => {
+    const byKey = new Map<string, Set<string>>();
+    let formats = 0;
+    for (const c of f.cells) {
+      const s = stmts(c);
+      expect({ cell: c.method, del: /\b(B|Item)\.DeleteAll/.test(s) }).toEqual({
+        cell: c.method,
+        del: false,
+      });
+      for (const m of s.matchAll(/(?:InsertBlob\(|B\.Id := |B\.Get\(|'X)(\d{4})/g)) {
+        const key = m[1] ?? "";
+        byKey.set(key, (byKey.get(key) ?? new Set()).add(c.method));
+      }
+      for (const a of formatArgList(s)) {
+        formats++;
+        expect({ cell: c.method, f9: a.endsWith(", 0, 9") }).toEqual({ cell: c.method, f9: true });
+      }
+    }
+    expect(formats).toBeGreaterThan(40);
+    // 3 Temp Blob cells and 13 XMLport cells take a key each
+    expect(byKey.size).toBe(16);
     for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });
   });
 });
