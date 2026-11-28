@@ -129,6 +129,7 @@ function oneBatchRun(
   artifactId: string,
   rows: ReturnType<typeof mutantRow>[],
   projectPath = "P",
+  backend = "bcdev",
 ): number {
   const runId = store.createRun({
     testScope: [],
@@ -136,7 +137,7 @@ function oneBatchRun(
     identityScheme: IDENTITY_SCHEME,
     buildSymbols: [],
     projectPath,
-    backend: "bcdev",
+    backend,
     appVersion: "0.0.0.0",
   });
   store.recordArtifact(runId, artifact(0, artifactId));
@@ -291,6 +292,18 @@ describe("resolveVerifySource", () => {
       { batchIndex: 0, mutantCode: "M0004", coveringTests: ["Run One.T"] },
     ]);
     expect(resolveVerifySource(store, parseVerifyRequest(A2, ["0/M0004"])).runId).toBe(run2);
+    store.close();
+  });
+
+  // PR-479 review S5. Red: drop the BCDEV_CLIENT check in `installedOf` (verify.ts): the client run resolves.
+  test("verify refuses a source run on the bcdev-client backend, by name; a bcdev run resolves", () => {
+    const store = new ResultsStore(":memory:");
+    oneBatchRun(store, A1, [mutantRow("M0001", "survived")], "P", "bcdev-client");
+    const e = refusal(() => resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"])));
+    expect(e.reason).toBe("unsupported-config");
+    expect(e.detail).toContain("bcdev-client-verify-refused");
+    oneBatchRun(store, A2, [mutantRow("M0001", "survived")]);
+    expect(resolveVerifySource(store, parseVerifyRequest(A2, ["0/M0001"])).targets.length).toBe(1);
     store.close();
   });
 

@@ -7428,7 +7428,6 @@ type ClientMutantDecision =
   | {
       readonly verdict: "killed";
       readonly ref: TestMethodRef;
-      readonly position: number;
       readonly failure: string | undefined;
       readonly reproducedFailure: string | undefined;
       readonly byAny: boolean;
@@ -7515,7 +7514,8 @@ async function scoreClientBatch(
         throw new Error(`runClientCodeunit returned no result for ${qualifiedTestName(ref)}`);
       const isUnscored = unscored.has(testKeyOf(ref));
       if (!isUnscored && m.outcome === "pass") scored.add(ref.method);
-      if (!isUnscored && m.outcome === "fail") red.add(ref.method);
+      // N3: an unscored (TestPage) method that failed in the baseline is red too: it runs before a later killer.
+      if (m.outcome === "fail") red.add(ref.method);
       const verdict: TestVerdict = {
         ref,
         outcome: isUnscored ? "skip" : m.outcome,
@@ -7655,7 +7655,6 @@ async function scoreClientBatch(
       return {
         verdict: "killed",
         ref,
-        position: killer.row.testMethodRuns,
         failure: killer.failureMessage,
         reproducedFailure: again.failureMessage,
         byAny: reach === "by-any",
@@ -7709,7 +7708,7 @@ async function scoreClientBatch(
         undefined, // permissionRefusedTest
         d.failure,
         undefined, // unplaceable
-        d.position,
+        undefined, // killPosition: N7, left off client kills (it reads with headless meaning elsewhere)
         d.reach,
         d.ref,
         d.reproducedFailure !== undefined ? { reproducedFailure: d.reproducedFailure } : {},
@@ -7886,7 +7885,7 @@ async function runSessionBody(
     if (cfg.excludeTests !== undefined && cfg.excludeTests.length > 0) {
       throw new ClientModeRefusedError(
         "exclude-test",
-        "every mutant runs every test codeunit as its full declared run, and no method is switched off",
+        "every mutant runs every test codeunit as its full declared run, and no method is switched off. A method-level exclusion such as --exclude-test would always end in a methods-mismatch refusal from the driver, because page 130455 lists every declared method",
       );
     }
     if (Math.floor(cfg.workers ?? 1) > 1) {

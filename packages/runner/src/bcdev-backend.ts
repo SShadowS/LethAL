@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
@@ -38,10 +38,15 @@ import type {
 } from "./backend";
 import { BCDEV_CLIENT } from "./backend";
 import { BcAnswerUnreadError, BcRedirectRefusedError, bcFetch, withDeadline } from "./bc-fetch";
-import { type ClientDriverLauncher, startClientDriver } from "./client-driver";
+import {
+  type ClientDriverLauncher,
+  resolveClientDriverArgv,
+  startClientDriver,
+} from "./client-driver";
 import {
   BcdevClientMethodRunError,
   ClientModeRefusedError,
+  ClientSetupRefusedError,
   type ClientSessionProbe,
   assertClientControlVersion,
   probeClientSession,
@@ -216,8 +221,13 @@ export interface BcDevConfig {
   readonly clientConfigPath?: string;
 }
 
-/** PR-479: how long the control app lets a client op stay bound (the driver's test deadline is the same 300 s). */
-const CLIENT_RUN_BOUND_MS = 300_000;
+/**
+ * PR-479 review S4: how long the control app lets a client op stay bound: its cap (`MaxRunBoundMs` in ControlState,
+ * 600 s). The driver gets ONE total deadline for the op, from the bind to `ran`, of this bound minus 60 s, so the
+ * driver's deadline always fires before the control's.
+ */
+const CLIENT_RUN_BOUND_MS = 600_000;
+const CLIENT_DRIVER_TEST_SECONDS = (CLIENT_RUN_BOUND_MS - 60_000) / 1000;
 const CLIENT_ACTIVATE_TIMEOUT_MS = 60_000;
 const CLIENT_CALL_TIMEOUT_MS = 30_000;
 
@@ -644,6 +654,39 @@ export class BcDevMcpBackend implements ExecutionBackend {
     if (this.cfg.clientMode !== true) return;
     await probeClientSession(this.cfg.webClientBaseUrl, this.cfg.clientSessionProbe);
     assertClientControlVersion(await this.verifierFor().fetchControlVersion());
+    // N6: what a client run needs and would otherwise find out after a publish.
+    const { clientConfigPath, company } = this.cfg;
+    if (clientConfigPath === undefined || clientConfigPath === "") {
+      throw new ClientSetupRefusedError(
+        "client-config-path-missing",
+        "the driver reads its login from the config file, and no config file path (clientConfigPath) was given",
+      );
+    }
+    if (company === undefined || company === "") {
+      throw new ClientSetupRefusedError(
+        "client-company-missing",
+        "the config's bcdev section has no company",
+      );
+    }
+    // A test launcher replaces the sidecar; otherwise it must be built (ClientDriverNotBuiltError names the fix).
+    if (this.cfg.clientDriverLauncher === undefined) {
+      resolveClientDriverArgv(this.cfg.clientDriverPath);
+    }
+    let bcdev: unknown;
+    try {
+      bcdev = (JSON.parse(readFileSync(clientConfigPath, "utf8")) as { bcdev?: unknown }).bcdev;
+    } catch (err) {
+      throw new ClientSetupRefusedError(
+        "client-config-path-missing",
+        `the config file ${clientConfigPath} cannot be read (${describeThrown(err)})`,
+      );
+    }
+    if (typeof bcdev === "object" && bcdev !== null && "credentialsEnv" in bcdev) {
+      throw new ClientSetupRefusedError(
+        "client-credentials-env",
+        'the driver reads the login from the config file, which names "bcdev.credentialsEnv" instead; put username and password in the file',
+      );
+    }
   }
 
   /**
@@ -1602,12 +1645,14 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // window may leave the op running: it is marked in flight, for the orchestrator's quarantine.
     let inFlight = false;
     try {
-      const before = await this.clientWorkDate(req.baselineWorkDate);
+      const start = await this.clientHarnessInfo(req.baselineWorkDate);
+      const before = start.workDate;
       const baselineWorkDate = req.baselineWorkDate ?? before;
-      this.attemptSeq += 1;
+      // PR-479 review S1: the number is only PEEKED here (the driver needs it in its command). It is taken, with
+      // the attempt number, just before Activate, so a failure before Activate burns no op number and the
+      // control's `Last Completed Op Seq + 1` rule still holds for the next op.
       const opSeq = this.nextOpSeq;
-      this.nextOpSeq += 1;
-      const attemptId = `a${this.attemptSeq}`;
+      const attemptId = `a${this.attemptSeq + 1}`;
       const fenceLease = {
         epoch: lease.epoch,
         token: lease.token,
@@ -1624,6 +1669,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           methods: req.declaredMethods,
           attemptId,
           opSeq,
+          deadlines: { testSeconds: CLIENT_DRIVER_TEST_SECONDS },
           ...(this.cfg.tenant !== undefined ? { tenant: this.cfg.tenant } : {}),
         },
         this.cfg.clientDriverPath !== undefined
@@ -1633,6 +1679,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
       await session.opened();
       await session.readback();
       await session.ready();
+      this.attemptSeq += 1;
+      this.nextOpSeq += 1;
 
       let generation: number;
       inFlight = true;
@@ -1696,7 +1744,17 @@ export class BcDevMcpBackend implements ExecutionBackend {
       }
       inFlight = false; // ended and tombstoned
 
-      await session.close();
+      try {
+        await session.close();
+      } catch (err) {
+        // PR-479 review S3: End and the final Deactivate are done, but the session may linger and later refresh
+        // another mutant's guards. Stops the run and quarantines the lane (inFlight), and never says "before Activate".
+        throw new ClientRunFailure(
+          "client-close-failed",
+          `the driver did not close its /cs session after the final Deactivate (${describeThrown(err)}); the session may still be open and refresh a later mutant`,
+          true,
+        );
+      }
       closed = true;
 
       const att = await transport.readClientAttestation({
@@ -1710,7 +1768,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           `ReadClientAttestation: ${att.reason}`,
         );
       }
-      const after = await this.clientWorkDate(baselineWorkDate);
+      const after = (await this.clientHarnessInfo(baselineWorkDate)).workDate;
       const methods = checkClientRun({
         codeunitId: req.codeunitId,
         declared: req.declaredMethods,
@@ -1721,6 +1779,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
         boundSessionId,
         generation,
         mutantId: req.mutantId,
+        serverGeneration: lease.serverGeneration,
+        databaseId: start.databaseId,
       });
       return {
         codeunitId: req.codeunitId,
@@ -1738,15 +1798,17 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   /** The server's start WorkDate now (HarnessInfo); a difference from the batch baseline's is `workdate-changed`. */
-  private async clientWorkDate(baseline: string | undefined): Promise<string> {
-    const { workDate } = await this.verifierFor().verify();
+  private async clientHarnessInfo(
+    baseline: string | undefined,
+  ): Promise<{ workDate: string; databaseId: string }> {
+    const { workDate, databaseId } = await this.verifierFor().verify();
     if (baseline !== undefined && workDate !== baseline) {
       throw new ClientRunFailure(
         "workdate-changed",
         `HarnessInfo reports ${workDate}, the batch baseline ran on ${baseline}`,
       );
     }
-    return workDate;
+    return { workDate, databaseId };
   }
 
   private async runViaTransport(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {

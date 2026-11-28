@@ -58,6 +58,15 @@ if (mode === "bad-command") fail("bad-command", "webClientBaseUrl", 5);
 if (mode === "stall-open") await Bun.sleep(60_000);
 if (mode === "open-session-error") fail("session-error", "open session: session state InError", 6);
 out("opened", true, { companyParameter: { reflectedProperties: [], via: "url-query" } });
+// PR-479 review S2: the real driver sends `error`, then closes its session and sends `closed`. A slow close is
+// marked in the log file when it is sent, so a test can tell whether the client waited for it.
+if (mode === "error-slow-close") {
+  out("error", false, { error: "company-mismatch", message: "CurrentCompanyName reads OTHER" });
+  await Bun.sleep(1000);
+  if (logFile !== "") appendFileSync(logFile, `${JSON.stringify({ marker: "closed-sent" })}\n`);
+  out("closed", true, { state: "Closed", ended: false });
+  process.exit(3);
+}
 // The read-back refusals come BEFORE ready and before go:bind: no op exists yet, so nothing wedges.
 if (mode === "wrong-company")
   fail("company-mismatch", "CurrentCompanyName reads OTHER, wanted CRONUS", 3);
@@ -108,5 +117,6 @@ if (mode === "chatty-after-end") {
   process.exit(0);
 }
 await waitGo("close");
+if (mode === "close-dies") process.exit(1); // S3: End and the final Deactivate are done; the close never answers
 out("closed", true, { state: "Closed", ended: true });
 process.exit(0);

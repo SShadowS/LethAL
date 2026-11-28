@@ -83,7 +83,7 @@ try
     if (declared.Count == 0) throw new ArgumentException("methods is empty");
     openDl = TimeSpan.FromSeconds(Dl("openSeconds", 30));
     stepDl = TimeSpan.FromSeconds(Dl("stepSeconds", 30));
-    testDl = TimeSpan.FromSeconds(Dl("testSeconds", 300));
+    testDl = TimeSpan.FromSeconds(Dl("testSeconds", 540));
     goDl = TimeSpan.FromSeconds(Dl("goSeconds", 120));
     var cfgPath = S("configPath") ?? throw new ArgumentException("configPath");
     var bc = JsonDocument.Parse(File.ReadAllText(cfgPath)).RootElement.GetProperty("bcdev");
@@ -235,6 +235,10 @@ try
     // Ready: the TypeScript side Activates, then sends go:bind.
     Out("ready", true);
     await WaitGo("bind");
+    // PR-479 review S4: ONE total deadline for the op, from the bind to `ran`. testSeconds is the control's run bound
+    // (its 600 s cap) minus 60 s, and it holds across the whole RunNextTest loop, not per call, so this deadline always
+    // fires before the control's own bound.
+    var opEnd = DateTime.UtcNow + testDl;
 
     // Bind through page 91015 (page 130455 stays open beside it): Bound = Yes and Reason empty, else refuse.
     var bf = await OpenPage(91015);
@@ -247,16 +251,17 @@ try
     Out("bound", true, new { bound, reason });
     await CloseForm(bf);
 
-    // A cheap re-check on the still-open page 130455: the bind must not have moved the range, runner or company.
+    // A sanity check of the LOCAL form state only (PR-479 review N1): the library's copy of page 130455's controls, which
+    // the bind cannot change, so this cannot fail. It is NOT a server read.
     CheckHeader(f);
 
     await Act(f, "ClearTestResults");
     var results = new List<string>();
-    var until = DateTime.UtcNow + testDl;
     while (true)
     {
-        if (DateTime.UtcNow > until) throw new DriverFailure("deadline", $"no 'All tests executed.' within {testDl.TotalSeconds}s", 4);
-        await Act(f, "RunNextTest", testDl);
+        var left = opEnd - DateTime.UtcNow;
+        if (left <= TimeSpan.Zero) throw new DriverFailure("deadline", $"no 'All tests executed.' within {testDl.TotalSeconds}s of the bind", 4);
+        await Act(f, "RunNextTest", left);
         var json = Find(f, "TestResultJson").StringValue;
         if (json == "All tests executed.") { allExecuted = true; break; }
         if (!string.IsNullOrEmpty(json)) results.Add(json);

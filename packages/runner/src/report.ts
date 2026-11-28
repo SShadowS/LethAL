@@ -3076,13 +3076,13 @@ function measuredExecutionContext(
     };
   }
   // PR-479: bcdev-client runs a codeunit in a `/cs` web client session. Its GuiAllowed and ClientType are not measured
-  // in 479a (the driver is not built): the text says so rather than claim a measurement.
+  // in 479a: the text says so rather than claim a measurement.
   if (isBcdevClient(caps.kind)) {
     return {
       guiAllowed: true,
       clientType: "Web (/cs client session)",
       basis:
-        "NOT measured on this backend yet (PR-479 round 1 builds no driver): a /cs session is a web client " +
+        "NOT measured on this backend yet (PR-479 479a does not measure them): a /cs session is a web client " +
         "session, so GuiAllowed=Yes and ClientType=Web are assumed from the client-services path (R69 Phase 2)",
     };
   }

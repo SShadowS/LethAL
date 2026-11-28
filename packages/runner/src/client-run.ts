@@ -34,6 +34,10 @@ export type ClientRunFailureReason =
   | "client-row-not-loaded-observed"
   | "client-row-identity-mismatch"
   | "client-row-success"
+  /** N2: a row's serverGeneration or databaseId differs from the lease's / HarnessInfo's: another server state. */
+  | "client-row-stale-server"
+  /** S3: the driver's close after the final Deactivate failed; the session may linger. Stops the run, quarantines. */
+  | "client-close-failed"
   /** The driver failed BEFORE Activate (a read-back refusal, a dead driver): no op exists, nothing is wedged. */
   | "client-driver-failed"
   /** Anything that is not a named check, between Activate and the final Deactivate (an overrun, a dead driver, a
@@ -205,6 +209,10 @@ export interface ClientRunCheckInput {
   readonly generation: number;
   /** The mutant the op activated; "" for a baseline or a no-mutant confirmation. */
   readonly mutantId: string;
+  /** The lease's serverGeneration; every row must carry it (N2). */
+  readonly serverGeneration: string;
+  /** HarnessInfo's databaseId; every row must carry it (N2). */
+  readonly databaseId: string;
 }
 
 /** Names that appear more than once, and names that are not in `declared`, and declared names that never appear. */
@@ -257,6 +265,14 @@ export function checkClientRun(input: ClientRunCheckInput): readonly ClientMetho
     declared,
     rows.map((r) => r.method),
   );
+  for (const r of rows) {
+    if (r.serverGeneration !== input.serverGeneration || r.databaseId !== input.databaseId) {
+      throw new ClientRunFailure(
+        "client-row-stale-server",
+        `the row for ${r.method} carries serverGeneration ${JSON.stringify(r.serverGeneration)} / databaseId ${JSON.stringify(r.databaseId)}, the lease has ${JSON.stringify(input.serverGeneration)} / ${JSON.stringify(input.databaseId)}`,
+      );
+    }
+  }
 
   const out: ClientMethodResult[] = [];
   declared.forEach((method, i) => {

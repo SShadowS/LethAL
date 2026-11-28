@@ -10,6 +10,7 @@ import {
 } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
+import { isBcdevClientName } from "./backend";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
@@ -381,6 +382,16 @@ export function artifactRecordOf(
  */
 function installedOf(store: ResultsStore, artifactId: string) {
   const rec = artifactRecordOf(store, artifactId);
+  // PR-479 review S5: a bcdev-client run has no coverage and runs whole codeunits; verify's covering-test lists and
+  // per-method reruns do not apply to it. Refused by name, first, under the existing `unsupported-config` reason (a
+  // new reason would bump the verify schema).
+  const sourceBackend = store.getRun(rec.runId)?.backend;
+  if (sourceBackend !== undefined && isBcdevClientName(sourceBackend)) {
+    throw new VerifyError(
+      "unsupported-config",
+      `bcdev-client-verify-refused: run ${rec.runId} (artifact ${artifactId}) ran on the bcdev-client backend, which has no coverage and runs whole codeunits. lethal verify measures headless runs only (PR-479).`,
+    );
+  }
   if (rec.batchIndex !== rec.highestBatchIndex) {
     throw new VerifyError(
       "batch-not-installed",

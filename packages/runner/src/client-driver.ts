@@ -182,7 +182,7 @@ export class ClientDriverSession {
     this.t = {
       open: (d.openSeconds ?? 30) * 1000 + marginMs,
       step: (d.stepSeconds ?? 30) * 1000 + marginMs,
-      test: (d.testSeconds ?? 300) * 1000 + marginMs,
+      test: (d.testSeconds ?? 540) * 1000 + marginMs,
       go: (d.goSeconds ?? 120) * 1000 + marginMs,
     };
     void this.pump(proc.stdout, (l) => this.queue.push(l));
@@ -278,10 +278,32 @@ export class ClientDriverSession {
     };
   }
 
-  /** The named error for a driver `error` step. */
-  private mapError(s: ClientDriverStep): Error {
+  /**
+   * PR-479 review S2: after an `error` step the driver closes its `/cs` session and sends `closed`. Wait for that line
+   * (with a deadline) so the session is really closed before the next op starts. Ends early if the driver exits.
+   */
+  private async waitForClosed(): Promise<void> {
+    const until = Date.now() + this.t.step;
+    for (;;) {
+      let line: string;
+      try {
+        line = await this.nextLine("closed", Math.max(0, until - Date.now()));
+      } catch {
+        return; // the driver exited, or the deadline passed (nextLine killed it)
+      }
+      try {
+        if ((JSON.parse(line) as { step?: unknown }).step === "closed") return;
+      } catch {
+        // not JSON: keep waiting for closed
+      }
+    }
+  }
+
+  /** The named error for a driver `error` step. Waits for the driver's close first (S2), then kills what is left. */
+  private async mapError(s: ClientDriverStep): Promise<Error> {
     const name = typeof s.detail?.error === "string" ? s.detail.error : "unknown";
     const message = typeof s.detail?.message === "string" ? s.detail.message : "";
+    await this.waitForClosed();
     this.kill();
     if (name === "deadline") return new ClientDriverDeadlineError("driver", message);
     if (name === "bad-command" || name === "config-login-missing")
@@ -295,7 +317,7 @@ export class ClientDriverSession {
     const want = STEP_ORDER.indexOf(step);
     for (;;) {
       const s = this.parse(await this.nextLine(step, ms));
-      if (s.step === "error") throw this.mapError(s);
+      if (s.step === "error") throw await this.mapError(s);
       const got = STEP_ORDER.indexOf(s.step as (typeof STEP_ORDER)[number]);
       if (got < 0) throw new ClientDriverProtocolError(`unknown step "${s.step}"`);
       if (got <= this.lastStep || got > want) {

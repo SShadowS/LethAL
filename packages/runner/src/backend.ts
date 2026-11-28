@@ -414,6 +414,11 @@ export function isBcServer(kind: BackendKind): boolean {
   return kind === "bcdev" || kind === BCDEV_CLIENT;
 }
 
+/** PR-479: `isBcdevClient` for a stored backend NAME (a string), as `lethal verify` reads a source run's. */
+export function isBcdevClientName(name: string): boolean {
+  return name === BCDEV_CLIENT;
+}
+
 /** PR-479: `isBcServer` for a stored or reported backend NAME (a string), as readers of a report have. */
 export function isBcServerName(name: string): boolean {
   return name === "bcdev" || name === BCDEV_CLIENT;

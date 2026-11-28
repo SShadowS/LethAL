@@ -79,6 +79,20 @@ export class ClientControlTooOldError extends Error {
   }
 }
 
+/** N6: something a client run needs is missing or unusable, found before any publish. */
+export class ClientSetupRefusedError extends Error {
+  constructor(
+    readonly reason:
+      | "client-config-path-missing"
+      | "client-company-missing"
+      | "client-credentials-env",
+    why: string,
+  ) {
+    super(`${reason}: ${why}. Nothing was published (PR-479).`);
+    this.name = "ClientSetupRefusedError";
+  }
+}
+
 /** A bcdev-client run and a headless run (or their stored runs or reports) were mixed. */
 export class ClientNeverMixedError extends Error {
   readonly reason = "bcdev-client-never-mixed";

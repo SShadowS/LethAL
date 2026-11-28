@@ -29,6 +29,7 @@ count must equal the number of sites it claims. An unclaimed site, or a count th
 | packages/runner/src/backend.ts | export const BCDEV_CLIENT | 1 | new-arm | the one place the name is written |
 | packages/runner/src/backend.ts | export function isBcdevClient( | 1 | new-arm | the client predicate |
 | packages/runner/src/backend.ts | return kind === BCDEV_CLIENT; | 1 | new-arm | the client predicate |
+| packages/runner/src/backend.ts | return name === BCDEV_CLIENT; | 1 | new-arm | the client predicate for a stored name (lethal verify refuses a client source run) |
 | packages/runner/src/backend.ts | export function isBcdev( | 1 | new-arm | stays headless-only, as the spec says |
 | packages/runner/src/backend.ts | return kind === "bcdev"; | 1 | new-arm | stays headless-only, as the spec says |
 | packages/runner/src/backend.ts | export function isBcServer( | 1 | new-arm | true for bcdev and bcdev-client |

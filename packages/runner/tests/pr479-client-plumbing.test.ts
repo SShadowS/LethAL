@@ -1,4 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import {
@@ -26,6 +28,7 @@ import {
   parseCliConfig,
   resourceIdentityFor,
 } from "../src/cli";
+import { type ClientDriverLauncher, ClientDriverNotBuiltError } from "../src/client-driver";
 import {
   BcdevClientExperimentalError,
   BcdevClientMethodRunError,
@@ -334,11 +337,57 @@ describe("PR-479: the version gate", () => {
     const log: string[] = [];
     await backendOf({}, "1.0.0.30", log).clientPreflight();
     expect(log).toEqual([]);
-    // 1.0.0.31 passes on the client backend.
+    // 1.0.0.31 passes on the client backend (with what a run needs).
+    const ready = readyClientConfig();
     await backendOf(
-      { clientMode: true, webClientBaseUrl: "https://web/BC", clientSessionProbe: probe },
+      { ...ready, clientMode: true, webClientBaseUrl: "https://web/BC", clientSessionProbe: probe },
       "1.0.0.31",
     ).clientPreflight();
+  });
+
+  /** A client config that passes every N6 check: a readable file, a company, a launcher in place of the sidecar. */
+  function readyClientConfig(bcdev: Record<string, unknown> = { username: "u", password: "p" }) {
+    const dir = mkdtempSync(join(tmpdir(), "pr479-preflight-"));
+    const file = join(dir, "lethal.config.json");
+    writeFileSync(file, JSON.stringify({ bcdev }));
+    return {
+      clientConfigPath: file,
+      company: "CRONUS",
+      clientDriverLauncher: (() => {
+        throw new Error("never started");
+      }) as unknown as ClientDriverLauncher,
+    };
+  }
+
+  // N6. Red (each): drop the matching check in `clientPreflight` and that refusal is a pass.
+  test("N6: clientPreflight refuses, by name, a missing config path, a missing company, a driver not built, credentialsEnv", async () => {
+    const base = {
+      clientMode: true,
+      webClientBaseUrl: "https://web/BC",
+      clientSessionProbe: async () => 405,
+    } as const;
+    const refused = async (over: Partial<BcDevConfig>) =>
+      backendOf({ ...base, ...over }, "1.0.0.31")
+        .clientPreflight()
+        .catch((e: unknown) => e);
+    const ok = readyClientConfig();
+    const { clientConfigPath: _p, ...noPath } = ok;
+    expect(await refused(noPath)).toMatchObject({
+      reason: "client-config-path-missing",
+      message: expect.stringContaining("no config file path"),
+    });
+    const { company: _c, ...noCompany } = ok;
+    expect(await refused(noCompany)).toMatchObject({ reason: "client-company-missing" });
+    expect(
+      await refused({ ...ok, clientConfigPath: "/nonexistent/lethal.config.json" }),
+    ).toMatchObject({ reason: "client-config-path-missing" });
+    const { clientDriverLauncher: _l, ...noLauncher } = ok;
+    expect(
+      await refused({ ...noLauncher, clientDriverPath: "/nonexistent/client-driver.dll" }),
+    ).toBeInstanceOf(ClientDriverNotBuiltError);
+    expect(
+      await refused(readyClientConfig({ username: "u", credentialsEnv: { username: "U" } })),
+    ).toMatchObject({ reason: "client-credentials-env" });
   });
 });
 

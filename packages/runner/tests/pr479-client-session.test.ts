@@ -236,6 +236,23 @@ const PAGE_AL = `codeunit 79102 "Page Tests"
     end;
 }
 `;
+/** N3: a TestPage method declared BEFORE a plain one in the same codeunit. */
+const PAGE2_AL = `codeunit 79103 "Page Tests Two"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OpensCard2()
+    var
+        Card: TestPage "Some Card";
+    begin
+        Card.OpenView();
+    end;
+
+    [Test]
+    procedure Plain2() begin end;
+}
+`;
 const APP_JSON = JSON.stringify({
   id: "11111111-1111-1111-1111-111111111111",
   name: "Sandbox Orchestrator Fixture",
@@ -446,7 +463,8 @@ describe("PR-479 round 3b: a client session", () => {
       expect(m.verdict).toBe("killed");
       expect(m.killingTest).toBe("A1");
       expect(m.killReproduced).toBe(true);
-      expect(m.killPosition).toBe(1);
+      // N7. Red: pass the kill position to `record` again in scoreClientBatch.
+      expect(m.killPosition).toBeUndefined();
       expect(m.killingTestFailure).toBe("boom");
       // mutated run, then (a) with no mutant, then (b): in that order, all on the killing codeunit
       const at = stub.ops.findIndex((o) => o.mutantId === m.mutantCode);
@@ -562,6 +580,24 @@ describe("PR-479 round 3b: a client session", () => {
       expect(o.methods).toContain("A1");
     const warn = events.find((e) => e.type === "warning" && e.code === "kill-after-red-method");
     expect(JSON.stringify(warn)).toContain("A2 after A1");
+  });
+
+  // N3. Red: restore `!isUnscored &&` on the baseline `red` line in scoreClientBatch.
+  test("a failing TestPage method declared before the killer also names kill-after-red-method", async () => {
+    const stub = new ClientStub((ctx, method) =>
+      method === "OpensCard2"
+        ? { outcome: "fail" }
+        : method === "Plain2" && ctx.procedure === "IsOverBudget" && ctx.mutantId !== ""
+          ? { outcome: "fail" }
+          : {},
+    );
+    const { report, events } = await session(stub, {
+      extra: { "Page2.Codeunit.al": PAGE2_AL },
+      cfg: { ciSessionKind: "client" },
+    });
+    for (const m of byProc(report, "IsOverBudget")) expect(m.killingTest).toBe("Plain2");
+    const warn = events.find((e) => e.type === "warning" && e.code === "kill-after-red-method");
+    expect(JSON.stringify(warn)).toContain("Plain2 after OpensCard2");
   });
 
   test("no kill-after-red-method on a run whose killer has no red method before it", async () => {

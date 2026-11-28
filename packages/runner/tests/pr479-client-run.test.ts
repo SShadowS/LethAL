@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
-import { type ClientDriverSession, startClientDriver } from "../src/client-driver";
+import {
+  type ClientDriverCommand,
+  type ClientDriverSession,
+  startClientDriver,
+} from "../src/client-driver";
 import {
   type ClientRunCheckInput,
   ClientRunFailure,
@@ -70,6 +74,8 @@ function input(over: Partial<ClientRunCheckInput> = {}): ClientRunCheckInput {
     boundSessionId: 42,
     generation: 7,
     mutantId: MUTANT,
+    serverGeneration: "g",
+    databaseId: "d",
     ...over,
   };
 }
@@ -96,6 +102,18 @@ describe("PR-479 round 3a: the row checks", () => {
       ["M2", "fail"],
     ]);
     expect(r[1]?.row.method).toBe("M2");
+  });
+
+  // N2. Red: drop the stale-server loop in `checkClientRun`: both rows below pass.
+  test("a row from another server generation or database fails, each on its own", () => {
+    const gen = [row({ serverGeneration: "other" }), row({ method: "M2", testMethodRuns: 2 })];
+    expect(reason(() => checkClientRun(input({ rows: gen })))).toBe("client-row-stale-server");
+    const db = [row(), row({ method: "M2", testMethodRuns: 2, databaseId: "other" })];
+    expect(reason(() => checkClientRun(input({ rows: db })))).toBe("client-row-stale-server");
+    expect(reason(() => checkClientRun(input({ databaseId: "other" })))).toBe(
+      "client-row-stale-server",
+    );
+    expect(reason(() => checkClientRun(input()))).toBe("no failure");
   });
 
   test("a row from another session fails; the bound session passes", () => {
@@ -373,6 +391,8 @@ interface Scenario {
   deactivate?: (n: number, body: Body) => unknown;
   attestation?: (body: Body) => unknown;
   workDates?: string[];
+  /** HarnessInfo's databaseId (default "d", the rows' default). */
+  databaseId?: string;
 }
 const dirs: string[] = [];
 const live: ClientDriverSession[] = [];
@@ -384,6 +404,9 @@ afterEach(async () => {
 function rig(mode: string, sc: Scenario = {}, cfgOver: Partial<BcDevConfig> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pr479-client-run-"));
   dirs.push(dir);
+  let currentMode = mode;
+  const cmds: ClientDriverCommand[] = [];
+  const activateBodies: Body[] = [];
   const logFile = join(dir, "stdin.log");
   const driverLog = (): string[] => {
     try {
@@ -405,6 +428,7 @@ function rig(mode: string, sc: Scenario = {}, cfgOver: Partial<BcDevConfig> = {}
     driverAtCall[action] = [...(driverAtCall[action] ?? []), driverLog()];
     let answer: unknown;
     if (action === "ActivateForClient") {
+      activateBodies.push(body);
       answer = sc.activate ? sc.activate(body) : { claimed: true, generation: 7 };
     } else if (action === "DeactivateForClient") {
       deactivations += 1;
@@ -441,7 +465,11 @@ function rig(mode: string, sc: Scenario = {}, cfgOver: Partial<BcDevConfig> = {}
       verify: async () => {
         reads += 1;
         calls.push("HarnessInfo");
-        return { workDate: dates.shift() ?? BASE_DATE };
+        return {
+          workDate: dates.shift() ?? BASE_DATE,
+          serverGeneration: "g",
+          databaseId: sc.databaseId ?? "d",
+        };
       },
     },
   } as unknown as BcDevDeployment;
@@ -456,12 +484,13 @@ function rig(mode: string, sc: Scenario = {}, cfgOver: Partial<BcDevConfig> = {}
       clientConfigPath: "/nonexistent/lethal.config.json",
       clientDriverLauncher: (cmd) => {
         calls.push("driver-start");
+        cmds.push(cmd);
         const s = startClientDriver(
           {
             ...cmd,
             deadlines: { openSeconds: 20, stepSeconds: 20, testSeconds: 20, goSeconds: 20 },
           },
-          { argv: [process.execPath, FAKE, mode, logFile], marginMs: 0 },
+          { argv: [process.execPath, FAKE, currentMode, logFile], marginMs: 0 },
         );
         live.push(s);
         return s;
@@ -500,7 +529,19 @@ function rig(mode: string, sc: Scenario = {}, cfgOver: Partial<BcDevConfig> = {}
         }).filter(([, v]) => v !== undefined),
       ) as unknown as Req,
     );
-  return { backend, run, calls, driverLog, driverAtCall, reads: () => reads };
+  return {
+    backend,
+    run,
+    calls,
+    driverLog,
+    driverAtCall,
+    reads: () => reads,
+    cmds,
+    activateBodies,
+    setMode: (m: string) => {
+      currentMode = m;
+    },
+  };
 }
 
 const failing = (p: Promise<unknown>, r: ClientRunFailureReason) =>
@@ -760,6 +801,77 @@ describe("PR-479 round 3a: one client codeunit op", () => {
     await expect(none.run({ company: undefined })).rejects.toThrow(
       /needs the bcdev section's company/,
     );
+  });
+
+  // S1. The control accepts only `Last Completed Op Seq + 1`. Red: take the op number before the driver starts (the
+  // read-back refusal on the first op then burns 1, and the second op's Activate is refused for opSeq 2).
+  test("review S1: a read-back refusal burns no op number, so the next op's Activate is accepted", async () => {
+    let expected = 1;
+    const r = rig("wrong-company", {
+      activate: (b) => {
+        if (Number(b.opSeq) !== expected)
+          return { claimed: false, reason: `op-seq ${String(b.opSeq)}` };
+        expected += 1;
+        return { claimed: true, generation: 7 };
+      },
+    });
+    await failing(r.run(), "client-driver-failed");
+    expect(r.calls).not.toContain("ActivateForClient");
+    r.setMode("ok");
+    const res = await r.run();
+    expect(res.methods.length).toBe(2);
+    expect(r.activateBodies.map((b) => b.opSeq)).toEqual([1]);
+    expect(expected).toBe(2);
+  });
+
+  // S2. Red: kill the driver at once in `mapError` (no `waitForClosed`): the rejection comes before the close.
+  test("review S2: an error before Activate waits for the driver's close before the op ends", async () => {
+    const r = rig("error-slow-close");
+    await failing(r.run(), "client-driver-failed");
+    expect(r.driverLog().some((l) => l.includes("closed-sent"))).toBe(true);
+  });
+
+  // S3. Red: drop the try/catch around `session.close()`: the failure reads "before Activate" and is not in flight.
+  test("review S3: a failed close after the final Deactivate is client-close-failed, in flight, never 'before Activate'", async () => {
+    const e = await rig("close-dies")
+      .run()
+      .catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ClientRunFailure);
+    const f = e as ClientRunFailure;
+    expect(f.reason).toBe("client-close-failed");
+    expect(f.inFlight).toBe(true);
+    expect(f.message).not.toContain("before Activate");
+  });
+
+  // S4. Red: set CLIENT_RUN_BOUND_MS back to 300_000 (or drop `deadlines` from the command).
+  test("review S4: the control's bound is its 600 s cap and the driver's one total deadline is that minus 60 s", async () => {
+    const r = rig("ok");
+    await r.run();
+    expect(r.activateBodies[0]?.runBoundMs).toBe(600_000);
+    expect(r.cmds[0]?.deadlines?.testSeconds).toBe(540);
+  });
+
+  // N2 through the op. Red: drop `serverGeneration`/`databaseId` from the `checkClientRun` call in `runClientCodeunit`.
+  test("review N2: rows from another server generation, or another database than HarnessInfo's, fail", async () => {
+    await failing(
+      rig("ok", {
+        attestation: (b) => ({
+          read: true,
+          rows: [
+            row({ attemptId: String(b.attemptId), opSeq: Number(b.opSeq), serverGeneration: "x" }),
+            row({
+              attemptId: String(b.attemptId),
+              opSeq: Number(b.opSeq),
+              method: "M2",
+              testMethodRuns: 2,
+              serverGeneration: "x",
+            }),
+          ],
+        }),
+      }).run(),
+      "client-row-stale-server",
+    );
+    await failing(rig("ok", { databaseId: "other" }).run(), "client-row-stale-server");
   });
 
   test("a headless backend refuses a client op", async () => {
