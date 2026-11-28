@@ -113,6 +113,8 @@ export interface ClientCodeunitResult {
   readonly generation: number;
   /** The server's start WorkDate before and after the op; equal to the batch baseline's, or the run failed. */
   readonly workDates: { readonly before: string; readonly after: string };
+  /** The driver's read-back: false when the codeunit had more lines than page 130455's first viewport (amendment 7). */
+  readonly viewportComplete?: boolean;
 }
 
 export interface PageResult {

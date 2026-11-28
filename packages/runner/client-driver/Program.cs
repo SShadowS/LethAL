@@ -240,7 +240,7 @@ try
     }
     var problem = Pure.CheckFirstViewport(lines, declared, complete);
     if (problem != null) throw new DriverFailure(problem.Value.Name, problem.Value.Message, 3);
-    Out("readback", true, new { range = gotRange, runner = gotRunner, company = gotCompany, methods = lines.Select(l => l.Name) });
+    Out("readback", true, new { range = gotRange, runner = gotRunner, company = gotCompany, methods = lines.Select(l => l.Name), complete });
 
     // Ready: the TypeScript side Activates, then sends go:bind.
     Out("ready", true);

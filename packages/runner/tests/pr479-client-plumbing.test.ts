@@ -40,6 +40,7 @@ import {
   assertClientControlVersion,
   probeClientSession,
 } from "../src/client-mode";
+import { ClientRunFailure } from "../src/client-run";
 import type { ClientCodeunitResult } from "../src/client-run";
 import { ConfirmBackendNotBcdevError, ConfirmInputNotV3Error } from "../src/confirm";
 import {
@@ -518,6 +519,12 @@ class Stub implements ExecutionBackend {
     return this.runs.filter((r) => r.mutant === mutant).map((r) => r.method);
   }
   preflightError: Error | undefined;
+  /** Amendment 7: methods that fail in the no-mutant baseline run. */
+  readonly redAtBaseline = new Set<string>();
+  /** Amendment 7: what the driver's read-back says about the first viewport. */
+  viewportComplete: boolean | undefined;
+  /** Amendment 7: a mutant whose ops end `client-incomplete`. */
+  incompleteMutant: string | undefined;
   constructor(private readonly caps: BackendCapabilities) {}
   capabilities() {
     return this.caps;
@@ -546,11 +553,15 @@ class Stub implements ExecutionBackend {
     readonly mutantId: string;
   }): Promise<ClientCodeunitResult> {
     this.log.push(`run:${req.mutantId === "" ? "baseline" : req.mutantId}`);
+    if (req.mutantId !== "" && req.mutantId === this.incompleteMutant)
+      throw new ClientRunFailure("client-incomplete", "the rows differ from the declared methods");
     this.generation += 1;
     const generation = this.generation;
     const methods = req.declaredMethods.map((method, i) => {
       if (req.mutantId !== "") this.runs.push({ mutant: req.mutantId, method });
-      const fail = req.mutantId === "M0001" && method === "Z1";
+      const fail =
+        (req.mutantId === "M0001" && method === "Z1") ||
+        (req.mutantId === "" && this.redAtBaseline.has(method));
       return {
         method,
         outcome: fail ? ("fail" as const) : ("pass" as const),
@@ -579,6 +590,7 @@ class Stub implements ExecutionBackend {
       boundSessionId: 100 + generation,
       generation,
       workDates: { before: "2026-10-01", after: "2026-10-01" },
+      ...(this.viewportComplete !== undefined ? { viewportComplete: this.viewportComplete } : {}),
     };
   }
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
@@ -676,6 +688,59 @@ describe("PR-479: a client session", () => {
     for (const jargon of ["NST", "NumberSequence", "zombie", "TaskScheduler", "IsolatedStorage"])
       expect(i.meaning).not.toContain(jargon);
     expect(i.basis).toBe("R1170");
+  });
+
+  // Red: drop the two sentences from the caveat's meaning in report.ts.
+  test("amendment 7: the caveat says the killer is the first failing method and that a codeunit's methods share one isolation", () => {
+    const m = CAVEAT_INTERPRETATIONS["client-no-coverage"].meaning;
+    expect(m).toContain("first failing method in the codeunit's declared order");
+    expect(m).toContain("share one isolation");
+    expect(m).toContain("still there for the later ones");
+  });
+
+  // Red: drop `redNotRun` (the `notRun: true` on a red client baseline row) in scoreClientBatch.
+  test("amendment 7: a red client baseline method is in notRunAtBaseline, a green one is not, and the survivors carry the note", async () => {
+    const red = new Stub(CLIENT);
+    red.redAtBaseline.add("A1");
+    const r = await session(red);
+    expect(r.report.notRunAtBaseline).toEqual(["Alpha Tests.A1"]);
+    expect(r.report.survivorsBesideUnrunTests?.notRunTests).toBe(1);
+    expect(r.report.validity.caveats).toContain("survivors-beside-unrun-tests");
+    r.store.close();
+    const green = await session(new Stub(CLIENT), {}, { tag: "-green" });
+    expect(green.report.notRunAtBaseline).toEqual([]);
+    expect(green.report.validity.caveats).not.toContain("survivors-beside-unrun-tests");
+    green.store.close();
+  });
+
+  // Red: drop the `longCodeunits` count, or the `countIncomplete` call in `failed`.
+  test("amendment 7 item 4: one client-run-counts warning counts long codeunits and client-incomplete ops", async () => {
+    const counts = async (setup: (s: Stub) => void, tag: string) => {
+      const s = new Stub(CLIENT);
+      setup(s);
+      const events: RunEvent[] = [];
+      const r = await session(s, { emit: [(e) => events.push(e)] }, { tag });
+      r.store.close();
+      const w = events.filter((e) => e.type === "warning" && e.code === "client-run-counts");
+      expect(w.length).toBe(1);
+      return JSON.stringify(w[0]);
+    };
+    expect(
+      await counts((s) => {
+        s.viewportComplete = false;
+      }, "-long"),
+    ).toContain("2 of 2 test codeunit(s) were longer");
+    expect(
+      await counts((s) => {
+        s.viewportComplete = true;
+      }, "-short"),
+    ).toContain("0 of 2 test codeunit(s) were longer");
+    expect(
+      await counts((s) => {
+        s.incompleteMutant = "M0002";
+      }, "-inc"),
+    ).toContain("1 op(s) ended client-incomplete");
+    expect(await counts(() => {}, "-none")).toContain("0 op(s) ended client-incomplete");
   });
 
   test("the /cs probe and version gate run before anything is published; a refusal means deploy was never called", async () => {

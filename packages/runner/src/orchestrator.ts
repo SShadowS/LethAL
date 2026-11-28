@@ -7465,6 +7465,18 @@ async function scoreClientBatch(
   const unscored = scope.clientUnscored ?? new Set<string>();
   const codeunits = clientCodeunitsOf(input.tests);
   let workDate: string | undefined;
+  // Amendment 7 item 4: counted on every client batch, reported by one warning.
+  let longCodeunits = 0;
+  let incompleteOps = 0;
+  const emitCounts = (): void =>
+    emit({
+      type: "warning",
+      code: "client-run-counts",
+      message: `[lethal] client-run-counts: ${longCodeunits} of ${codeunits.length} test codeunit(s) were longer than page 130455's first viewport; ${incompleteOps} op(s) ended client-incomplete (PR-479).`,
+    });
+  const countIncomplete = (err: unknown): void => {
+    if (err instanceof ClientRunFailure && err.reason === "client-incomplete") incompleteOps += 1;
+  };
   const op = async (cu: ClientCodeunit, mutantId: string): Promise<ClientCodeunitResult> => {
     const r = await runOp({
       codeunitId: cu.codeunitId,
@@ -7498,14 +7510,18 @@ async function scoreClientBatch(
   const baselineStartedMs = monoNow();
   const baseline: BaselineRow[] = [];
   const cuBaselines: ClientCodeunitBaseline[] = [];
+  const redNotRun = new Set<string>();
   for (const cu of codeunits) {
     let r: ClientCodeunitResult;
     try {
       r = await op(cu, "");
     } catch (err) {
+      countIncomplete(err);
+      emitCounts();
       await quarantineIfInFlight(err, `in the baseline of codeunit ${cu.codeunitName}`);
       throw err;
     }
+    if (r.viewportComplete === false) longCodeunits += 1;
     const scored = new Set<string>();
     const red = new Set<string>();
     for (const ref of cu.refs) {
@@ -7516,6 +7532,9 @@ async function scoreClientBatch(
       if (!isUnscored && m.outcome === "pass") scored.add(ref.method);
       // N3: an unscored (TestPage) method that failed in the baseline is red too: it runs before a later killer.
       if (m.outcome === "fail") red.add(ref.method);
+      // Amendment 7: a scored method red at the baseline is left out of scoring, so it is a test not run, as on a
+      // headless run; `notRun` is what the report's `notRunAtBaseline` and the not-run survivors note read.
+      if (!isUnscored && m.outcome === "fail") redNotRun.add(testKeyOf(ref));
       const verdict: TestVerdict = {
         ref,
         outcome: isUnscored ? "skip" : m.outcome,
@@ -7551,13 +7570,17 @@ async function scoreClientBatch(
       name: qualifiedTestName(b.ref),
       outcome: b.verdict.outcome,
       classification: [],
+      ...(redNotRun.has(testKeyOf(b.ref)) ? { notRun: true as const } : {}),
       ...(b.verdict.failureMessage !== undefined
         ? { failureMessage: b.verdict.failureMessage }
         : {}),
     })),
   });
   const plan = input.select(baseline, new Set(baseline.map((b) => b.ref)));
-  if (plan === undefined) return "nothing-to-run";
+  if (plan === undefined) {
+    emitCounts();
+    return "nothing-to-run";
+  }
   const { mutants: toExecute, perMutantTests, coverageAttribution } = plan;
 
   // 6. per mutant
@@ -7578,6 +7601,7 @@ async function scoreClientBatch(
   const decide = async (m: MutantManifestEntry): Promise<ClientMutantDecision> => {
     const failed = async (err: unknown, what: string): Promise<ClientMutantDecision> => {
       if (!(err instanceof ClientRunFailure)) throw err;
+      countIncomplete(err);
       await quarantineIfInFlight(err, `${what} (mutant ${m.mutantId})`);
       if (err.reason === "client-activation-unknown")
         return {
@@ -7767,6 +7791,7 @@ async function scoreClientBatch(
       message: `[lethal] kill-after-red-method: ${killedAfterRed.length} kill(s) in a codeunit whose baseline-red method ran before the killer, so the killer ran after a failed method, as a headless run never runs it: ${killedAfterRed.join("; ")}. Do not compare these kills with headless ones (PR-479).`,
     });
   }
+  emitCounts();
   gateUnattestedBatch(scope, input, toExecute, perMutantTests, attestation);
   return "scored";
 }

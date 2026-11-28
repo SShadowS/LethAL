@@ -895,7 +895,10 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "This run used the experimental bcdev-client backend. Coverage is off on this backend: every mutant " +
       "ran every test codeunit, so a survivor may be a mutant no test reached. Do not read these survivors " +
       "as headless survivors. A mutant no test reached is `survived` here, where a headless run reports it " +
-      "`no-coverage`. Risks not measured in this build: a test that starts a second session of its own; a " +
+      "`no-coverage`. A verdict can also differ from a headless run's for two more reasons. First, the " +
+      "killing test is the first failing method in the codeunit's declared order. Second, a codeunit's " +
+      "methods share one isolation, so data an earlier method wrote is still there for the later ones. " +
+      "Risks not measured in this build: a test that starts a second session of its own; a " +
       "number sequence, which a test's rollback does not undo; stored secrets, a write made before a test " +
       "starts, and an event handler that raises an error; a background session or job started at login, " +
       "which can reach a mutant during a run; a handler for the test runner's own per-method events, which " +

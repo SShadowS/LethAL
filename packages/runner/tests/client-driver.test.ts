@@ -84,6 +84,18 @@ describe("client driver (fake sidecar)", () => {
     expect(goLines(log())).toEqual(['{"go":"bind"}', '{"go":"end"}', '{"go":"close"}']);
   });
 
+  // Red: drop `complete` from the fake's readback detail (and the real driver's).
+  test("amendment 7: the readback detail says whether the first viewport held the whole codeunit", async () => {
+    for (const [mode, complete] of [
+      ["ok", true],
+      ["long-codeunit", false],
+    ] as const) {
+      const { s } = start(mode);
+      await s.opened();
+      expect((await s.readback()).detail?.complete).toBe(complete);
+    }
+  });
+
   test("the command carries the config PATH and no login", async () => {
     const { s, log } = start("ok");
     await s.opened();

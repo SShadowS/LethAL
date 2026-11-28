@@ -1677,7 +1677,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
           : undefined,
       );
       await session.opened();
-      await session.readback();
+      const readback = await session.readback();
+      const complete = readback.detail?.complete;
       await session.ready();
       this.attemptSeq += 1;
       this.nextOpSeq += 1;
@@ -1788,6 +1789,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         boundSessionId,
         generation,
         workDates: { before, after },
+        ...(typeof complete === "boolean" ? { viewportComplete: complete } : {}),
       };
     } catch (err) {
       if (session !== undefined && !closed) await session.abort();

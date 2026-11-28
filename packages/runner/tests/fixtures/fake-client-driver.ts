@@ -75,7 +75,7 @@ if (mode === "missing-row")
   fail("methods-mismatch", "page lines [M1] differ from declared [M1, M2]", 3);
 if (mode === "missing-control")
   fail("control-missing", "control 'CurrentCompanyName' not on 'Test Tool'", 3);
-out("readback", true, { methods: ["M1", "M2"] });
+out("readback", true, { methods: ["M1", "M2"], complete: mode !== "long-codeunit" });
 out("ready", true);
 await waitGo("bind");
 if (mode === "bind-refused") fail("bind-refused", "Bound=No, Reason=not registered", 3);
