@@ -73,9 +73,16 @@ if (mode === "bind-refused") fail("bind-refused", "Bound=No, Reason=not register
 out("bound", true, { bound: "Yes", reason: "" });
 if (mode === "stall-before-ran") await Bun.sleep(60_000);
 if (mode === "driver-deadline") fail("deadline", "no 'All tests executed.' within 1s", 4);
-out("ran", true, {
-  results: ['{"name":"M1","result":"Success"}', '{"name":"M2","result":"Success"}'],
-});
+const M1 = '{"name":"M1","result":"Success"}';
+const M2 = '{"name":"M2","result":"Success"}';
+const M2_FAIL = '{"name":"M2","result":"Failure","message":"Assert.AreEqual failed"}';
+const ON_RUN = '{"name":"OnRun","result":"Success"}';
+const results: Record<string, string[]> = {
+  "fail-m2": [M1, M2_FAIL],
+  "empty-results": [],
+  onrun: [ON_RUN, M1, M2],
+};
+out("ran", true, { results: results[mode] ?? [M1, M2] });
 await waitGo("end");
 out("ended", true, { ended: "Yes", reason: "" });
 if (mode === "chatty-after-end") {

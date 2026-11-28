@@ -38,13 +38,20 @@ import type {
 } from "./backend";
 import { BCDEV_CLIENT } from "./backend";
 import { BcAnswerUnreadError, BcRedirectRefusedError, bcFetch, withDeadline } from "./bc-fetch";
-import type { ClientDriverLauncher } from "./client-driver";
+import { type ClientDriverLauncher, startClientDriver } from "./client-driver";
 import {
   BcdevClientNotBuiltError,
+  ClientModeRefusedError,
   type ClientSessionProbe,
   assertClientControlVersion,
   probeClientSession,
 } from "./client-mode";
+import {
+  type ClientCodeunitResult,
+  ClientRunFailure,
+  checkClientRun,
+  parsePageResults,
+} from "./client-run";
 import { monoNow } from "./clock";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
@@ -202,9 +209,16 @@ export interface BcDevConfig {
   readonly clientSessionProbe?: ClientSessionProbe;
   /** PR-479: the sidecar's path (config `bcdev.clientDriverPath`). Round 3's run path reads it. */
   readonly clientDriverPath?: string;
-  /** PR-479: test seam for round 3: starts a client driver. Default: `startClientDriver`. Unused in round 2. */
+  /** PR-479: test seam: starts a client driver. Default: `startClientDriver`. */
   readonly clientDriverLauncher?: ClientDriverLauncher;
+  /** PR-479: the lethal config FILE the driver reads its login from (a path, never the login). */
+  readonly clientConfigPath?: string;
 }
+
+/** PR-479: how long the control app lets a client op stay bound (the driver's test deadline is the same 300 s). */
+const CLIENT_RUN_BOUND_MS = 300_000;
+const CLIENT_ACTIVATE_TIMEOUT_MS = 60_000;
+const CLIENT_CALL_TIMEOUT_MS = 30_000;
 
 /**
  * The mode a session takes when config does not say. `"fenced"` since the R58 rollout (spec
@@ -1371,7 +1385,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
   /** R734 A1: refuse a mutant the deployed manifest does not hold (one removed after it broke the
    *  compile). `activate` stays bookkeeping that never throws; the refusal fires before any send. */
   private assertPendingDeployed(): void {
-    const id = this.pendingMutantId;
+    this.assertDeployed(this.pendingMutantId);
+  }
+
+  private assertDeployed(id: string | null): void {
     if (id === null || id === "" || this.deployedIds === undefined) return;
     const unknown = this.deployedIds.size > 0 && !this.deployedIds.has(id);
     if (unknown || this.isolatedIds?.has(id) === true) {
@@ -1514,6 +1531,207 @@ export class BcDevMcpBackend implements ExecutionBackend {
       };
     }
     return { ...result, verdicts: checked, fencedOp };
+  }
+
+  private clientOpInFlight = false;
+
+  /**
+   * PR-479 (479a) round 3a: ONE client codeunit op, with every row check. Returns a typed result; it decides no kill
+   * and no survivor (round 3b does, from a RETURNED result only). Any failed check throws a named `ClientRunFailure`.
+   *
+   * The order (amendment 1 item 1, amendment 3): WorkDate read; driver started, `opened`, `readback`, `ready`;
+   * Activate (a lost answer is `client-activation-unknown`); bind; ran; Deactivate before End (must answer
+   * `client-session-alive`, whose `sessionId` is the BOUND id); End; Deactivate (must answer `deactivated`); close;
+   * ReadClientAttestation; WorkDate read again. No second op starts until close has returned (amendment 2 item 2).
+   * On a failure the driver is closed WITHOUT End: the op, if it was bound, stays in flight for recovery (an NST
+   * restart plus ForceResetLease); nothing here tries to end it.
+   */
+  async runClientCodeunit(req: {
+    readonly codeunitId: number;
+    /** The manifest's declared method names, in declared order. */
+    readonly declaredMethods: readonly string[];
+    /** "" for a baseline or a no-mutant confirmation. */
+    readonly mutantId: string;
+    readonly baselineWorkDate: string;
+    readonly company: string;
+  }): Promise<ClientCodeunitResult> {
+    if (this.cfg.clientMode !== true) {
+      throw new Error("BcDevMcpBackend: runClientCodeunit is for the bcdev-client backend only");
+    }
+    if (this.cfg.stopHungSessions === true) {
+      throw new ClientModeRefusedError(
+        "stop-hung-sessions",
+        "the control app's stop refuses a client op; a stale config's stopHungSessions: true is not honoured",
+      );
+    }
+    const transport = this.runMutantTransport;
+    if (!transport) {
+      throw new Error(
+        "BcDevMcpBackend: RunMutant transport not configured — deploy() must run (and succeed) first",
+      );
+    }
+    const lease = this.sessionLease;
+    if (!lease) {
+      throw new Error(
+        "BcDevMcpBackend: no lease bound — the orchestrator must call setLease() before runClientCodeunit()",
+      );
+    }
+    const { webClientBaseUrl, clientConfigPath } = this.cfg;
+    if (webClientBaseUrl === undefined || clientConfigPath === undefined) {
+      throw new Error(
+        "BcDevMcpBackend: a client run needs bcdev.webClientBaseUrl and the config file's path (clientConfigPath)",
+      );
+    }
+    this.assertDeployed(req.mutantId);
+    if (this.clientOpInFlight) {
+      throw new Error(
+        "BcDevMcpBackend: a client op is still in flight; no next op starts until its close has returned (amendment 2)",
+      );
+    }
+    this.clientOpInFlight = true;
+    let session: ReturnType<ClientDriverLauncher> | undefined;
+    let closed = false;
+    try {
+      const before = await this.clientWorkDate(req.baselineWorkDate);
+      this.attemptSeq += 1;
+      const opSeq = this.nextOpSeq;
+      this.nextOpSeq += 1;
+      const attemptId = `a${this.attemptSeq}`;
+      const fenceLease = {
+        epoch: lease.epoch,
+        token: lease.token,
+        serverGeneration: lease.serverGeneration,
+        opSeq,
+      };
+      const launch = this.cfg.clientDriverLauncher ?? startClientDriver;
+      session = launch(
+        {
+          configPath: clientConfigPath,
+          webClientBaseUrl,
+          company: req.company,
+          codeunitId: req.codeunitId,
+          methods: req.declaredMethods,
+          attemptId,
+          opSeq,
+          ...(this.cfg.tenant !== undefined ? { tenant: this.cfg.tenant } : {}),
+        },
+        this.cfg.clientDriverPath !== undefined
+          ? { clientDriverPath: this.cfg.clientDriverPath }
+          : undefined,
+      );
+      await session.opened();
+      await session.readback();
+      await session.ready();
+
+      let generation: number;
+      try {
+        const a = await transport.activateForClient({
+          attemptId,
+          lease: fenceLease,
+          mutantId: req.mutantId,
+          runBoundMs: CLIENT_RUN_BOUND_MS,
+          timeoutMs: CLIENT_ACTIVATE_TIMEOUT_MS,
+        });
+        if (!a.claimed) {
+          throw new ClientRunFailure(
+            "client-activation-refused",
+            `ActivateForClient refused: ${a.reason}`,
+          );
+        }
+        generation = a.generation;
+      } catch (err) {
+        if (err instanceof ClientRunFailure) throw err;
+        throw new ClientRunFailure(
+          "client-activation-unknown",
+          `no usable answer from ActivateForClient (${describeThrown(err)}); the op may be active and is left for recovery`,
+        );
+      }
+
+      await session.bind();
+      const ran = await session.ran();
+      const pageResults = parsePageResults(ran.detail);
+
+      const alive = await transport.deactivateForClient({
+        attemptId,
+        lease: fenceLease,
+        timeoutMs: CLIENT_CALL_TIMEOUT_MS,
+      });
+      if (
+        alive.deactivated ||
+        alive.reason !== "client-session-alive" ||
+        alive.sessionId === undefined
+      ) {
+        throw new ClientRunFailure(
+          "client-deactivate-before-end",
+          `expected client-session-alive with the bound session id, got ${JSON.stringify(alive)}`,
+        );
+      }
+      const boundSessionId = alive.sessionId;
+
+      await session.end();
+      const done = await transport.deactivateForClient({
+        attemptId,
+        lease: fenceLease,
+        timeoutMs: CLIENT_CALL_TIMEOUT_MS,
+      });
+      if (!done.deactivated) {
+        throw new ClientRunFailure(
+          "client-final-deactivate",
+          `expected deactivated after End, got ${JSON.stringify(done)}`,
+        );
+      }
+
+      await session.close();
+      closed = true;
+
+      const att = await transport.readClientAttestation({
+        attemptId,
+        lease: fenceLease,
+        timeoutMs: CLIENT_CALL_TIMEOUT_MS,
+      });
+      if (!att.read) {
+        throw new ClientRunFailure(
+          "client-attestation-unreadable",
+          `ReadClientAttestation: ${att.reason}`,
+        );
+      }
+      const after = await this.clientWorkDate(req.baselineWorkDate);
+      const methods = checkClientRun({
+        codeunitId: req.codeunitId,
+        declared: req.declaredMethods,
+        pageResults,
+        rows: att.rows,
+        attemptId,
+        opSeq,
+        boundSessionId,
+        generation,
+        mutantId: req.mutantId,
+      });
+      return {
+        codeunitId: req.codeunitId,
+        methods,
+        boundSessionId,
+        generation,
+        workDates: { before, after },
+      };
+    } catch (err) {
+      if (session !== undefined && !closed) await session.abort();
+      throw err;
+    } finally {
+      this.clientOpInFlight = false;
+    }
+  }
+
+  /** The server's start WorkDate now (HarnessInfo); a difference from the batch baseline's is `workdate-changed`. */
+  private async clientWorkDate(baseline: string): Promise<string> {
+    const { workDate } = await this.verifierFor().verify();
+    if (workDate !== baseline) {
+      throw new ClientRunFailure(
+        "workdate-changed",
+        `HarnessInfo reports ${workDate}, the batch baseline ran on ${baseline}`,
+      );
+    }
+    return workDate;
   }
 
   private async runViaTransport(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {

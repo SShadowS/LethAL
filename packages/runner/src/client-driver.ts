@@ -322,6 +322,12 @@ export class ClientDriverSession {
     return this.expect("opened", this.t.open);
   }
 
+  /** Page 130455's read-back (codeunit, methods, Run flags, runner, company) matched; no op exists yet. */
+  readback(): Promise<ClientDriverStep> {
+    if (this.lastStep < 0) throw new ClientDriverSequenceError("readback() before opened()");
+    return this.expect("readback", this.t.step * 4);
+  }
+
   /**
    * The page 130455 set-up and every read-back passed, with no op bound yet (a refusal there throws here and wedges nothing).
    * The caller Activates next, then calls bind().

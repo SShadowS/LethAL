@@ -3,6 +3,14 @@ import { appendFileSync } from "node:fs";
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { StopEvidence, StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
 import { bcFetch, bounded } from "./bc-fetch";
+import {
+  type ActivateForClientAnswer,
+  type DeactivateForClientAnswer,
+  type ReadClientAttestationAnswer,
+  parseActivateForClient,
+  parseDeactivateForClient,
+  parseReadClientAttestation,
+} from "./client-transport";
 import { monoNow as clockMono } from "./clock";
 import { describeThrown } from "./describe-error";
 import { UnfilteredExtensionsQueryError } from "./harness";
@@ -998,6 +1006,73 @@ export class RunMutantTransport {
       ...(typeof rowIndex === "number" ? { rowIndex } : {}),
       ...(typeof rowState === "string" ? { rowState } : {}),
     };
+  }
+
+  private clientFence(attemptId: string, lease: LeaseTuple & { readonly opSeq: number }) {
+    assertAttemptId(attemptId);
+    return {
+      epoch: lease.epoch,
+      token: lease.token,
+      generation: lease.serverGeneration,
+      attemptId,
+      opSeq: lease.opSeq,
+    };
+  }
+
+  /**
+   * PR-479: `ActivateForClient` for this artifact's target. Fenced; `mutantId` "" is a baseline or a no-mutant
+   * confirmation. A refusal is an ANSWER (`claimed: false`); a throw means the answer is unknown.
+   */
+  async activateForClient(req: {
+    readonly attemptId: string;
+    readonly lease: LeaseTuple & { readonly opSeq: number };
+    readonly mutantId: string;
+    readonly runBoundMs: number;
+    readonly timeoutMs: number;
+  }): Promise<ActivateForClientAnswer> {
+    return parseActivateForClient(
+      await this.postAction(
+        "ActivateForClient",
+        {
+          ...this.clientFence(req.attemptId, req.lease),
+          targetAppId: this.targetAppId,
+          artifactId: this.artifactId,
+          mutantId: req.mutantId,
+          runBoundMs: req.runBoundMs,
+        },
+        req.timeoutMs,
+      ),
+    );
+  }
+
+  /** PR-479: `DeactivateForClient` (fenced). Before End it must answer `client-session-alive` with the bound id. */
+  async deactivateForClient(req: {
+    readonly attemptId: string;
+    readonly lease: LeaseTuple & { readonly opSeq: number };
+    readonly timeoutMs: number;
+  }): Promise<DeactivateForClientAnswer> {
+    return parseDeactivateForClient(
+      await this.postAction(
+        "DeactivateForClient",
+        this.clientFence(req.attemptId, req.lease),
+        req.timeoutMs,
+      ),
+    );
+  }
+
+  /** PR-479: `ReadClientAttestation` (fenced, read-only): every row of this op. */
+  async readClientAttestation(req: {
+    readonly attemptId: string;
+    readonly lease: LeaseTuple & { readonly opSeq: number };
+    readonly timeoutMs: number;
+  }): Promise<ReadClientAttestationAnswer> {
+    return parseReadClientAttestation(
+      await this.postAction(
+        "ReadClientAttestation",
+        this.clientFence(req.attemptId, req.lease),
+        req.timeoutMs,
+      ),
+    );
   }
 
   /** One POST to a control-app action whose `value` is a JSON object; throws on any non-2xx. */
