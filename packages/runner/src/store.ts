@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { statSync } from "node:fs";
 import { IDENTITY_SCHEME, coarseIdentityTupleOf } from "@lethal/schemata";
+import { BCDEV_CLIENT } from "./backend";
 import type { CoverageMode, StopEvidence, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
@@ -414,6 +415,18 @@ export function backendBuildRefusal(
   if (run.backend === RETIRED_V2_BACKEND) return v2RetiredRun(run.id);
   const v3 = "al-runner-v3";
   if (run.backend !== v3 && session?.backend !== v3) {
+    // PR-479: a bcdev-client run measures with no coverage, one session per codeunit, so its verdicts
+    // are never lent to or from another backend. With no session named, a client run lends nothing.
+    if (run.backend === BCDEV_CLIENT && session === undefined) {
+      return `run ${run.id} ran on ${BCDEV_CLIENT} and this caller named no session backend, so nothing of it is lent (PR-479)`;
+    }
+    if (
+      session !== undefined &&
+      run.backend !== session.backend &&
+      (run.backend === BCDEV_CLIENT || session.backend === BCDEV_CLIENT)
+    ) {
+      return `run ${run.id} ran on ${run.backend} and this session runs ${session.backend}; a ${BCDEV_CLIENT} verdict is lent only within ${BCDEV_CLIENT} (PR-479)`;
+    }
     // PR-472: a `--no-kill-ledger` run's survivor may be a kill under the default order, so the two
     // modes never lend to each other, either way. A default run records no build (NULL), as before.
     if (
@@ -2292,6 +2305,9 @@ export class ResultsStore {
    * baseline recorded before a server restart describes apps and data that may be gone, and a test
    * green then but red now would be sent as covering and score a false kill. `=` never matches
    * NULL, so a run recorded before R680 lends none. Absent (no server), no filter.
+   * PR-479: and a bcdev-client session lends only from a bcdev-client run, and no other session from
+   * one: `sessionBackend` is this session's backend name, and the client-ness of the two must agree.
+   * (Other pairs are `runMayLend`'s to refuse.) Absent, no filter: only unit callers omit it.
    */
   findBaselineSnapshot(
     batchHash: string,
@@ -2299,6 +2315,7 @@ export class ResultsStore {
     testAppDeps: string,
     coverageMode: CoverageMode,
     serverGeneration?: string,
+    sessionBackend?: string,
   ): BaselineSnapshot | null {
     const row = this.db
       .query(
@@ -2310,6 +2327,7 @@ export class ResultsStore {
              AND test_app_proven = 1
              AND test_app_deps = ?5
              AND (?6 IS NULL OR server_generation = ?6)
+             AND (?8 IS NULL OR ((COALESCE(backend, '') = ?9) = (?8 = ?9)))
              AND COALESCE(test_app_hash, '') NOT LIKE '%|pending')
            AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
            AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
@@ -2324,6 +2342,8 @@ export class ResultsStore {
         testAppDeps,
         serverGeneration ?? null,
         SNAPSHOT_PAYLOAD_FORMAT,
+        sessionBackend ?? null,
+        BCDEV_CLIENT,
       ) as {
       run_id: number;
       batch_index: number;

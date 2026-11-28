@@ -60,7 +60,10 @@ export function validateCiSessionKind(
 export function backendSessionKind(backend: {
   readonly bcdev: boolean;
   readonly noClient?: boolean;
+  /** PR-479: bcdev-client runs its tests in a `/cs` client session. */
+  readonly client?: boolean;
 }): SessionKind {
+  if (backend.client === true) return "client";
   return backend.bcdev || backend.noClient === true ? "headless" : "client";
 }
 

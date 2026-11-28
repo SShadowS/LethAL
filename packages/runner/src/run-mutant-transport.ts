@@ -6,7 +6,7 @@ import { bcFetch, bounded } from "./bc-fetch";
 import { monoNow as clockMono } from "./clock";
 import { describeThrown } from "./describe-error";
 import { UnfilteredExtensionsQueryError } from "./harness";
-import { assertAttemptId, parseOperationStatus } from "./lease";
+import { assertAttemptId, isRunOpKind, parseOperationStatus } from "./lease";
 import type { LeaseTuple, OperationStatus } from "./lease";
 import { GROUP_SUITE_UNRESOLVED_HEAD, runMutantLineCountMessage } from "./stale-test-app";
 
@@ -1333,7 +1333,7 @@ export class RunMutantTransport {
         if (settled) return;
         const row = status.opProgress;
         const ours =
-          status.opKind === "run" &&
+          isRunOpKind(status.opKind) &&
           status.opAttemptId === attemptId &&
           status.opSeq === lease.opSeq &&
           row !== undefined &&

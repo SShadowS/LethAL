@@ -98,6 +98,7 @@ import {
 import type { CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
+  BackendKind,
   CarryWalkResult,
   CoverageMode,
   ExecutionBackend,
@@ -112,7 +113,9 @@ import type {
 } from "./backend";
 import {
   STOP_HUNG_SESSIONS_OFF_TEXT,
+  isBcServer,
   isBcdev,
+  isBcdevClient,
   isLocalRunner,
   isUnread,
   stopIsRetrySafe,
@@ -138,6 +141,11 @@ import {
   isolateBreakingMutants,
   parseAlcErrors,
 } from "./bisect";
+import {
+  ClientModeRefusedError,
+  ClientNeverMixedError,
+  ClientSessionUnavailableError,
+} from "./client-mode";
 import { createSuspendWatch, monoNow, suspendMessage } from "./clock";
 import {
   type ClosedWorldResult,
@@ -224,6 +232,7 @@ import {
   LeaseUnavailableError,
   MAX_ATTEMPT_ID_LENGTH,
   MAX_TTL_SECONDS,
+  isRunOpKind,
 } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { discoveredRelPaths, isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
@@ -4431,7 +4440,7 @@ export class LeaseSession {
     // refused outright rather than allowed to match an equally-empty marker.
     const ours =
       op.attemptId !== "" &&
-      status.opKind === "run" &&
+      isRunOpKind(status.opKind) &&
       status.opAttemptId === op.attemptId &&
       status.opSeq === op.opSeq;
     if (ours)
@@ -4459,7 +4468,11 @@ export class LeaseSession {
       return "unresolved";
     }
     if (again.completed || op.opSeq <= again.lastCompletedOpSeq) return "completed";
-    if (again.opKind === "run" && again.opAttemptId === op.attemptId && again.opSeq === op.opSeq) {
+    if (
+      isRunOpKind(again.opKind) &&
+      again.opAttemptId === op.attemptId &&
+      again.opSeq === op.opSeq
+    ) {
       return (await this.pollUntilOpClears(op.opSeq, attempts)) ? "completed" : "unresolved";
     }
     return neverClaimed(again) ? "not-started" : "unresolved";
@@ -4499,7 +4512,7 @@ export class LeaseSession {
     }
     const originalRunning =
       original.attemptId !== "" &&
-      status.opKind === "run" &&
+      isRunOpKind(status.opKind) &&
       status.opAttemptId === original.attemptId &&
       status.opSeq === original.opSeq;
     if (!originalRunning) return "genuine";
@@ -5334,6 +5347,15 @@ function resolveResume(
     if (row.backend === RETIRED_V2_BACKEND) {
       throw new AlRunnerV2RetiredError(v2RetiredRun(row.id));
     }
+    if (
+      row.backend !== backendName &&
+      (isBcdevClient(row.backend as BackendKind) || isBcdevClient(backendName as BackendKind))
+    ) {
+      throw new ClientNeverMixedError(
+        `--resume-run ${cfg.resume}`,
+        `run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName}`,
+      );
+    }
     if (row.backend !== backendName) {
       throw new Error(
         `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (al-runner-v3 is not authoritative)`,
@@ -5796,7 +5818,7 @@ function assertLeaseConfigured(
   backend: ExecutionBackend,
   who: string,
 ): void {
-  if (isBcdev(caps.kind) && lease === undefined && isLeaseBindable(backend)) {
+  if (isBcServer(caps.kind) && lease === undefined && isLeaseBindable(backend)) {
     throw new Error(
       `${who}: this authoritative backend is lease-bindable (it exposes setLease) but no lease is configured — every RunMutant would run unfenced, and a lost lease could not be scoped to the batch whose verdicts it invalidates (design §6). Set SessionConfig.lease.`,
     );
@@ -5817,7 +5839,7 @@ async function consultQuarantine(a: {
   let resourceKey: string | undefined;
   let quarantineStore: QuarantineStore | undefined;
   if (
-    isBcdev(a.caps.kind) &&
+    isBcServer(a.caps.kind) &&
     a.resourceServer !== undefined &&
     a.resourceServerInstance !== undefined
   ) {
@@ -5833,7 +5855,7 @@ async function consultQuarantine(a: {
         `tier ${resourceKey} is quarantined (${existing.opKind}: ${existing.detail}, recorded ${existing.recordedAtIso}, generation ${existing.generation}). Recycle the tier and run 'lethal clear-quarantine' to clear it.`,
       );
     }
-  } else if (isBcdev(a.caps.kind)) {
+  } else if (isBcServer(a.caps.kind)) {
     // Safety net (Task 13 folded fix): an authoritative backend with NO tier identity means the
     // quarantine consult above is silently skipped — no prior strand is detected, and no NEW
     // strand can be durably recorded (see `quarantineInFlight`'s "no store" note). That is
@@ -6717,6 +6739,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
               provenTestApp.deps,
               caps.coverage,
               serverGeneration,
+              caps.kind, // PR-479: a bcdev-client baseline is never lent to another backend, nor the other way
             )
           : null;
       reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
@@ -7030,7 +7053,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         classification,
         // PR-387: the body never ran (an infrastructure operation row, a hub row, a line-count answer).
         // bcdev only: on v3 an `operation` row (e.g. completed-accepted) DID run.
-        ...(isBcdev(caps.kind) &&
+        ...(isBcServer(caps.kind) &&
         (b.verdict.operation !== undefined || b.verdict.bodyNeverRan === true || bodyNeverRan)
           ? { notRun: true as const }
           : {}),
@@ -7337,7 +7360,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       (!budgetStopped ||
         outcomes.some((o) => o.batchIndex === batchIdx && o.mutant.mutantId === m.mutantId)),
   );
-  if (isBcdev(caps.kind) && contributed && !attestation.clean) {
+  if (isBcServer(caps.kind) && contributed && !attestation.clean) {
     const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${input.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
     emit({ type: "batch-invalidated", batchIndex: batchIdx, reason: note });
     // R47: and durably, in the store. `--resume` reads a run's stored verdicts by
@@ -7439,6 +7462,34 @@ async function runSessionBody(
   // PR-472: refused by name before any run on a backend that never re-walks.
   if (cfg.killLedger === false && !isBcdev(caps.kind))
     throw new KillLedgerFlagBackendError(caps.kind);
+  // PR-479: a bcdev-client run is never mixed with another backend's runs, and switches no method off. Each is
+  // refused by name before any backend call.
+  if (isBcdevClient(caps.kind)) {
+    if (cfg.confirm !== undefined) {
+      throw new ClientNeverMixedError(
+        "--confirm-from",
+        "a confirm run re-measures an al-runner-v3 report's survivors on headless BC",
+      );
+    }
+    if (cfg.resume !== undefined) {
+      throw new ClientNeverMixedError(
+        cfg.resume === "last" ? "--resume" : `--resume-run ${String(cfg.resume)}`,
+        "a bcdev-client run cannot be resumed, and cannot resume a run",
+      );
+    }
+    if (cfg.excludeTests !== undefined && cfg.excludeTests.length > 0) {
+      throw new ClientModeRefusedError(
+        "exclude-test",
+        "every mutant runs every test codeunit as its full declared run, and no method is switched off",
+      );
+    }
+    if (Math.floor(cfg.workers ?? 1) > 1) {
+      throw new ClientModeRefusedError(
+        "workers",
+        "one client session at a time against one server tier",
+      );
+    }
+  }
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   if (
     cfg.timeBudgetSeconds !== undefined &&
@@ -7642,6 +7693,12 @@ async function runSessionBody(
       `backend not ready: ${status.details} — run \`lethal doctor --config <path>\` for a full read-only diagnosis before retrying.`,
     );
   }
+  // PR-479: the `/cs` probe and the control version of a bcdev-client run, before anything is published.
+  if (isBcdevClient(caps.kind)) {
+    if (cfg.backend.clientPreflight === undefined)
+      throw new ClientSessionUnavailableError("this backend cannot probe /cs");
+    await cfg.backend.clientPreflight();
+  }
 
   // R377: the backend the build's symbols are decided for, once, and the same value reaches
   // generation below. R586 (plan r2 §9): v3 runs only what LethAL's alc proof compiled, and alc
@@ -7649,7 +7706,10 @@ async function runSessionBody(
   // `predefined-symbols` fact, measured in the backend's `status()` (a `diverged` fact refuses the
   // session). R654 removed the .NET al-runner's provisioning, pin, selector and symbol probes here.
   const buildBackend: BuildBackend =
-    caps.kind === "al-runner-v3" ? { kind: "al-runner-v3" } : { kind: "bcdev" };
+    caps.kind === "al-runner-v3"
+      ? { kind: "al-runner-v3" }
+      : // PR-479: the collapse is gone; a client run is stored and fingerprinted under its own name.
+        { kind: caps.kind };
 
   // NOTE: a prior preflight here scanned [Test] codeunit sources for
   // `TestIsolation = Function;` and aborted session-isolation backends when
@@ -7741,7 +7801,7 @@ async function runSessionBody(
   }
   // PR-212 (R1113): on a BC backend, the test methods that write the Company table are left out by name, through
   // the same records as `--exclude-test`, unless `--keep-company-tests`. al-runner-v3 opens no BC tier: untouched.
-  const companyWrites = isBcdev(caps.kind) ? companyWriteMethods(testModel, tests) : [];
+  const companyWrites = isBcServer(caps.kind) ? companyWriteMethods(testModel, tests) : [];
   const companyLeftOut = cfg.keepCompanyTests === true ? [] : companyWrites;
   const companyRecords: { test: string; file: string; reason: "company-write" }[] = [];
   if (companyLeftOut.length > 0) {
@@ -7870,7 +7930,7 @@ async function runSessionBody(
   // company-write leave-out) that can change with the session kind. Unset `ciSessionKind` with one of them is refused here,
   // before the TestPage scan, the lease work and every baseline or mutant run. The bcdev scan is H only: its TestPage tests
   // are refused and labelled already.
-  const sessionKindSensitive = sessionKindSensitiveTests(testModel, tests, !isBcdev(caps.kind));
+  const sessionKindSensitive = sessionKindSensitiveTests(testModel, tests, !isBcServer(caps.kind));
   if (sessionKindSensitive.length > 0) {
     if (cfg.ciSessionKind === undefined)
       throw new SessionKindUnsetError(sessionKindSensitive, cfg.configPath);
@@ -7879,6 +7939,7 @@ async function runSessionBody(
       tests: sessionKindSensitive,
       backendSessionKind: backendSessionKind({
         bcdev: isBcdev(caps.kind),
+        client: isBcdevClient(caps.kind),
         noClient: cfg.backend.noClient === true,
       }),
       ciSessionKind: cfg.ciSessionKind,
@@ -7892,7 +7953,7 @@ async function runSessionBody(
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
   // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
-  const testPageRefused: ReadonlyMap<string, string> = isBcdev(caps.kind)
+  const testPageRefused: ReadonlyMap<string, string> = isBcServer(caps.kind)
     ? scanTestPageModel(testModel, tests)
     : new Map();
   const testPageRefusedNames = tests
@@ -7911,7 +7972,7 @@ async function runSessionBody(
   // PR-36 (R1048, upstream #8160): on al-runner-v3 only (on BC the refusal is BC's own, which R35's
   // `tests-permission-refused` names), the tests al-runner passes that BC would refuse under the Restrictive
   // default. A label for the report; nothing here changes what runs or how it is scored.
-  if (!isBcdev(caps.kind) && (await testAppInstallsPermissionsMock(cfg.testDir))) {
+  if (!isBcServer(caps.kind) && (await testAppInstallsPermissionsMock(cfg.testDir))) {
     const restrictive = restrictiveDefaultAtRisk(testModel, tests);
     if (restrictive.length > 0)
       emit({ type: "tests-restrictive-default-at-risk", tests: restrictive });
@@ -8263,7 +8324,7 @@ async function runSessionBody(
     // own app.json version instead of the placeholder when the caller didn't already supply one.
     appVersion:
       cfg.appVersion ??
-      (isBcdev(caps.kind) ? undefined : readAppVersionBestEffort(sourceSnapshot)) ??
+      (isBcServer(caps.kind) ? undefined : readAppVersionBestEffort(sourceSnapshot)) ??
       "0.0.0.0",
   });
   // stream-started: the header event, carrying the run's own id. Emitted HERE, immediately after
@@ -8364,7 +8425,7 @@ async function runSessionBody(
   });
   // R826: a warning only, once per session, and only for a BC tier: it changes no deploy decision.
   // R875: from the real emitted text; the list also names a batch's suspect in a quarantine.
-  const largeMethods = isBcdev(caps.kind)
+  const largeMethods = isBcServer(caps.kind)
     ? largeMethodsOf(generatedFiles, (name) => operatorTiers.get(name))
     : [];
   const foldWarning = largeMethodWarning(largeMethods);
@@ -8469,7 +8530,7 @@ async function runSessionBody(
   // R497: on bcdev the BC shape rule under this build's arms admits the measured wrapped shapes,
   // and a key two compiled files declare is refused there too.
   const bcArms = new Map(
-    isBcdev(backendName)
+    isBcServer(backendName)
       ? allFiles.map((f) => [f.root, evaluateArms(f.root, f.source, buildSymbols)] as const)
       : [],
   );
@@ -8479,7 +8540,7 @@ async function runSessionBody(
     ...coverageRefusedObjects(
       allFiles,
       wrappedRule,
-      isBcdev(backendName)
+      isBcServer(backendName)
         ? (f) => bcArms.get(f.root) ?? evaluateArms(f.root, f.source, buildSymbols)
         : undefined,
     ),
@@ -8591,7 +8652,7 @@ async function runSessionBody(
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
   // PR-461 (R826): a BC call bears only so many guard checks; refused by name before any publish. On
   // the deployed set (after --confirm narrows it), and before R48's refusal: it is the more specific.
-  if (isBcdev(caps.kind)) assertMethodGuards(allFiles, (name) => operatorTiers.get(name));
+  if (isBcServer(caps.kind)) assertMethodGuards(allFiles, (name) => operatorTiers.get(name));
   // R48: refuse an unscoped run on a large project BEFORE anything is published. See
   // `LARGE_RUN_MUTANT_THRESHOLD` for why this refuses rather than warns.
   assertRunSizeAcceptable({
@@ -8656,9 +8717,9 @@ async function runSessionBody(
   // RunMutant calls, so two workers racing activate()/run() against the same container could
   // silently cross-attribute a verdict to the wrong mutant. Cross-process safety (a real lease)
   // is 5C-B; for now this must fail loudly rather than let it happen.
-  if (isBcdev(caps.kind) && workers > 1) {
+  if (isBcServer(caps.kind) && workers > 1) {
     throw new Error(
-      `runSession: workers=${workers} > 1 is rejected for an authoritative (bcdev) backend in Layer 5C-A — the single LC Mutation Active row is not lease-protected against parallel RunMutant calls (cross-process safety is 5C-B).`,
+      `runSession: workers=${workers} > 1 is rejected for an authoritative (${caps.kind}) backend in Layer 5C-A — the single LC Mutation Active row is not lease-protected against parallel RunMutant calls (cross-process safety is 5C-B).`,
     );
   }
   // R766 (b): the v3 backend runs `--workers N` as N serve lanes of ONE backend: the compile proof, the
@@ -9022,7 +9083,8 @@ async function runSessionBody(
     const lane0 = v3Lanes?.[0];
     const scope: BatchScope = {
       stopHungSessions: cfg.stopHungSessions === true,
-      killLedgerOff: cfg.killLedger === false,
+      // PR-479: the ledger (R197) and R1174's re-walk are off on bcdev-client: every mutant runs every codeunit.
+      killLedgerOff: cfg.killLedger === false || isBcdevClient(caps.kind),
       // R766 (b): under lanes the baseline runs on lane 0 (its N = 1 baseline), the rest on the owner.
       backend: lane0 !== undefined ? splitBackend(cfg.backend, lane0) : cfg.backend,
       ...(v3Lanes !== undefined
@@ -9471,7 +9533,7 @@ async function runSessionBody(
         // dependent declares (BC refuses the upgrade and, unable to restore, removes the dependent).
         // bcdev only; this block precedes `deployStep`, the only route to `.deploy(`, so every path
         // that publishes a target passes it. Reads only. Sharing the dependents read above.
-        if (dependents !== null && isBcdev(caps.kind)) {
+        if (dependents !== null && isBcServer(caps.kind)) {
           const clashWarnings = await checkObjectClashes({
             dependents: dependents.read,
             testsAppId: dependents.testsAppId,
@@ -11572,7 +11634,7 @@ async function runProbes(
         // R514: a probe's baseline is this run's own (`runNamedMutants` never reuses a snapshot).
         baselineReused: undefined,
       });
-      if (isBcdev(scope.caps.kind) && !attestation.clean) {
+      if (isBcServer(scope.caps.kind) && !attestation.clean) {
         for (const [i, o] of outcomes.entries()) {
           outcomes[i] = {
             mutant: o.mutant,

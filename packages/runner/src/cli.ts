@@ -61,7 +61,7 @@ import {
   resolveAssemblyProbingPaths,
 } from "./assembly-probing-paths";
 import type { BackendKind, BackendStatus, ExecutionBackend } from "./backend";
-import { isBcdev, isLocalRunner } from "./backend";
+import { isBcServer, isBcdev, isBcdevClient, isLocalRunner } from "./backend";
 import { readTargetSource } from "./baseline-snapshot";
 import { bcFetch } from "./bc-fetch";
 import { refuseRetiredBcHost } from "./bc-host";
@@ -82,6 +82,7 @@ import {
   cliOk,
   wantsEnvelope,
 } from "./cli-envelope";
+import { BcdevClientExperimentalError, ClientModeRefusedError } from "./client-mode";
 import { monoNow } from "./clock";
 import {
   ConfirmBackendNotBcdevError,
@@ -442,7 +443,9 @@ function parseBackendKind(raw: string | undefined): BackendKind {
     throw new Error('missing required --backend <"bcdev" | "al-runner-v3">');
   }
   if (raw === RETIRED_V2_BACKEND) throw new AlRunnerV2RetiredError(V2_RETIRED_BACKEND_FLAG);
-  if (raw !== "bcdev" && raw !== "al-runner-v3") {
+  // PR-479: "bcdev-client" is parsed here and refused without `--experimental-client-mode` where the backend is built
+  // (`buildBackend`), so no parse path can quietly turn it on.
+  if (raw !== "bcdev" && raw !== "al-runner-v3" && raw !== "bcdev-client") {
     throw new Error(`unknown --backend "${raw}" (expected "bcdev" or "al-runner-v3")`);
   }
   return raw;
@@ -466,6 +469,8 @@ export const DRY_RUN_REFUSED = [
   "retry-stranded",
   "stop-hung-sessions",
   "no-kill-ledger",
+  // PR-479: a dry run builds no backend, so the experimental gate has nothing to open.
+  "experimental-client-mode",
   "fresh-probe",
   "isolate-tests",
   "fail-on-survivors",
@@ -662,6 +667,11 @@ export interface RunCliConfig {
   readonly stopHungSessions?: boolean;
   /** PR-472: `--no-kill-ledger`, bcdev only; see `SessionConfig.killLedger`. */
   readonly killLedger?: false;
+  /**
+   * PR-479: `--experimental-client-mode`. `--backend bcdev-client` is refused without it
+   * (`BcdevClientExperimentalError`, in `buildBackend`).
+   */
+  readonly experimentalClientMode?: true;
   /** R762: `--fresh-probe`, al-runner-v3 only: run the contract probe instead of replaying a cached pass. */
   readonly freshProbe?: boolean;
   /**
@@ -1290,7 +1300,12 @@ RUN — cost and recovery
                              and free of earlier kills; the default reorders by earlier kills.
                              killingTest and cost also move. Adds the kill-ledger-off
                              caveat. A resume must use the same setting
-  --workers <n>              parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
+  --experimental-client-mode  opens --backend bcdev-client, an experimental backend that runs each
+                             test codeunit in a /cs client session with coverage OFF (a survivor
+                             may be a mutant no test reached; the client-no-coverage caveat is on
+                             every report). Needs LethAL Control 1.0.0.31 and "webClientBaseUrl"
+                             in the config's bcdev section. Round 1 has no driver yet
+  --workers <n>             parallel workers. al-runner-v3 only, 2 to 8: N serve lanes of one
                              backend, with serve-entries and a build whose pin retires the §6
                              Sleep rule (else refused by name). The first latch or stop ends the
                              session with an error naming the mutants it discarded. bcdev is
@@ -1594,6 +1609,8 @@ export const RUN_FLAGS = {
   "stop-hung-sessions": { type: "boolean", default: false },
   // PR-472: see `RunCliConfig.killLedger`.
   "no-kill-ledger": { type: "boolean", default: false },
+  // PR-479: see `RunCliConfig.experimentalClientMode`.
+  "experimental-client-mode": { type: "boolean", default: false },
   // R48: see `RunCliConfig.allowLargeRun`.
   "allow-large-run": { type: "boolean", default: false },
   // R762: see `RunCliConfig.freshProbe`.
@@ -1672,6 +1689,7 @@ const RUN_ONLY_FLAGS = [
   "retry-stranded",
   "stop-hung-sessions",
   "no-kill-ledger",
+  "experimental-client-mode",
   "keep-company-tests",
   "ci-session-kind",
   "allow-large-run",
@@ -2518,6 +2536,13 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
         "--tests needs a folder: an empty --tests is refused (as 'lethal run' refuses it)",
       );
     }
+    // PR-479: a dry run previews a headless build; the experimental backend is not previewed.
+    if (values.backend !== undefined && isBcdevClient(parseBackendKind(values.backend))) {
+      throw new ClientModeRefusedError(
+        "dry-run",
+        "a dry run previews no client session; drop --dry-run, or preview with --backend bcdev",
+      );
+    }
     return {
       mode: "dry-run",
       projectDir,
@@ -2577,12 +2602,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   // id to the same server instance. Real parallelism against the authoritative backend needs
   // per-container isolation (deferred to the container-pool layer) — reject rather than silently
   // corrupt results.
-  if (backendArg === "bcdev" && workers > 1) {
+  if (isBcServer(backendArg) && workers > 1) {
     throw new Error(
-      "--workers > 1 is not supported with --backend bcdev: mutant activation is a single " +
-        "server-side record shared by all workers, so concurrent workers would overwrite each " +
-        "other's active mutant. Parallel execution on a real BC server needs per-container " +
-        "isolation (deferred to the container-pool layer).",
+      `--workers > 1 is not supported with --backend ${backendArg}: mutant activation is a single server-side record shared by all workers, so concurrent workers would overwrite each other's active mutant. Parallel execution on a real BC server needs per-container isolation (deferred to the container-pool layer).`,
     );
   }
 
@@ -2685,6 +2707,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
     ...(values["no-kill-ledger"] === true ? { killLedger: false as const } : {}),
+    ...(values["experimental-client-mode"] === true
+      ? { experimentalClientMode: true as const }
+      : {}),
     ...(values["keep-company-tests"] === true ? { keepCompanyTests: true } : {}),
     ...(ciSessionKindFlag !== undefined ? { ciSessionKind: ciSessionKindFlag } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
@@ -2797,6 +2822,11 @@ export interface BcDevConfigSection {
    * `runFromCli`; `bc-linux-setup.ts` writes it for our own servers bc1-bc4.
    */
   readonly stopHungSessions?: boolean;
+  /**
+   * PR-479: the web client's base URL (for example `https://host:port/BC`). Only `--backend bcdev-client` reads it:
+   * `<it>/cs` is probed before anything is published. Absent, a bcdev-client run refuses (`client-session-unavailable`).
+   */
+  readonly webClientBaseUrl?: string;
 }
 
 export interface LethalConfigFile {
@@ -3062,6 +3092,14 @@ export function validateBcDevConfig(
   if (raw.stopHungSessions !== undefined && typeof raw.stopHungSessions !== "boolean") {
     throw new Error(
       `lethal.config.json "bcdev" section: "stopHungSessions" ${JSON.stringify(raw.stopHungSessions)} is not true or false`,
+    );
+  }
+  if (
+    raw.webClientBaseUrl !== undefined &&
+    (typeof raw.webClientBaseUrl !== "string" || raw.webClientBaseUrl === "")
+  ) {
+    throw new Error(
+      `lethal.config.json "bcdev" section: "webClientBaseUrl" ${JSON.stringify(raw.webClientBaseUrl)} is not a non-empty string`,
     );
   }
   return raw as BcDevConfigSection;
@@ -3408,6 +3446,8 @@ export function bcDevBackendConfig(
   /** R53: the opt-in `--stop-hung-sessions`. Threaded here rather than read off the config file —
    *  it is a run-time choice about acting on the user's server, not a property of the target. */
   stopHungSessions?: boolean,
+  /** PR-479: build the experimental bcdev-client backend (the caller has checked `--experimental-client-mode`). */
+  clientMode?: boolean,
 ): BcDevConfig {
   return {
     mcpCommand: c.mcpCommand,
@@ -3422,6 +3462,8 @@ export function bcDevBackendConfig(
     ...(c.port !== undefined ? { port: c.port } : {}),
     ...(c.coverageMode !== undefined ? { coverageMode: c.coverageMode } : {}),
     ...(stopHungSessions === true ? { stopHungSessions: true } : {}),
+    ...(clientMode === true ? { clientMode: true as const } : {}),
+    ...(c.webClientBaseUrl !== undefined ? { webClientBaseUrl: c.webClientBaseUrl } : {}),
   };
 }
 
@@ -3665,6 +3707,12 @@ export async function resolveEnvToolSession(
     readonly envId: string;
   };
 }> {
+  if (isBcdevClient(parsed.backendKind) && configFile.envTool !== undefined) {
+    throw new ClientModeRefusedError(
+      "env-tool",
+      "an environment tool provisions a server this backend's /cs probe and client sessions do not know",
+    );
+  }
   if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {
     return { effectiveConfig: configFile };
   }
@@ -3717,7 +3765,12 @@ export type BackendInputs = Pick<
   RunCliConfig,
   "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
 > &
-  Partial<Pick<RunCliConfig, "freshProbe" | "isolateTests" | "baselineProcesses">> &
+  Partial<
+    Pick<
+      RunCliConfig,
+      "freshProbe" | "isolateTests" | "baselineProcesses" | "experimentalClientMode"
+    >
+  > &
   // R505: the run's own output files, which the source-drift watch must not count.
   Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
 
@@ -4027,6 +4080,10 @@ export async function buildBackend(
   /** R900: the list `runFromCli` resolved before provisioning; absent, resolved here. */
   resolvedProbing?: ResolvedAssemblyProbingPaths,
 ): Promise<ExecutionBackend> {
+  // PR-479: the experimental gate, where the backend is built (never in `parseBackendKind`, so no parse path opens it).
+  if (isBcdevClient(parsed.backendKind) && parsed.experimentalClientMode !== true) {
+    throw new BcdevClientExperimentalError();
+  }
   // PR-194: every config refusal, in the one function `--dry-run` calls too.
   const pre = await preflightRunConfig({
     parsed,
@@ -4096,7 +4153,12 @@ export async function buildBackend(
   const verifier = new DeploymentVerifier(odataCfg);
   const harnessVerifier = new HarnessVerifier(odataCfg);
   return new BcDevMcpBackend(
-    bcDevBackendConfig(c, parsed.projectDir, parsed.stopHungSessions),
+    bcDevBackendConfig(
+      c,
+      parsed.projectDir,
+      parsed.stopHungSessions,
+      isBcdevClient(parsed.backendKind),
+    ),
     undefined,
     { compiler, deployer, verifier, harnessVerifier },
     (targetAppId, artifactId, controlState) =>
@@ -4164,7 +4226,7 @@ export function leaseSessionFor(
   parsed: BackendInputs,
   configFile: LethalConfigFile,
 ): Pick<SessionConfig, "lease"> {
-  if (parsed.backendKind !== "bcdev") return {};
+  if (!isBcServer(parsed.backendKind)) return {};
   const c = validateBcDevConfig(configFile.bcdev);
   const odataCfg = odataCfgFor(c);
   const harnessVerifier = new HarnessVerifier(odataCfg);
@@ -4202,7 +4264,7 @@ export function permissionCanaryFor(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
 ): Pick<SessionConfig, "permissionCanary"> {
-  if (parsed.backendKind !== "bcdev") return {};
+  if (!isBcServer(parsed.backendKind)) return {};
   const client = new PermissionCanaryClient(odataCfgFor(validateBcDevConfig(configFile.bcdev)));
   return { permissionCanary: () => runPermissionCanary(client) };
 }
@@ -4245,7 +4307,7 @@ export function resourceIdentityFor(
   parsed: BackendInputs,
   configFile: LethalConfigFile,
 ): Pick<SessionConfig, "resourceServer" | "resourceServerInstance"> {
-  if (parsed.backendKind !== "bcdev") return {};
+  if (!isBcServer(parsed.backendKind)) return {};
   const c = validateBcDevConfig(configFile.bcdev);
   return { resourceServer: c.server, resourceServerInstance: c.serverInstance };
 }
@@ -5152,7 +5214,7 @@ export async function runFromCliWithAccept(
               ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
               // R565: bcdev and envtool read dependency reports from the package cache alc compiles
               // against; al-runner's folders come from the backend and its provisioning.
-              ...(parsed.backendKind === "bcdev"
+              ...(isBcServer(parsed.backendKind)
                 ? {
                     dependencyPackageDirs: [
                       resolve(packageCachePathDefault(effectiveConfig.bcdev, parsed.projectDir)),
@@ -5232,7 +5294,7 @@ export async function runFromCliWithAccept(
             }
             // Issue #22: in the `finally`, because a run that fails AFTER publishing leaves the
             // instrumented build on the server just the same, and that is when the user needs this most.
-            if (highestPublished !== undefined && parsed.backendKind === "bcdev") {
+            if (highestPublished !== undefined && isBcServer(parsed.backendKind)) {
               process.stderr.write(`${restoreNotice(highestPublished)}\n`);
             }
           }

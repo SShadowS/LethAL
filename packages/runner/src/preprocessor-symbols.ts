@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { BackendKind } from "./backend";
 
 /**
  * R214: the build's preprocessor symbols, as alc 18.0.41 computes them (measured, the R-214 plan):
@@ -87,7 +88,7 @@ export async function appJsonSymbols(
  *  what alc proved, and `runSession` refuses a v3 that predefines a symbol, so its build set is
  *  alc's: no predefined symbols. (R654 removed the .NET al-runner's variant, which carried its
  *  measured predefined symbols, R377 and R392.) */
-export type BuildBackend = { readonly kind: "bcdev" } | { readonly kind: "al-runner-v3" };
+export type BuildBackend = { readonly kind: BackendKind };
 
 /** The build's effective symbols: sorted and de-duplicated, so two equal sets compare equal.
  *  `backend` is required so a future backend that predefines symbols has one place to add them;

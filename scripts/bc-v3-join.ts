@@ -31,6 +31,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { BCDEV_CLIENT } from "../packages/runner/src/backend";
 import type { SessionReport } from "../packages/runner/src/report";
 import { loadReport } from "./report-summary.ts";
 
@@ -219,6 +220,12 @@ export function joinReports(
   extraRed: { readonly bc?: ReadonlySet<string>; readonly v3?: ReadonlySet<string> } = {},
 ): JoinResult {
   const all = [...bcReports, v3];
+  // PR-479: a bcdev-client report has no coverage, so it joins no one's coverage mode: refused on either side.
+  const client = all.find((r) => r.backend === BCDEV_CLIENT);
+  if (client !== undefined)
+    throw new BcV3JoinRefusal(
+      `a report ran on ${BCDEV_CLIENT} (coverage off): the join compares coverage-mode runs, so a client report is refused on either side`,
+    );
   if (all.some((r) => typeof r.sourceSha256 !== "string" || r.sourceSha256 === ""))
     throw new BcV3JoinRefusal("a report has no sourceSha256: the source cannot be shown equal");
   const shas = new Set(all.map((r) => r.sourceSha256));

@@ -24,6 +24,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
+import { BCDEV_CLIENT } from "../src/backend";
 import type { CoverageMode } from "../src/backend";
 import type { SessionReport } from "../src/report";
 import { bareHashRows, canonical, compareMutants, normalizeForComparison } from "./mutant-equality";
@@ -54,10 +55,12 @@ function sortedForDisk(mutants: readonly NormalizedMutant[]): NormalizedMutant[]
 export interface GateBaseline {
   readonly identityScheme?: number | undefined;
   readonly coverageMode?: CoverageMode | undefined;
+  /** PR-479: the backend a stage was frozen on. Absent: frozen before PR-479 (a headless bcdev stage, never a client one). */
+  readonly backend?: string | undefined;
   readonly entries: NormalizedMutant[];
 }
 
-const OBJECT_KEYS = new Set(["identityScheme", "coverageMode", "entries"]);
+const OBJECT_KEYS = new Set(["identityScheme", "coverageMode", "backend", "entries"]);
 
 /**
  * Parses a committed baseline's raw JSON. Refuses one with no rows: an empty baseline would
@@ -85,16 +88,18 @@ export function parseGateBaseline(
   if (
     Object.keys(obj).some((k) => !OBJECT_KEYS.has(k)) ||
     (obj.identityScheme !== undefined && !Number.isInteger(obj.identityScheme)) ||
-    (obj.coverageMode !== undefined && !isCoverageMode(obj.coverageMode))
+    (obj.coverageMode !== undefined && !isCoverageMode(obj.coverageMode)) ||
+    (obj.backend !== undefined && (typeof obj.backend !== "string" || obj.backend === ""))
   ) {
     throw new Error(
       `${baselinePath} is neither a list of mutant rows nor {"identityScheme"?: <integer>, "coverageMode"?: <one of ${Object.keys(COVERAGE_MODES).join(", ")}>, "entries": [...]}. Refusing to read a baseline of unknown shape.\n${remedy}`,
     );
   }
-  const { identityScheme, coverageMode } = obj;
+  const { identityScheme, coverageMode, backend } = obj;
   return {
     ...(typeof identityScheme === "number" ? { identityScheme } : {}),
     ...(isCoverageMode(coverageMode) ? { coverageMode } : {}),
+    ...(typeof backend === "string" ? { backend } : {}),
     entries: rowsOf(obj.entries, baselinePath, remedy),
   };
 }
@@ -141,6 +146,8 @@ export function isCoverageMode(value: unknown): value is CoverageMode {
 export interface StageBaseline {
   readonly coverageMode: CoverageMode | undefined;
   readonly identityScheme: number | undefined;
+  /** PR-479: see `GateBaseline.backend`. */
+  readonly backend: string | undefined;
   readonly entries: NormalizedMutant[];
 }
 
@@ -158,8 +165,29 @@ export function parseStageBaseline(
   return {
     coverageMode: read.coverageMode,
     identityScheme: read.identityScheme,
+    backend: read.backend,
     entries: read.entries,
   };
+}
+
+/**
+ * PR-479: the refusal when a stage was frozen on one side of the bcdev-client line and the report ran on the
+ * other. A stage with no recorded backend predates PR-479 and is a headless one. Other pairs are not refused
+ * here (a v3 report may still be compared). `undefined` = compare.
+ */
+export function stageBackendMismatch(
+  what: string,
+  stage: string,
+  stageBackend: string | undefined,
+  reportBackend: string | undefined,
+): Error | undefined {
+  const frozen = stageBackend ?? "bcdev";
+  const ran = reportBackend ?? "bcdev";
+  if (frozen === ran) return undefined;
+  if (frozen !== BCDEV_CLIENT && ran !== BCDEV_CLIENT) return undefined;
+  return new Error(
+    `bcdev-client-never-mixed: ${what}: stage ${stage} was frozen on backend ${frozen} and this report ran on backend ${ran}. A ${BCDEV_CLIENT} run and a headless run are never compared: coverage is off on one and not on the other, so a per-mutant match would prove nothing (PR-479).`,
+  );
 }
 
 /**
@@ -256,6 +284,8 @@ export async function assertMatchesBaseline(
   baselinePath: string,
   label: string,
   coverageMode?: CoverageMode,
+  /** PR-479: `campaign freeze` passes the report's backend; a new stage records it, an existing one must agree. */
+  backend?: string,
 ): Promise<void> {
   const actual = sortedForDisk(normalizeForComparison(report));
   let baselineRaw: string | undefined;
@@ -274,6 +304,7 @@ export async function assertMatchesBaseline(
         ? actual
         : {
             coverageMode,
+            ...(backend !== undefined ? { backend } : {}),
             ...(scheme !== undefined ? { identityScheme: scheme } : {}),
             entries: actual,
           };
@@ -294,6 +325,10 @@ export async function assertMatchesBaseline(
     stage.coverageMode !== coverageMode
   ) {
     throw coverageModeMismatch(`${label} freeze`, label, stage.coverageMode, coverageMode);
+  }
+  if (coverageMode !== undefined) {
+    const mixed = stageBackendMismatch(`${label} freeze`, label, stage.backend, backend);
+    if (mixed !== undefined) throw mixed;
   }
   const cmp = throwOnRowDiff(actual, stage, scheme, baselinePath, label, remedy);
   if (coverageMode !== undefined && stage.coverageMode === undefined) {

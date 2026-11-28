@@ -56,6 +56,9 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "backend.ts": {
     'return kind === "bcdev";': "predicate",
     'return kind === "al-runner-v3";': "predicate",
+    // PR-479: isBcServer and isBcServerName, the BC server pair (bcdev and bcdev-client).
+    'return kind === "bcdev" || kind === BCDEV_CLIENT;': "predicate",
+    'return name === "bcdev" || name === BCDEV_CLIENT;': "predicate",
   },
   "campaign-freeze.ts": { 'if (report.backend === "al-runner-v3") {': "v3" },
   // PR-77: only an al-runner-v3 report can put a survivor apart.
@@ -74,19 +77,18 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // PR-381, PR-387: the not-run field and caveat exist on al-runner-v3 and bcdev reports; each read names
   // the backend(s) explicitly ("not recorded" for both; bcdev's own sentence and its omitted hint).
   "explain.ts": {
-    '(report.backend === "al-runner-v3" || report.backend === "bcdev") &&': "v3-and-bcdev",
+    '(report.backend === "al-runner-v3" || isBcServerName(report.backend)) &&': "v3-and-bcdev",
   },
   "not-run-survivors.ts": {
-    'return (r.backend === "al-runner-v3" || r.backend === "bcdev") &&': "v3-and-bcdev",
-    '...(coverageOff || r.backend === "bcdev"': "bcdev",
-    'scope.backend === "bcdev"': "bcdev",
+    'return (r.backend === "al-runner-v3" || isBcServerName(r.backend)) &&': "v3-and-bcdev",
   },
   "line-map.ts": {
     'case "bcdev":': "exhaustive-switch",
     'case "al-runner-v3":': "exhaustive-switch",
   },
   "orchestrator.ts": {
-    'caps.kind === "al-runner-v3" ? { kind: "al-runner-v3" } : { kind: "bcdev" };': "v3",
+    // PR-479: the collapse is gone; v3 is named, and every other kind keeps its own name.
+    'caps.kind === "al-runner-v3"': "v3",
     'if (caps.kind === "al-runner-v3" && workers > 1) {': "v3",
     'if (kind !== "al-runner-v3") return undefined;': "v3",
     // PR-303: `LETHAL_V3_REACH_PRUNE=on` is refused by name on any backend but v3.
@@ -116,10 +118,10 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (caps.kind === "al-runner-v3") {': "v3",
     '...(runnerBuild !== undefined && caps.kind === "al-runner-v3"': "v3",
     // PR-381, PR-387: the field is written on al-runner-v3 and bcdev reports.
-    'input.caps.kind === "al-runner-v3" || isBcdev(input.caps.kind)': "v3-and-bcdev",
+    'input.caps.kind === "al-runner-v3" || isBcServer(input.caps.kind)': "v3-and-bcdev",
   },
   "cli.ts": {
-    'if (raw !== "bcdev" && raw !== "al-runner-v3") {': "config",
+    'if (raw !== "bcdev" && raw !== "al-runner-v3" && raw !== "bcdev-client") {': "config",
     'if (backendArg === "al-runner-v3") {': "v3",
     'if (values["isolate-tests"] === true && backendArg !== "al-runner-v3") {': "v3",
     'instrumentedDir: join(scratchDir, "al-runner-v3"),': "path-name",
@@ -134,17 +136,13 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     '} else if (paths.backendKind === "al-runner-v3") {': "v3",
     'if (backendKind === "al-runner-v3") {': "v3",
     'if (configured !== "al-runner") return { mode: configured, offFiles: [] };': "coverage-mode",
-    'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
     // PR-132 (R1113): the whole-suite note is bcdev's, where one hanging baseline test quarantines the run
     'return backendKind === "bcdev" ? [head, BASELINE_WHOLE_SUITE_NOTE] : [head];': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
-    'if (parsed.backendKind !== "bcdev") return {};': "bcdev",
     // PR-42: the bcdev section's stopHungSessions applies on bcdev only
     'given.backendKind === "bcdev" && configStop ? { ...given, stopHungSessions: true } : given;':
       "bcdev",
     'if (paths.backendKind === "bcdev") {': "bcdev",
-    '...(parsed.backendKind === "bcdev"': "bcdev",
-    'if (highestPublished !== undefined && parsed.backendKind === "bcdev") {': "bcdev",
   },
 };
 

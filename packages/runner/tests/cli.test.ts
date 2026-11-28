@@ -3874,7 +3874,8 @@ describe("C02-07: flags are read or refused, never ignored", () => {
     // PR-171: --confirm-from, --confirm-sample and --confirm-seed joined it.
     // PR-311: --ci-session-kind joined it (a dry run runs no test).
     // PR-472: --no-kill-ledger joined it (a dry run orders no tests).
-    expect(DRY_RUN_REFUSED.length).toBe(22);
+    // PR-479: --experimental-client-mode joined it (a dry run builds no backend).
+    expect(DRY_RUN_REFUSED.length).toBe(23);
   });
 
   test("R377: --dry-run reads an optional --backend, validated as run validates it", () => {

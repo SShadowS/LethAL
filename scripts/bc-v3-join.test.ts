@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BCDEV_CLIENT } from "../packages/runner/src/backend";
 import type { SessionReport } from "../packages/runner/src/report";
 import { BcV3JoinRefusal, baselineRedFromStore, joinReports, resolveKiller } from "./bc-v3-join";
 
@@ -187,6 +188,20 @@ test("refuses a missing or different source, a repeated key, halves with differe
   expect(() => joinReports([ok, half], ok)).toThrow(/different baselines/);
   expect(() => joinReports([ok], ok, "src/Other.al")).toThrow(/no mutant in scope/);
   expect(() => joinReports([ok], report([]))).toThrow(/no mutant in scope on the v3 side/);
+});
+
+// PR-479. Red: drop the client check at the top of joinReports, and the first two joins below succeed.
+test("a bcdev-client report is refused on either side of the join; the same reports as headless join", () => {
+  const rows: M[] = [{ line: 1, verdict: "survived" }];
+  const as = (backend: string) =>
+    ({ ...(report(rows) as object), backend }) as unknown as SessionReport;
+  expect(() => joinReports([as(BCDEV_CLIENT)], as("al-runner-v3"))).toThrow(BcV3JoinRefusal);
+  expect(() => joinReports([as(BCDEV_CLIENT)], as("al-runner-v3"))).toThrow(/ran on bcdev-client/);
+  expect(() => joinReports([as("bcdev")], as(BCDEV_CLIENT))).toThrow(/ran on bcdev-client/);
+  expect(() => joinReports([as("bcdev"), as(BCDEV_CLIENT)], as("al-runner-v3"))).toThrow(
+    /ran on bcdev-client/,
+  );
+  expect(joinReports([as("bcdev")], as("al-runner-v3")).summary.classes).toEqual({ equal: 1 });
 });
 
 // Red: read every run (not the latest), or keep a row without a codeunit name.

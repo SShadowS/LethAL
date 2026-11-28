@@ -1,5 +1,5 @@
 import { compareCodeUnits } from "@lethal/schemata";
-import { type BackendCapabilities, type TestMethodRef, isBcdev } from "./backend";
+import { type BackendCapabilities, type TestMethodRef, isBcServer } from "./backend";
 import type { ConfirmGiven, ConfirmRecord } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { EquivalenceMark } from "./equivalence-marks";
@@ -1101,7 +1101,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         }
       : {}),
     ...(sessionKindSensitive !== undefined ? { sessionKindSensitive } : {}),
-    notRunAtBaseline: [...(isBcdev(statics.caps.kind) ? bcdevNotRunTests : v3NotRunTests)].sort(),
+    notRunAtBaseline: [
+      ...(isBcServer(statics.caps.kind) ? bcdevNotRunTests : v3NotRunTests),
+    ].sort(),
     ...(baselineStoppedTests.size > 0
       ? {
           baselineStopped: {

@@ -4,6 +4,7 @@
 // is unknown. No verdict changes: this is the count and the words that go beside every survivor count.
 import { isV3RefusalText } from "./al-runner-rows";
 import { V3_NOT_RUN_SUFFIX, V3_REFUSED_NEARBY_TAG } from "./al-runner-v3-backend";
+import { isBcServerName } from "./backend";
 import { SURVIVING_VERDICTS } from "./equivalence-marks";
 import type { MutantOutcome } from "./report";
 
@@ -101,7 +102,7 @@ export function notRunSurvivors(r: NotRunView): NotRunSurvivors | undefined {
     survivors: rows.length,
     notRunTests: tests.length,
     // bcdev has no `[v3-refused-test-nearby]` tag, so it has no such count.
-    ...(coverageOff || r.backend === "bcdev"
+    ...(coverageOff || isBcServerName(r.backend)
       ? {}
       : {
           sharingACodeunit: rows.filter((m) =>
@@ -128,7 +129,7 @@ export function notRunSentence(
       ? ""
       : `; ${n.sharingACodeunit} carry the nearby tag (a hint, not a bound)`;
   const who =
-    scope.backend === "bcdev"
+    scope.backend !== undefined && isBcServerName(scope.backend)
       ? "BC could not run at baseline in LethAL's session (TestPage or permission refusals, timed out or stopped"
       : "v3 did not run at baseline (refused, timed out or stopped";
   return `${n.survivors} survivors, all in a run with ${tests} ${who}; such a test kills nothing, so a survivor only it would kill is unknown)${hint}`;
@@ -149,7 +150,7 @@ export function notRunLine(r: NotRunView): string | undefined {
       ...(r.testsOnly !== undefined ? { testsOnly: r.testsOnly } : {}),
     });
   }
-  return (r.backend === "al-runner-v3" || r.backend === "bcdev") &&
+  return (r.backend === "al-runner-v3" || isBcServerName(r.backend)) &&
     r.notRunAtBaseline === undefined &&
     survivorRows(r).length > 0
     ? NOT_RECORDED_TEXT

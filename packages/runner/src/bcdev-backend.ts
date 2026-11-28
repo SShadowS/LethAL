@@ -36,7 +36,14 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
+import { BCDEV_CLIENT } from "./backend";
 import { BcAnswerUnreadError, BcRedirectRefusedError, bcFetch, withDeadline } from "./bc-fetch";
+import {
+  BcdevClientNotBuiltError,
+  type ClientSessionProbe,
+  assertClientControlVersion,
+  probeClientSession,
+} from "./client-mode";
 import { monoNow } from "./clock";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
@@ -183,6 +190,15 @@ export interface BcDevConfig {
    * `c.port ?? (u.port ? Number(u.port) : DEFAULT_DEV_PORT)`).
    */
   readonly port?: number;
+  /**
+   * PR-479: build the EXPERIMENTAL bcdev-client backend (a `/cs` client session per test codeunit, coverage off). Set
+   * only by the CLI's wiring, after `--experimental-client-mode`. Round 1 has no driver: run and runMany throw.
+   */
+  readonly clientMode?: boolean;
+  /** PR-479: the web client's base URL (config `bcdev.webClientBaseUrl`); `<it>/cs` is probed before any publish. */
+  readonly webClientBaseUrl?: string;
+  /** PR-479: test seam for the `/cs` probe: the HTTP status of a GET. Default: `fetch`. */
+  readonly clientSessionProbe?: ClientSessionProbe;
 }
 
 /**
@@ -590,12 +606,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
   capabilities(): BackendCapabilities {
     return {
       // R586 (C1) and R553: identity, not inferred from `authoritative`.
-      kind: "bcdev",
-      coverage: this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE,
+      kind: this.cfg.clientMode === true ? BCDEV_CLIENT : "bcdev",
+      // PR-479: a client run stores coverage mode "none" (no coverage on /cs in 479a), whatever the config says.
+      coverage:
+        this.cfg.clientMode === true ? "none" : (this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE),
       deploy: "publish",
       isolation: "session",
       authoritative: true,
     };
+  }
+
+  /**
+   * PR-479: before ANY publish, a bcdev-client run probes `<webClientBaseUrl>/cs` and needs LethAL Control
+   * `CLIENT_MIN_CONTROL_VERSION`. Headless: nothing to check.
+   */
+  async clientPreflight(): Promise<void> {
+    if (this.cfg.clientMode !== true) return;
+    await probeClientSession(this.cfg.webClientBaseUrl, this.cfg.clientSessionProbe);
+    assertClientControlVersion(await this.verifierFor().fetchControlVersion());
   }
 
   /**
@@ -1390,6 +1418,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * session it exists to stop using, and every gate would still have passed.
    */
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    if (this.cfg.clientMode === true) throw new BcdevClientNotBuiltError("run");
     if (opts.alone === true) throw new BcDevAloneUnsupportedError(ref);
     const v =
       opts.coverage === "procedure" || opts.coverage === "line"
@@ -1413,6 +1442,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * transport does the rest.
    */
   async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    if (this.cfg.clientMode === true) throw new BcdevClientNotBuiltError("runMany");
     const transport = this.runMutantTransport;
     if (!transport) {
       throw new Error(

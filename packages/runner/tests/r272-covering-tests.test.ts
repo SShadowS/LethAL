@@ -207,7 +207,9 @@ describe("R272: each backend's duration is the test's own", () => {
       return v;
     };
     // R1131: `Object.create` runs no constructor, so the start-WorkDate guard is handed over too.
+    // PR-479: nor the config, so a headless `run` finds no `clientMode`.
     Object.assign(backend, {
+      cfg: {},
       runOnHub: stub,
       runViaTransport: stub,
       workDates: new WorkDateGuard(true),

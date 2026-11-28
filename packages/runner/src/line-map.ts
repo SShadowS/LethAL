@@ -16,6 +16,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import { FLAT_NAMES_FILENAME, displayPathsOf } from "@lethal/schemata";
+import { BCDEV_CLIENT } from "./backend";
 import type { BuildBackend } from "./preprocessor-symbols";
 import { walkFiles } from "./walk";
 
@@ -1254,6 +1255,7 @@ export type WrappedRule = "bc-shape" | "al-runner-index" | "refuse-wrapped";
 export function wrappedRuleFor(kind: BuildBackend["kind"]): WrappedRule {
   switch (kind) {
     case "bcdev":
+    case BCDEV_CLIENT:
       return "bc-shape";
     case "al-runner-v3":
       return "al-runner-index";

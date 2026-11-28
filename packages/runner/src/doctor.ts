@@ -6,6 +6,7 @@ import {
 import { STOP_HUNG_SESSIONS_OFF_TEXT } from "./backend";
 import { ApiBaseUnsetError, MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
+import { isRunOpKind } from "./lease";
 import { type TextSearchApp, textSearchNote } from "./text-search-fields";
 
 /**
@@ -399,10 +400,9 @@ function checkLease(lease: LeaseSnapshot, now: Date): DoctorCheck {
   const reset = "`lethal force-reset-lease --server <url> --instance <name> --config <path>`";
   // R658 (M8): a `run` op may still be executing AL on the server (an abandoned test outlived its
   // budget there by minutes, measured), and a reset under it lets the next session overlap it.
-  const recover =
-    lease.opKind === "run"
-      ? `restart the NST first (that is what ends a surviving session), then ${reset}`
-      : `recover it with ${reset}`;
+  const recover = isRunOpKind(lease.opKind)
+    ? `restart the NST first (that is what ends a surviving session), then ${reset}`
+    : `recover it with ${reset}`;
   const advice = expired
     ? `The holder is past its expiry, so this is an orphaned lease: ${recover}.`
     : `If no session is actually running, ${recover}.`;

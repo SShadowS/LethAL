@@ -97,7 +97,8 @@
               "workdate-changed",
               "survivors-beside-unrun-tests",
               "resumed-across-restart",
-              "kill-ledger-off"
+              "kill-ledger-off",
+              "client-no-coverage"
             ]
           }
         },

@@ -247,6 +247,28 @@ describe("lethal doctor — the lease check (R110)", () => {
     expect(lease?.detail).toContain("force-reset-lease");
   });
 
+  // PR-479: a client-run op may still be executing on the server, like a run op: restart the NST first.
+  test("PR-479: a held client-run lease gets the same restart-first advice as a run lease; a publish lease does not", async () => {
+    const detailOf = async (opKind: string) =>
+      (
+        await runDoctor(
+          { ...cfgFixture(), now: NOW },
+          {
+            ...green,
+            lease: async () => ({
+              owner: "x",
+              opKind,
+              expiresAt: "2026-08-07T11:00:00.000Z",
+              tokenPresent: true,
+            }),
+          },
+        )
+      ).checks.find((c) => c.name === "lease")?.detail;
+    expect(await detailOf("run")).toContain("restart the NST first");
+    expect(await detailOf("client-run")).toContain("restart the NST first");
+    expect(await detailOf("publish")).not.toContain("restart the NST first");
+  });
+
   test("an idle lease passes, and everything else green stays green", async () => {
     const r = await runDoctor({ ...cfgFixture(), now: NOW }, { ...green, lease: async () => idle });
     expect(r.ok).toBe(true);

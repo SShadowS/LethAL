@@ -250,8 +250,9 @@ describe("Caveat union", () => {
       "survivors-beside-unrun-tests": true,
       "resumed-across-restart": true,
       "kill-ledger-off": true,
+      "client-no-coverage": true,
     };
-    expect(Object.keys(all).length).toBe(41);
+    expect(Object.keys(all).length).toBe(42);
   });
 });
 

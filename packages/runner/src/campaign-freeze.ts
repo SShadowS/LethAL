@@ -123,6 +123,7 @@ export async function freezeStageTo(
       join(recordsDir, `${stage}.baseline.json`),
       stage,
       coverageMode,
+      report.backend, // PR-479: the stage records its backend; an existing stage on the other side of bcdev-client refuses
     );
   } catch (err) {
     // The failing report is the most interesting artifact this campaign can produce, and the

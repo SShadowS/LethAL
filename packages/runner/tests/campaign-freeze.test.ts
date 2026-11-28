@@ -11,6 +11,7 @@ import { join } from "node:path";
 // and the 2026-08-03 campaign's stages are named `rung1`/`rung2`/`rung3` in committed records this
 // rename does not touch — so exercising the flag under exactly that name is the standing check
 // that those records still resolve.
+import { BCDEV_CLIENT } from "../src/backend";
 import { freezeStageTo } from "../src/campaign-freeze";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { removeScratchDir } from "./helpers/scratch";
@@ -280,5 +281,50 @@ describe("freezeStageTo", () => {
     await expect(freezeStageTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow(
       /frozen under coverageMode "fenced" and this report ran under coverageMode "none".*R355/,
     );
+  });
+
+  // PR-479: a stage records its backend, and a bcdev-client run is never frozen over a headless stage or the other way round.
+  describe("PR-479: the stage records its backend", () => {
+    const base = report([outcome({ mutantCode: "M0001", verdict: "survived" })]);
+    const headless = { ...base, coverageMode: "none" as const };
+    const client = { ...headless, backend: BCDEV_CLIENT };
+
+    test("a freeze records the report's backend in the stage baseline", async () => {
+      await writeFile(reportPath, JSON.stringify(client), "utf8");
+      await freezeStageTo(reportPath, "rung1", 1, recordsDir);
+      const body = JSON.parse(await readFile(join(recordsDir, "rung1.baseline.json"), "utf8"));
+      expect(body.backend).toBe(BCDEV_CLIENT);
+    });
+
+    test("a headless re-freeze over a client stage is refused by name, and nothing is overwritten", async () => {
+      await writeFile(reportPath, JSON.stringify(client), "utf8");
+      await freezeStageTo(reportPath, "rung1", 1, recordsDir);
+      await writeFile(reportPath, JSON.stringify(headless), "utf8");
+      await expect(freezeStageTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow(
+        /bcdev-client-never-mixed/,
+      );
+    });
+
+    test("a client re-freeze over a headless stage is refused by name", async () => {
+      await writeFile(reportPath, JSON.stringify(headless), "utf8");
+      await freezeStageTo(reportPath, "rung1", 1, recordsDir);
+      await writeFile(reportPath, JSON.stringify(client), "utf8");
+      await expect(freezeStageTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow(
+        /bcdev-client-never-mixed/,
+      );
+    });
+
+    test("a stage written before PR-479 (no backend field) is a headless one: a client freeze over it is refused, a headless one passes", async () => {
+      await writeFile(reportPath, JSON.stringify(headless), "utf8");
+      await freezeStageTo(reportPath, "rung1", 1, recordsDir);
+      const path = join(recordsDir, "rung1.baseline.json");
+      const { backend: _b, ...old } = JSON.parse(await readFile(path, "utf8"));
+      await writeFile(path, JSON.stringify(old), "utf8");
+      await expect(freezeStageTo(reportPath, "rung1", 1, recordsDir)).resolves.toBeUndefined();
+      await writeFile(reportPath, JSON.stringify(client), "utf8");
+      await expect(freezeStageTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow(
+        /bcdev-client-never-mixed/,
+      );
+    });
   });
 });

@@ -159,6 +159,14 @@ export interface EndPublishOutcome {
   readonly alreadyCompleted?: boolean;
 }
 
+/**
+ * PR-479: the two op kinds that run test code on the server: `run` (headless RunMutant) and `client-run` (a `/cs`
+ * client session, bcdev-client). Every site that asks "is a test still executing under this op" uses this.
+ */
+export function isRunOpKind(opKind: string): boolean {
+  return opKind === "run" || opKind === "client-run";
+}
+
 export interface OperationStatus {
   readonly opKind: string;
   readonly opAttemptId: string;

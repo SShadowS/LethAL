@@ -46,7 +46,7 @@ test("every reach state has an interpretation (GH-24 added reached-unnoticed)", 
 });
 
 test("every caveat has an interpretation", () => {
-  expect(Object.keys(CAVEAT_INTERPRETATIONS).length).toBe(41);
+  expect(Object.keys(CAVEAT_INTERPRETATIONS).length).toBe(42);
 });
 
 test("R-236c: baseline-red names the refused, not-run case", () => {

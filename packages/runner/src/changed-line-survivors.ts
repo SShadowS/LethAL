@@ -2,6 +2,8 @@
 // apart because al-runner-v3 gives their site a caveat. Spec: docs/superpowers/specs/2026-11-16-pr77-changed-line-survivors.md
 import { ACCEPT_LIST_FILENAME } from "./accept-list";
 import type { AcceptResult } from "./accept-list";
+import { BCDEV_CLIENT } from "./backend";
+import { CLIENT_NO_COVERAGE_TEXT } from "./client-mode";
 import { SURVIVING_VERDICTS } from "./equivalence-marks";
 import { notRunLine } from "./not-run-survivors";
 import { mutantRef } from "./report";
@@ -40,6 +42,8 @@ export interface ChangedLineSurvivors {
   readonly partial?: string;
   /** PR-381 (R1197): `notRunLine` of the run, shown under the counted survivors; absent when nothing to say. */
   readonly notRun?: string;
+  /** PR-479: `CLIENT_NO_COVERAGE_TEXT`, set on a bcdev-client report: its survivors may be mutants no test reached. */
+  readonly clientNoCoverage?: string;
 }
 
 // Only `validity` is required: `exitCodeForReport` is also called with a bare validity in tests, and a
@@ -143,6 +147,7 @@ export function changedLineSurvivors(
     unknownFlagCount,
     ...(stopped !== undefined ? { partial: stopped } : {}),
     ...(notRun !== undefined ? { notRun } : {}),
+    ...(report.backend === BCDEV_CLIENT ? { clientNoCoverage: CLIENT_NO_COVERAGE_TEXT } : {}),
   };
 }
 
@@ -161,6 +166,7 @@ export function renderChangedLineSurvivors(s: ChangedLineSurvivors, accept?: Acc
   const lines = ["", head, `counted: ${s.counted.length}`];
   // The sentence counts the whole run's survivors, not only the counted ones above.
   if (s.notRun !== undefined) lines.push(`of the whole run: ${s.notRun}`);
+  if (s.clientNoCoverage !== undefined) lines.push(s.clientNoCoverage);
   for (const m of s.counted) {
     lines.push(row(m));
     const ready = accept?.ready.get(mutantRef(m.batchIndex, m.mutantCode));

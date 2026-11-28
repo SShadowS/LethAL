@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { BCDEV_CLIENT } from "./backend";
+import { CLIENT_NO_COVERAGE_TEXT } from "./client-mode";
 import { SURVIVING_VERDICTS } from "./equivalence-marks";
 import { notRunLine } from "./not-run-survivors";
 import { type MutantOutcome, type SessionReport, mutantRef } from "./report";
@@ -133,10 +135,13 @@ export function describe(
     readonly refOf?: (m: MutantOutcome) => string;
     /** PR-381 (R1197): `notRunLine` of the report; goes onto every survivor. */
     readonly notRunText?: string;
+    /** PR-479: `CLIENT_NO_COVERAGE_TEXT` on a bcdev-client report; goes onto every survivor. */
+    readonly clientText?: string;
   },
 ): string | undefined {
   const parts: string[] = [];
   if (ctx.notRunText !== undefined && SURVIVING_VERDICTS.has(m.verdict)) parts.push(ctx.notRunText);
+  if (ctx.clientText !== undefined && SURVIVING_VERDICTS.has(m.verdict)) parts.push(ctx.clientText);
   const ref = ctx.refOf?.(m) ?? m.mutantCode;
   if (ctx.unplaceable.has(ref)) {
     parts.push(
@@ -198,6 +203,11 @@ export function lossesFor(report: SessionReport): string[] {
   if (notRunText !== undefined) {
     losses.push(
       `${notRunText}: the page's score is the viewer bundle's own and carries no qualification. The text is on each survivor's description and in config.lethal (PR-381, R1197).`,
+    );
+  }
+  if (report.backend === BCDEV_CLIENT) {
+    losses.push(
+      `${CLIENT_NO_COVERAGE_TEXT} The text is on each survivor's description and in config.lethal (PR-479).`,
     );
   }
   losses.push(
@@ -276,6 +286,7 @@ export async function toMutationElements(
   );
   const refOf = (m: MutantOutcome) => mutantRef(m.batchIndex, m.mutantCode);
   const notRunText = notRunLine(report);
+  const clientText = report.backend === BCDEV_CLIENT ? CLIENT_NO_COVERAGE_TEXT : undefined;
 
   const byFile = new Map<string, MutantOutcome[]>();
   for (const m of report.mutants) {
@@ -307,6 +318,7 @@ export async function toMutationElements(
           likelyEquivalent,
           refOf,
           ...(notRunText !== undefined ? { notRunText } : {}),
+          ...(clientText !== undefined ? { clientText } : {}),
         });
         return {
           // R231: ids restart per batch, so the id is `<batchIndex>/<mutantCode>`, from the row, and

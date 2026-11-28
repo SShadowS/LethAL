@@ -390,11 +390,32 @@ export type CoverageMode = "none" | "procedure" | "line" | "fenced" | "al-runner
  * al-runner (`"al-runner"`): a stored run or report that names it is refused by name
  * (`v2-retired.ts`).
  */
-export type BackendKind = "bcdev" | "al-runner-v3";
+export type BackendKind = "bcdev" | "al-runner-v3" | "bcdev-client";
 
-/** R586: the backend publishes to a BC server (leases, attestation, quarantine, TestPage scan). */
+/**
+ * PR-479: the one place the `bcdev-client` name is written. Every other file uses this constant or
+ * `isBcdevClient`, so a source test can pin that nothing else names it as a default or a choice.
+ */
+export const BCDEV_CLIENT = "bcdev-client" as const;
+
+/** PR-479: the experimental backend that runs each test codeunit in a `/cs` client session. */
+export function isBcdevClient(kind: BackendKind): boolean {
+  return kind === BCDEV_CLIENT;
+}
+
+/** R586: the HEADLESS bcdev backend only. A client run is `isBcServer` but not `isBcdev`. */
 export function isBcdev(kind: BackendKind): boolean {
   return kind === "bcdev";
+}
+
+/** PR-479: the backend publishes to a BC server (bcdev and bcdev-client): leases, attestation, quarantine. */
+export function isBcServer(kind: BackendKind): boolean {
+  return kind === "bcdev" || kind === BCDEV_CLIENT;
+}
+
+/** PR-479: `isBcServer` for a stored or reported backend NAME (a string), as readers of a report have. */
+export function isBcServerName(name: string): boolean {
+  return name === "bcdev" || name === BCDEV_CLIENT;
 }
 
 /**
@@ -764,6 +785,11 @@ export interface ExecutionBackend {
    * rejection. No publish. Absent on al-runner, whose compile happens per test.
    */
   compilePlainCheck?(dir: string): Promise<void>;
+  /**
+   * PR-479, OPTIONAL: refusals a bcdev-client run makes BEFORE any publish (the `/cs` probe and the control
+   * version). Called once by `runSession`, after `status()`. Absent on every other backend.
+   */
+  clientPreflight?(): Promise<void>;
   /**
    * R739, OPTIONAL: where the backend's user-facing notices go during a session. `runSession` and
    * `runNamedMutants` install a function that emits a warning event (`code` is the event's code),

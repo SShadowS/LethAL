@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { normalizeForComparison } from "../itest/mutant-equality";
+import { BCDEV_CLIENT } from "../src/backend";
 import { UncommittedPathError } from "../src/campaign-git";
 import {
   CampaignGitInvocationError,
@@ -588,6 +589,7 @@ describe("lethal campaign freeze | anchors | compare", () => {
   let noneReportPath: string;
   let procedureReportPath: string;
   let legacyReportPath: string;
+  let clientReportPath: string;
   let textChangedReportPath: string;
   let redactedReportPath: string;
   let rekeyedReportPath: string;
@@ -597,10 +599,11 @@ describe("lethal campaign freeze | anchors | compare", () => {
     const baseline = JSON.stringify(legacyRows(TWO_MUTANTS), null, 2);
     // R355: the form `campaign freeze` writes from R355 on, one per coverage mode under test, with
     // R556's identity scheme and per-row hashes.
-    const stageIn = (coverageMode: string) =>
+    const stageIn = (coverageMode: string, backend?: string) =>
       JSON.stringify(
         {
           coverageMode,
+          ...(backend !== undefined ? { backend } : {}),
           identityScheme: IDENTITY_SCHEME,
           entries: normalizeForComparison(TWO_MUTANTS),
         },
@@ -610,6 +613,9 @@ describe("lethal campaign freeze | anchors | compare", () => {
     repo = await makeRepo({
       [rec("stage-cov-none.precommit.md")]: "# stage-cov-none\n",
       [rec("stage-cov-none.baseline.json")]: stageIn("none"),
+      // PR-479: a stage frozen from a bcdev-client run records its backend (coverage none).
+      [rec("stage-client.precommit.md")]: "# stage-client\n",
+      [rec("stage-client.baseline.json")]: stageIn("none", BCDEV_CLIENT),
       [rec("stage-cov-procedure.precommit.md")]: "# stage-cov-procedure\n",
       [rec("stage-cov-procedure.baseline.json")]: stageIn("procedure"),
       // A stage frozen before R355: the plain list, mode unknown.
@@ -685,6 +691,11 @@ describe("lethal campaign freeze | anchors | compare", () => {
     noneReportPath = join(outDir, "report-none.json");
     procedureReportPath = join(outDir, "report-procedure.json");
     legacyReportPath = join(outDir, "report-legacy.json");
+    clientReportPath = join(outDir, "report-client.json");
+    await writeFile(
+      clientReportPath,
+      JSON.stringify({ ...TWO_MUTANTS, backend: BCDEV_CLIENT, coverageMode: "none" }),
+    );
     await writeFile(noneReportPath, JSON.stringify({ ...TWO_MUTANTS, coverageMode: "none" }));
     await writeFile(
       procedureReportPath,
@@ -1088,6 +1099,49 @@ describe("lethal campaign freeze | anchors | compare", () => {
       if (result.coverage.verified) throw new Error("a modeless report must not read as verified");
       expect(result.coverage.statement).toContain("the report records no coverageMode");
       expect(lines.join("\n")).toContain(result.coverage.statement);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // ---- PR-479: a bcdev-client run and a headless one are never compared ------------------------
+
+  test(
+    "PR-479: compare REFUSES a headless report against a stage frozen from a bcdev-client run",
+    async () => {
+      // Same coverage mode (none) on both sides, so only the backend can be the reason.
+      const err = await refusalFrom(
+        runCampaignCompare({ manifestPath, stage: "stage-client", reportPath: noneReportPath }),
+      );
+      expect(err.message).toContain("bcdev-client-never-mixed");
+      expect(err.message).toContain("frozen on backend bcdev-client");
+      expect(err.message).toContain("ran on backend bcdev");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "PR-479: compare REFUSES a bcdev-client report against a headless stage (one with no recorded backend)",
+    async () => {
+      const err = await refusalFrom(
+        runCampaignCompare({ manifestPath, stage: "stage-cov-none", reportPath: clientReportPath }),
+      );
+      expect(err.message).toContain("bcdev-client-never-mixed");
+      expect(err.message).toContain("frozen on backend bcdev");
+      expect(err.message).toContain("ran on backend bcdev-client");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "PR-479: compare of a bcdev-client report against its own client stage passes",
+    async () => {
+      const result = await compareCampaignStage({
+        manifestPath,
+        stage: "stage-client",
+        reportPath: clientReportPath,
+        log: () => {},
+      });
+      expect(result.identical).toBe(true);
     },
     TEST_TIMEOUT_MS,
   );

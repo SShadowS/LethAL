@@ -12,7 +12,7 @@ import {
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
-import { isBcdev } from "./backend";
+import { isBcServer, isBcdev, isBcdevClient } from "./backend";
 import type { BackendCapabilities, CoverageMode, StopEvidence, TestMethodRef } from "./backend";
 import type { ConfirmRecord } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
@@ -299,7 +299,9 @@ export type Caveat =
   // PR-456 (R1229): a survivor was carried across a server restart that lost the database.
   | "resumed-across-restart"
   // PR-472 (R197, R1174): `--no-kill-ledger` was on (bcdev only).
-  | "kill-ledger-off";
+  | "kill-ledger-off"
+  // PR-479: every report of a bcdev-client run, and no other: coverage is off, a survivor may be a mutant no test reached.
+  | "client-no-coverage";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -887,6 +889,23 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "value that decides a branch inside a procedure, or rows left over since the earlier setup). A " +
       "survivor can only hide a kill that way, never invent one; re-running without `--resume` removes it.",
     basis: "R1229",
+  },
+  "client-no-coverage": {
+    meaning:
+      "This run used the experimental bcdev-client backend. Coverage is off on this backend: every mutant " +
+      "ran every test codeunit, so a survivor may be a mutant no test reached. Do not read these survivors " +
+      "as headless survivors. A mutant no test reached is `survived` here, where a headless run reports it " +
+      "`no-coverage`. Risks not measured in this build: a child session a test starts; a NumberSequence, " +
+      "which is not rolled back; IsolatedStorage, an OnBefore write, and a raising subscriber under isolation; " +
+      "a background session, TaskScheduler or job queue started at login, which can reach a guard during a " +
+      "run; a subscriber to the test runner's per-method events, which runs outside isolation; a forced " +
+      "reset without a real NST restart, which leaves a zombie session; and an overrun, which wedges the " +
+      "server until a restart and ends the run's remaining work.",
+    entailedNegative:
+      "Not a claim that any survivor is wrong, and not a claim that a kill is: a kill is reproduced and " +
+      "confirmed before it is reported. It says only that this run's survivors do not compare with a " +
+      "headless run's, and that the open risks above were not measured.",
+    basis: "R1170",
   },
 };
 
@@ -3017,6 +3036,17 @@ function measuredExecutionContext(
         "BC's fenced path (GuiAllowed=No); to run without a client set alRunnerV3.noClient (R-907)",
     };
   }
+  // PR-479: bcdev-client runs a codeunit in a `/cs` web client session. Its GuiAllowed and ClientType are not measured
+  // in 479a (the driver is not built): the text says so rather than claim a measurement.
+  if (isBcdevClient(caps.kind)) {
+    return {
+      guiAllowed: true,
+      clientType: "Web (/cs client session)",
+      basis:
+        "NOT measured on this backend yet (PR-479 round 1 builds no driver): a /cs session is a web client " +
+        "session, so GuiAllowed=Yes and ClientType=Web are assumed from the client-services path (R69 Phase 2)",
+    };
+  }
   // R654: bcdev is the only other backend (the .NET al-runner's "al-runner CLI" arm is gone).
   return {
     guiAllowed: false,
@@ -3585,6 +3615,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // PR-472 - see CAVEAT_INTERPRETATIONS["kill-ledger-off"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "kill-ledger-off"))
     caveats.push("kill-ledger-off");
+  // PR-479 - see CAVEAT_INTERPRETATIONS["client-no-coverage"]. From the backend's identity: on EVERY bcdev-client report.
+  if (isBcdevClient(input.caps.kind)) caveats.push("client-no-coverage");
   // R922 (4) - see CAVEAT_INTERPRETATIONS["al-runner-v3-serve-default-fallback"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "al-runner-v3-serve-default-fallback"))
     caveats.push("al-runner-v3-serve-default-fallback");
@@ -3601,7 +3633,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // push above: the count's hint part reads it.
   // The field is filled for al-runner-v3 and bcdev (PR-387); the fold picks each backend's own list.
   const notRunField =
-    input.caps.kind === "al-runner-v3" || isBcdev(input.caps.kind)
+    input.caps.kind === "al-runner-v3" || isBcServer(input.caps.kind)
       ? { notRunAtBaseline: input.notRunAtBaseline }
       : {};
   const notRun = notRunSurvivors({

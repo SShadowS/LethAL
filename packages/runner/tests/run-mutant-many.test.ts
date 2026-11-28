@@ -597,6 +597,32 @@ describe("runMany — the watchdog (R198 §3.2)", () => {
     expect(r.verdict.stopEvidence).toBe("bc-named-stop");
   });
 
+  // PR-479: the watchdog reads a `client-run` op as ours, exactly as it reads a `run` op. Red: put `status.opKind === "run"`
+  // back in the watchdog and the client-run case never fires its stop.
+  for (const [opKind, fires] of [
+    ["run", true],
+    ["client-run", true],
+    ["publish", false],
+  ] as const) {
+    test(`PR-479: a method over its budget on an op of kind ${JSON.stringify(opKind)} ${fires ? "fires" : "does not fire"} the stop`, async () => {
+      const f = fakes({
+        many: "hold",
+        status: () => statusOf({ opKind }),
+        stopAt: () => {
+          setTimeout(() => f.release(new Response(AL_STOP_BODY, { status: 408 })), 5);
+          return { stopped: true, sessionId: 9 };
+        },
+      });
+      const p = transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+      if (!fires) {
+        await new Promise((r) => setTimeout(r, 40));
+        f.release(odata(answer()));
+      }
+      await p;
+      expect(f.stops.length).toBe(fires ? 1 : 0);
+    });
+  }
+
   test("R710: a wall-clock step back while the grouped call is held does not give the stop row a negative duration", async () => {
     let stepped = false;
     const realNow = Date.now;

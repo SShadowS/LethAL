@@ -62,6 +62,7 @@ import {
   coverageModeMismatch,
   isCoverageMode,
   parseStageBaseline,
+  stageBackendMismatch,
   stageModeUnverified,
 } from "../itest/baseline-guard";
 import {
@@ -597,6 +598,15 @@ export async function compareCampaignStage(args: CampaignArgsBase): Promise<Camp
       `campaign compare: ${args.reportPath} records an unknown coverageMode ${JSON.stringify(reportMode)}. Refusing to compare a report whose mode cannot be read.`,
     );
   }
+
+  // PR-479: a bcdev-client report and a headless stage (or the other way round) are never compared.
+  const backendMixed = stageBackendMismatch(
+    "campaign compare",
+    args.stage,
+    baseline.backend,
+    report.backend,
+  );
+  if (backendMixed !== undefined) throw backendMixed;
 
   // Cardinality first, exactly as in `freeze` and `anchors`, with the committed baseline's own
   // length as the pre-commitment: a truncated report would otherwise be reported as "these N
