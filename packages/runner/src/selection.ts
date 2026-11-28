@@ -105,6 +105,36 @@ export function isCarryDisabled(
   return carryDisabled?.has(coarseIdentityTupleOf(m)) === true;
 }
 
+/** One side of PR-505's comparison: a run's numbering output, as recorded or as this session made it. */
+export interface NumberingFacts {
+  /** R443's `numberingDigestOf`; null when the run did not record one. */
+  readonly digest: string | null;
+  /** The coarse tuples the run numbered no ordinal for (`carry_hidden`); null when not recorded. */
+  readonly hidden: readonly string[] | null;
+  /** The run's twin sites (`twin_tuples`); null when not measured. */
+  readonly twins: ReadonlySet<string> | null;
+}
+
+/**
+ * PR-505 (pre-commitment `docs/superpowers/specs/2026-11-28-pr505-lines-resume-carry.md`): whether a resumed
+ * run numbered EXACTLY as this session did. R307 refuses a twin of a site with no ordinal because a recorded key
+ * may name another site when the two runs numbered different sets. When the numbering digest, the hidden tuples
+ * and the twin sites are all known and equal, every recorded key names the same site in both runs, so a resume
+ * need not refuse it. Fails closed: any missing fact, or any difference, is `false`. Resume only: history and
+ * equivalence marks keep R307's refusal.
+ */
+export function numberingUnchanged(prior: NumberingFacts, current: NumberingFacts): boolean {
+  if (prior.digest === null || current.digest === null || prior.digest !== current.digest)
+    return false;
+  if (prior.hidden === null || current.hidden === null) return false;
+  if (prior.twins === null || current.twins === null) return false;
+  const a = new Set(prior.hidden);
+  const b = new Set(current.hidden);
+  const same = (x: ReadonlySet<string>, y: ReadonlySet<string>) =>
+    x.size === y.size && [...x].every((t) => y.has(t));
+  return same(a, b) && same(prior.twins, current.twins);
+}
+
 /**
  * R391: a (file, tuple) pair: the tuple is `identityTupleOf` (no ordinal), the file is compared
  * with `/` separators so a row recorded on Windows before R421 still matches.

@@ -320,6 +320,7 @@ import {
   STRANDED_SKIP_NOTE,
   buildResumeIndex,
   carriedVerdictFor,
+  recordedVerdictOf,
   sessionFingerprint,
   testDiscoveryMarker,
   wasStranded,
@@ -340,7 +341,9 @@ import {
   coverageFilter,
   filterHistory,
   identityKeyOf,
+  isCarryDisabled,
   numberingDigestOf,
+  numberingUnchanged,
   objectKeyOf,
   testKeyOf,
   twinSitesOf,
@@ -5100,6 +5103,8 @@ function resolveResume(
       index: ResumeIndex;
       carryHidden: CarryHidden;
       recorded: RecordedCarrySide;
+      /** PR-505: the prior run's `numbering_digest` (R443); null when not recorded. */
+      priorNumberingDigest: string | null;
       /** R969: the `resume-across-lease-reset` text; the session emits it after its own checks. */
       leaseResetWarning?: string;
       /** PR-456: set when the prior run measured on another database (restart mode: survivors only). */
@@ -5157,6 +5162,8 @@ function resolveResume(
   // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
   let recorded: RecordedCarrySide;
   let priorHidden: CarryHidden | null;
+  // PR-505: the resumed run's numbering output digest (R443), for the unchanged-numbering carry rule.
+  let priorNumberingDigest: string | null;
   // R601: the resumed run's recorded test-app identity, for the `resume-reusing-run` clause.
   let priorTestAppHash: string | null;
   let priorAcrossRestart = false;
@@ -5364,6 +5371,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume: run ${found} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(foundRow);
+    priorNumberingDigest = foundRow.numberingDigest;
     priorTestAppHash = foundRow.testAppHash;
     priorAcrossRestart = foundRow.resumedAcrossRestart;
   } else {
@@ -5460,6 +5468,7 @@ function resolveResume(
     if (priorHidden === null)
       throw new Error(`--resume-run ${id} lent with no carry_hidden (R619)`);
     recorded = recordedCarrySideOf(row);
+    priorNumberingDigest = row.numberingDigest;
     priorTestAppHash = row.testAppHash;
     priorAcrossRestart = row.resumedAcrossRestart;
     priorRunId = id;
@@ -5572,6 +5581,7 @@ function resolveResume(
     index,
     carryHidden: priorHidden,
     recorded,
+    priorNumberingDigest,
     priorAcrossRestart,
     ...(leaseResetWarning !== undefined ? { leaseResetWarning } : {}),
     ...(restart !== undefined ? { restart } : {}),
@@ -5581,6 +5591,29 @@ function resolveResume(
 /** R557 C1: up to five test names for a warning, `, ...` when there are more. */
 function namesSample(tests: readonly string[]): string {
   return `${tests.slice(0, 5).join(", ")}${tests.length > 5 ? ", ..." : ""}`;
+}
+
+/** PR-505: the most mutant ids one reason of `resume-recorded-not-carried` lists; the count is always whole. */
+export const RECORDED_RERUN_ID_CAP = 200;
+
+/**
+ * PR-505: the `resume-recorded-not-carried` text. It names EVERY mutant with a recorded verdict that this resume
+ * re-runs, grouped by reason, so a re-run is never silent. Each reason's ids are listed up to
+ * `RECORDED_RERUN_ID_CAP`, then `+N more`.
+ */
+export function resumeRecordedNotCarriedMessage(
+  batchIdx: number,
+  priorRunId: number,
+  byReason: ReadonlyMap<string, readonly string[]>,
+): string {
+  const total = [...byReason.values()].reduce((n, ids) => n + ids.length, 0);
+  const parts = [...byReason.entries()].map(([why, ids]) => {
+    const shown = ids.slice(0, RECORDED_RERUN_ID_CAP).join(", ");
+    const more =
+      ids.length > RECORDED_RERUN_ID_CAP ? `, +${ids.length - RECORDED_RERUN_ID_CAP} more` : "";
+    return `${ids.length} ${why}: ${shown}${more}`;
+  });
+  return `[lethal] --resume: batch ${batchIdx}: ${total} mutant(s) with a verdict recorded in run ${priorRunId} are executed, not carried (re-running is cost, never a verdict change): ${parts.join("; ")} (PR-505).`;
 }
 
 /** R391: a run row's side of `carryRecord`. A missing row, like a NULL column, carries nothing. */
@@ -8743,11 +8776,30 @@ async function runSessionBody(
       );
     }
     const union = new Set([...prior.tuples, ...carryHidden.tuples]);
+    // PR-505: when the resumed run numbered exactly as this session did (R443's digest, the hidden tuples and the
+    // twin sites, all known and equal), every recorded key names the same site, so R307's refusal is not needed on
+    // resume. A `--lines` resume hides every site outside its range, and without this its in-range twins never
+    // carry. Any missing or different fact keeps the refusal (fail closed).
+    const keepRefusal = !numberingUnchanged(
+      {
+        digest: resolvedResume.priorNumberingDigest,
+        hidden: prior.tuples,
+        twins: resolvedResume.recorded.twins,
+      },
+      { digest: numberingDigest, hidden: carryHidden.tuples, twins: carryCurrent.twins },
+    );
+    if (union.size > 0 && !keepRefusal) {
+      emit({
+        type: "warning",
+        code: "resume-numbering-unchanged",
+        message: `[lethal] --resume: run ${resolvedResume.runId} numbered this scope exactly as this session does (the same numbering digest, ${union.size} hidden tuple(s) and twin sites), so mutants sharing a tuple with a site neither run numbered may carry (PR-505; R307 still applies to history and equivalence marks).`,
+      });
+    }
     resumeState = {
       ...resolvedResume,
       index: {
         ...resolvedResume.index,
-        ...(union.size > 0 ? { carryDisabled: union } : {}),
+        ...(union.size > 0 && keepRefusal ? { carryDisabled: union } : {}),
         // R391: the resumed run's generation facts against this session's.
         carryRule: { recorded: resolvedResume.recorded, current: carryCurrent },
       },
@@ -10570,6 +10622,15 @@ async function runSessionBody(
           toExecute = [];
           const carryNotFaced: MutantManifestEntry[] = [];
           const carryNoRecord: MutantManifestEntry[] = [];
+          // PR-505: every mutant with a RECORDED verdict that this resume re-runs, by reason, so a re-run is never
+          // silent (R1229's first live proof re-ran 54 survivors with no word). `not-faced` and `no-record` keep
+          // their own warnings above; these are the rest.
+          const recordedRerun = new Map<string, string[]>();
+          const rerunBecause = (why: string, m: MutantManifestEntry) => {
+            const list = recordedRerun.get(why) ?? [];
+            list.push(m.mutantId);
+            recordedRerun.set(why, list);
+          };
           // PR-456: a resume across a restart that lost the database carries SURVIVORS only, and only
           // of a batch whose fresh baseline equalled the prior run's (`restartDecision.carry`).
           const restartMode = resumeState.restart !== undefined;
@@ -10583,6 +10644,16 @@ async function runSessionBody(
             // R53's stranded skips were recorded at step 1b', before coverage (R-646c).
             const carried = carriedVerdictFor(resumeState.index, m);
             if (carried === undefined) {
+              // PR-505: a recorded verdict exists for this mutant, by key or by rule 2's member site, yet it is not
+              // carried: say why. (A recorded `no-coverage` is never carried by design, R621, and is not counted.)
+              const rec = recordedVerdictOf(resumeState.index, m);
+              if (rec !== undefined && rec !== "no-coverage")
+                rerunBecause(
+                  isCarryDisabled(m, resumeState.index.carryDisabled)
+                    ? "carry-disabled (R307: shares a tuple with a site a run numbered no ordinal for)"
+                    : "carry-refused (R391: the recorded key may name another mutant)",
+                  m,
+                );
               toExecute.push(m);
               continue;
             }
@@ -10619,7 +10690,14 @@ async function runSessionBody(
               }
               if (act.kind === "rerun") {
                 if (act.why === "no-record") carryNoRecord.push(m);
-                if (act.why === "not-faced") carryNotFaced.push(m);
+                else if (act.why === "not-faced") carryNotFaced.push(m);
+                else
+                  rerunBecause(
+                    act.why === "batch"
+                      ? "restart-batch (PR-456: this batch's fresh baseline did not equal the prior run's)"
+                      : `restart-${act.why} (PR-456)`,
+                    m,
+                  );
                 toExecute.push(m);
                 continue;
               }
@@ -10724,6 +10802,13 @@ async function runSessionBody(
               type: "warning",
               code: "resume-tests-not-faced",
               message: `[lethal] --resume: batch ${batchIdx}: ${carryNotFaced.length} survivor(s) of run ${resumeState.runId} are covered now by a test they were not run against there (a test red at that run's baseline, or coverage that changed), so they are executed, not carried: ${namesSample(carryNotFaced.map((m) => m.mutantId))} (R646).`,
+            });
+          }
+          if (recordedRerun.size > 0) {
+            emit({
+              type: "warning",
+              code: "resume-recorded-not-carried",
+              message: resumeRecordedNotCarriedMessage(batchIdx, resumeState.runId, recordedRerun),
             });
           }
         }

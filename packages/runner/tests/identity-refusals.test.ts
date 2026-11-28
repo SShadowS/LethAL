@@ -857,6 +857,59 @@ describe("R442: a site hidden from numbering in one run poisons no key in the ne
     expect(resumed.backend.deploys).toBe(1);
   });
 
+  // PR-505 (pre-commitment 2026-11-28-pr505-lines-resume-carry.md). DOTests' f4-a: a `--lines` run hides every
+  // site outside its range, so its in-range twins were never carried, though the resume numbered exactly as run 1.
+  // Red: drop `numberingUnchanged` at the union (always keep R307's refusal): Compute's twins read `executed`.
+  test("PR-505: resuming the same --lines run carries the twins of a site outside the range, and says why", async () => {
+    const w = await r442World({
+      "src/A.al": obj('table 50100 "Twin"', X()),
+      "src/Good.al": obj(GOOD_CU, X(), Y()),
+    });
+    const lines = [{ file: "src/Good.al", start: 1, end: 100 }];
+    const p = await w.run({ lines });
+    const compute = p.rows("src/Good.al", "Compute");
+    const other = p.rows("src/Good.al", "Other");
+    expect(w.store.getRun(p.runId)?.carryHidden?.tuples).toHaveLength(3); // A's X sites, numbered no ordinal
+    w.unfinish(p.runId);
+    const resumed = await w.run({ resume: p.runId, lines });
+    expect(resumed.rows("src/Good.al", "Compute")).toEqual(as(compute, "survived carried"));
+    expect(resumed.rows("src/Good.al", "Other")).toEqual(as(other, "survived carried"));
+    expect(resumed.warnings("resume-numbering-unchanged")).toHaveLength(1);
+    expect(resumed.warnings("resume-recorded-not-carried")).toEqual([]);
+  });
+
+  // PR-505, the other direction: the numbering CHANGED (Bad-X repaired gives its sites ordinals), so the twins still
+  // must not carry (R442 holds), and every one of them is named with its reason, not re-run in silence.
+  // Red: make `numberingUnchanged` return true (the repair changes the digest too, so dropping only the hidden-set
+  // comparison stays green here; that comparison is pinned by selection.test.ts): Compute's twins read `carried`.
+  // Red: drop `rerunBecause` at the not-carried branch: no warning.
+  test("PR-505: a resume whose numbering changed still re-runs the twins, and names each one with its reason", async () => {
+    const w = await r442World({
+      "src/BadX.al": obj(REFUSED_TABLE, X()),
+      "src/Good.al": obj(GOOD_CU, X(), Y()),
+    });
+    const p = await w.run();
+    const compute = p.rows("src/Good.al", "Compute");
+    await w.write("src/BadX.al", obj(REPAIRED_TABLE, X()));
+    w.unfinish(p.runId);
+    const resumed = await w.run({ resume: p.runId });
+    expect(resumed.rows("src/Good.al", "Compute")).toEqual(compute); // executed, not carried
+    expect(resumed.warnings("resume-numbering-unchanged")).toEqual([]);
+    // Mutant codes are per run: take Good's twins from the RESUMED run (BadX's newly numbered mutants come first and
+    // took Good's run-1 codes). Good's twins moved ordinal, so their record is found by rule 2's member site.
+    const goodTwins = resumed.report.mutants
+      .filter((m) => m.file === "src/Good.al" && m.procedureName === "Compute")
+      .map((m) => m.mutantCode);
+    expect(goodTwins.length).toBeGreaterThan(0);
+    const named = resumed.warnings("resume-recorded-not-carried");
+    expect(named).toHaveLength(1);
+    expect(named[0]).toContain("carry-disabled (R307");
+    for (const id of goodTwins) expect(named[0]).toContain(`${id}`);
+    // Each named id once, by exact token, so a code that is a prefix of another (M0001 in M00010) cannot satisfy it.
+    const listed = new Set(named[0]?.match(/M\d{4,}/g) ?? []);
+    for (const id of goodTwins) expect(listed.has(id)).toBe(true);
+  });
+
   test("resume: a preproc-undecided file since fixed is refused by name", async () => {
     const COMMENTED = `table 50100 "Twin"\n{\n    /*\n    #if true\n    */\n${X()}}\n`;
     const w = await r442World({ "src/A.al": COMMENTED, "src/Good.al": obj(GOOD_CU, X()) });

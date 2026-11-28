@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { MutantManifestEntry } from "@lethal/schemata";
+import { type MutantManifestEntry, identityTupleOf } from "@lethal/schemata";
 import type { CoverageMode, StopEvidence } from "./backend";
 import type { LineRange } from "./line-filter";
 import {
@@ -362,6 +362,20 @@ export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean
  * unchanged enclosing member, else none). Edits outside the member can still carry under rule 2.
  * One exception (R621): a stored `no-coverage` never carries; it is re-derived.
  */
+/**
+ * PR-505: the verdict the resumed run RECORDED for `m`, by key or by rule 2's member site, whatever the carry rules
+ * decide; undefined when it recorded none. Used only to name what a resume re-runs (`resume-recorded-not-carried`),
+ * never to carry.
+ */
+export function recordedVerdictOf(index: ResumeIndex, m: MutantManifestEntry): string | undefined {
+  const byKey = index.carryable.get(serializeKey(identityKeyOf(m)))?.verdict;
+  if (byKey !== undefined) return byKey;
+  if (m.memberHash === undefined) return undefined;
+  return index.carryableBySite.get(
+    memberSiteOf(twinSiteOf(m.file, identityTupleOf(m)), m.memberHash),
+  )?.verdict;
+}
+
 export function carriedVerdictFor(
   index: ResumeIndex,
   m: MutantManifestEntry,
