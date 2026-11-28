@@ -60,6 +60,7 @@ import { notRunLine, notRunSurvivors } from "../src/not-run-survivors";
 import {
   KillLedgerFlagBackendError,
   LeaseSession,
+  TierSlowdownFlagBackendError,
   runNamedMutants,
   runSession,
 } from "../src/orchestrator";
@@ -800,6 +801,8 @@ describe("PR-479: a client session", () => {
     ["--no-kill-ledger", { killLedger: false }, KillLedgerFlagBackendError],
     ["--confirm-from", { confirm: {} as never }, ClientNeverMixedError],
     ["--stop-hung-sessions", { stopHungSessions: true }, ClientModeRefusedError],
+    // PR-466, merged in: the tier-slowdown monitor watches headless bcdev runs only.
+    ["--tier-slowdown-stop", { tierSlowdownStop: true }, TierSlowdownFlagBackendError],
   ];
   for (const [flag, extra, expected] of refusedFlags) {
     test(`${flag} is refused on a client run, by name, before any run`, async () => {

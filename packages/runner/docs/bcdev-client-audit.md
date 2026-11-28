@@ -134,7 +134,9 @@ count must equal the number of sites it claims. An unclaimed site, or a count th
 | packages/runner/src/orchestrator.ts | backend.capabilities().kind !== "al-runner-v3" | 1 | same-as-bcdev | v3-only branch |
 | packages/runner/src/orchestrator.ts | isBcdev(args.backend.capabilities().kind) | 1 | off | R1174's re-walk is off on a client run |
 | packages/runner/src/orchestrator.ts | if (kind !== "al-runner-v3") return undefined; | 1 | same-as-bcdev | no runner build on a client run |
-| packages/runner/src/orchestrator.ts | isBcdev(caps.kind) | 1 | off | the --no-kill-ledger fingerprint pair is bcdev-only; a client run is off by kind |
+| packages/runner/src/orchestrator.ts | cfg.tierSlowdownStop === true && !isBcdev(caps.kind) | 1 | refuse:tier-slowdown-flag-backend | --tier-slowdown-stop is refused on a client run (TierSlowdownFlagBackendError; PR-466, merged in) |
+| packages/runner/src/orchestrator.ts | const slowdownMonitor: TierSlowdownMonitor | 1 | off | the tier-slowdown monitor watches headless bcdev runs; a client run builds none (PR-466, merged in) |
+| packages/runner/src/orchestrator.ts | isBcdev(caps.kind) | 2 | off | the --no-kill-ledger and --tier-slowdown-stop fingerprint pairs are bcdev-only; a client run is off by kind |
 | packages/runner/src/cli.ts | import type { BackendKind, BackendStatus | 1 | same-as-bcdev | import |
 | packages/runner/src/cli.ts | function parseBackendKind( | 1 | new-arm | parses the name; the gate is where the backend is built |
 | packages/runner/src/cli.ts | missing required --backend | 1 | unreachable | an error text |
