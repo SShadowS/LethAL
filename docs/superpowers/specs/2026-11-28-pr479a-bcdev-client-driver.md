@@ -243,3 +243,24 @@ change, so no 1.0.0.32. These are my calls, from design principles 1 (correct fi
    - background sessions, TaskScheduler or a job queue started at login, which can reach a guard during an op;
    - subscribers to Test Runner - Mgt's per-method events in the test app or target, which run outside isolation (shared
      with headless).
+
+## Amendment 3 (2026-11-28, the first smoke run of the repo driver on bcwin)
+**Measured** (`/coord/handoff/PR-479/smoke/`):
+- the open and Activate worked, and the bind passed;
+- page 130455's method-line read-back then found NO lines and refused (`methods-mismatch`), fail-closed;
+- because the refusal came after the bind, the op was bound with no End, and bcwin needed an NST restart
+  (q-20261128T025156-4073f557).
+
+**Changes:**
+1. **Every page 130455 set-up and read-back happens BEFORE the op exists:**
+   - the new order is: open; then page 130455's set-up and read-backs (the codeunit range, the runner id, the company, the
+     method lines and their Run flags); then Activate; then bind (page 91015); then a re-check of the range, runner and
+     company on page 130455; then the run, End, Deactivate, Read, close (amendment 1, item 1 otherwise unchanged);
+   - a read-back refusal therefore closes a session that holds no op, and never wedges the server;
+   - a red test covers it: a read-back refusal happens before the bind is ever requested.
+2. **The method lines:** the driver reads them through the page's repeater, trying the viewport, then fetching rows, then a
+   page refresh, and refuses if none yields them.
+   - Which strategy works on BC 28.4 is MEASURED on bcwin with the driver's diagnostic output before the build goes on.
+     The read-back stays fail-closed.
+3. **The one wedge still possible from the driver** is a failure between Activate and the end of the run. It is recovered
+   only by an NST restart plus ForceResetLease. Waiting out the run bound does not clear it.
