@@ -119,14 +119,15 @@ export {
 const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
 export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
-// PR-462 (R1170): the 1.0.0.30 build (the Generation counter; headless unchanged), compiled clean with
-// alc 18.1.43 (errors 0, warnings 0).
-export const CONTROL_APP = "/coord/handoff/PR-462/control/LethAL_LethAL Control_1.0.0.30.app";
-export const CONTROL_SHA256 = "eb830ade2fd1c2207f38f58f42bcbac41edc737285256c799b30ea5c83bc39c3";
+// PR-478 (R1170): the 1.0.0.31 build (the client-run op, the self-marked End and the attestation rows;
+// headless unchanged), compiled clean (errors 0, warnings 0). No client-run op is ever opened on bc1-bc3
+// (PR-478 pre-commitment, amendment 6).
+export const CONTROL_APP = "/coord/handoff/PR-478/control/pinned/LethAL_LethAL Control_1.0.0.31.app";
+export const CONTROL_SHA256 = "cf0c059f31c1a0e922ca1a4ef76b1c7eaae94f4e2465356eb93a6822551b1616";
 /**
  * PR-462: servers kept on another build. bc4 stays on PR-309's 1.0.0.29 (R1138) while lethal-bugs'
  * DOTests pinned series (PR-427) runs there: it records "LethAL Control: 1.0.0.29" as a pin. Remove
- * the entry when that series ends, in the change that publishes 1.0.0.30 to bc4 (R1170's trigger).
+ * the entry when that series ends, in the change that publishes CONTROL_APP to bc4 (R1170's trigger).
  * bc5 (2026-11-27) carries the same series' second half of each file, so it is pinned with bc4 and moves with it.
  */
 const PR309_CONTROL = {
@@ -141,7 +142,7 @@ export const CONTROL_PINS: Partial<
 };
 /**
  * PR-462: bc-demo (the owner's demo server, `bc-demo-setup.ts`, kraken and laptop mode) stays on
- * PR-309's 1.0.0.29 too: 1.0.0.30 adds nothing without a client session, and moving it would make the
+ * PR-309's 1.0.0.29 too: 1.0.0.30 and 1.0.0.31 add nothing without a client session, and moving it would make the
  * owner's laptop mode refuse until a new build is copied there. Move it with bc4.
  */
 export const DEMO_CONTROL: { readonly path: string; readonly sha256: string } = {

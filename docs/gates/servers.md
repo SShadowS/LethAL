@@ -305,8 +305,37 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**The current proof for `bc1`-`bc3` is coord PR-462's, on 2026-11-26/27, under LethAL Control 1.0.0.30 (R1170's Generation
-counter; headless unchanged)** (the table right below).
+**The current proof for `bc1`-`bc3` is coord PR-478's, on 2026-11-27/28, under LethAL Control 1.0.0.31 (R1170's
+client-session control half; headless unchanged)** (the table right below).
+- **Driver:** `/coord/handoff/PR-478/prove.sh`, then `prove-nt.sh` (the same without an outer timeout), lane preproc, head
+  d7cb14959 (branch lethal/pr-478), each server under its own coord lease and, after R1241, in its OWN worktree
+  (`pr-478` for bc3, `pr478-bc2`, `pr478-bc1`).
+- **Setup:** `bc-linux-setup.ts --held-lease` upgraded each server from 1.0.0.30 and read the pinned build back by sha256
+  (cf0c059f… = local). After the last gate, the build was read back again, along with doctor's `control-version`.
+- **Gates:** each passed its own comparison with its baseline, then doctor was clean and each lease released healthy. Five
+  first attempts did not count, and each has its log kept beside the passing run:
+  - bc3 `itest:bcdev` and bc2 `itest:tables` failed R206's liveness check by reading the OTHER server's run in a shared store
+    (R1241, measured from the stores);
+  - bc3's and bc2's `itest:verify-scale` were killed mid-run, bc3's by the driver's outer timeout and bc2's by its stop. Both
+    servers were restarted and set up again, and both re-ran clean;
+  - bc1's verify-scale ran to its own PASS while the driver's timeout was held.
+- **R1241 evidence:** every passing run cited here was the newest run in its store when its gate checked it
+  (`/coord/handoff/PR-478/r1241-newest.ts`; the two failures are the only overlaps). Detail is in the PR-478 result.
+- **An older client against 1.0.0.31 (bc2):** lethal-bugs' DOTests pin `7c6364192` ran its own `itest:bcdev` and
+  `itest:lease` against its own baselines. Both PASS, and its doctor read 1.0.0.31 (`/coord/handoff/PR-478/older/`).
+- **No `client-run` op was opened on bc1-bc3** (amendment 6). The client legs ran on a throwaway Windows BC (`bcwin`,
+  `/coord/handoff/PR-478/bcwin/legs-*.json`).
+- **`bc4` and `bc5` stay on 1.0.0.29** while lethal-bugs' DOTests series runs there (the setup script's per-server pin): their
+  proof rows are unchanged.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc1` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.31 | `/coord/handoff/PR-478/prove/bc1/<gate>.log`, `run.log`, `setup.log`, `readback-*.log` beside them |
+| `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.31 | `/coord/handoff/PR-478/prove/bc2/<gate>.log`, `run.log`, `run-part1.log`, `setup.log`, `readback-*.log` beside them |
+| `bc3` | setup; the same 13, and `itest:hang` | 1.0.0.31 | `/coord/handoff/PR-478/prove/bc3/<gate>.log` (`bcdev-rerun1.log` for bcdev), `run.log`, `setup*.log`, `readback-*.log` beside them |
+
+**The proof before it, coord PR-462's, on 2026-11-26/27, under LethAL Control 1.0.0.30 (R1170's Generation counter;
+headless unchanged)**, is history (the table right below).
 - **Driver:** `/coord/handoff/PR-462/prove.sh` (PR-309's, lane preproc), one server at a time in one worktree (bc2, then bc3,
   then bc1), each under its own coord lease. Head f605cbb2 (branch lethal/pr-462).
 - **Setup:** `bc-linux-setup.ts --held-lease` upgraded each server from 1.0.0.29 and read the build back by sha256 (eb830ade…
