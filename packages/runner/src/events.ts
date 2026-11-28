@@ -374,6 +374,22 @@ export type RunEventInput =
     }
   | {
       /**
+       * PR-466 (r5 amendment 1): a check where every trigger condition held (a full 60-minute window, at least 50 rows,
+       * a median at or over the threshold) EXCEPT the host's CPU pressure, which was at or over the guard or unreadable
+       * (`psi: null`). In BOTH modes nothing was stopped, dropped or changed, and a later check can still trigger. Not a
+       * `warning` and not a report field, so no gate moves. At most once per session (the first guarded check); the
+       * arming line counts them all. It lets a quiet shadow tell "not slow" from "guarded out".
+       */
+      readonly type: "tier-slowdown-guarded";
+      readonly atMs: number;
+      readonly median: number;
+      readonly rows: number;
+      readonly spanMs: number;
+      readonly psi: number | null;
+      readonly load1: number | null;
+    }
+  | {
+      /**
        * The moment of observation is the batch's baseline RETURNING, not each test inside it: the
        * silence is inside the backend call, so per-test events would buy no liveness. Carries
        * per-test rows, not aggregates — `baselineGreen` and the pass/fail counts are folded from

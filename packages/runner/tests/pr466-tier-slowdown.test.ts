@@ -55,6 +55,7 @@ import {
   TIER_SLOWDOWN_REASON_PREFIX,
   TIER_SLOWDOWN_STOP,
   TIER_SLOWDOWN_WINDOW_MS,
+  type TierSlowdownGuarded,
   TierSlowdownMonitor,
   type TierSlowdownStop,
   parsePsiCpuAvg60,
@@ -87,6 +88,7 @@ function monitorRig(
   } = {},
 ) {
   const triggers: TierSlowdownStop[] = [];
+  const guarded: TierSlowdownGuarded[] = [];
   const state = {
     seq: 0,
     snapshot: 7,
@@ -104,6 +106,7 @@ function monitorRig(
     load1: () => state.load1,
     stopMode: opts.stopMode ?? true,
     onTrigger: (s) => triggers.push(s),
+    onGuarded: (g) => guarded.push(g),
   });
   /**
    * `n` rows at `ratio`, one every `stepMs` on the injected clock (the row is fed, THEN the clock moves, so row i of a
@@ -119,7 +122,7 @@ function monitorRig(
       state.t += stepMs;
     }
   };
-  return { mon, triggers, state, rows };
+  return { mon, triggers, guarded, state, rows };
 }
 
 describe("PR-466 r5 constants", () => {
@@ -171,6 +174,72 @@ describe("PR-466 r5 rule: |W| = 50 exactly, and the median of an even |W|", () =
     const r = evenMedian(2.4, 2.7);
     expect(r.triggers).toHaveLength(1);
     expect(r.triggers[0]?.median).toBeCloseTo(2.55, 10);
+  });
+});
+
+// r5 amendment 1 (03fd99ae9): a full hot window the PSI guard suppresses is said once, and changes nothing.
+describe("PR-466 r5 amendment 1: tier-slowdown-guarded", () => {
+  // Red: guard check removed (high PSI triggers), or the guarded call dropped.
+  test("hot window + PSI 20: guarded with its figures, no trigger", () => {
+    const r = monitorRig();
+    r.state.psi = 20;
+    r.rows(100, 6, 1);
+    expect(r.triggers).toHaveLength(0);
+    expect(r.guarded).toHaveLength(1);
+    expect(r.guarded[0]).toMatchObject({
+      median: 6,
+      rows: 61,
+      psi: 20,
+      load1: 1.5,
+      spanMs: 60 * MIN,
+      atMs: 99 * MIN,
+    });
+  });
+  // Red: guarded emitted on every hot check, or also on a trigger.
+  test("hot window + PSI 5: a trigger, and no guarded", () => {
+    const r = monitorRig();
+    r.rows(100, 6, 1);
+    expect(r.triggers).toHaveLength(1);
+    expect(r.guarded).toHaveLength(0);
+  });
+  // Red: a null PSI skipped silently, or read as 0 (it would trigger).
+  test("hot window + PSI unreadable: guarded with psi null", () => {
+    const r = monitorRig();
+    r.state.psi = null;
+    r.rows(100, 6, 1);
+    expect(r.triggers).toHaveLength(0);
+    expect(r.guarded).toHaveLength(1);
+    expect(r.guarded[0]?.psi).toBeNull();
+  });
+  // Red: guarded written before the median test (a cool window would say guarded).
+  test("a window under 2.5 writes neither, at any PSI", () => {
+    const r = monitorRig();
+    r.state.psi = 90;
+    r.rows(150, 2.49, 1);
+    expect(r.triggers).toHaveLength(0);
+    expect(r.guarded).toHaveLength(0);
+  });
+  // Red: guarded more than once, or a guarded check blocking a later trigger.
+  test("guarded once per session, counted on the arming line; a later low-PSI check still triggers", () => {
+    const r = monitorRig({ stopMode: false });
+    r.state.psi = 40;
+    r.rows(200, 6, 1); // checks at rows 100, 150, 200 are hot and guarded
+    expect(r.guarded).toHaveLength(1);
+    expect(r.mon.guardedChecks).toBe(3);
+    expect(r.mon.armingLine()).toContain("3 hot window(s) guarded out by PSI");
+    r.state.psi = 5;
+    r.rows(50, 6, 201);
+    expect(r.triggers).toHaveLength(1);
+    expect(r.guarded).toHaveLength(1);
+  });
+  // Red: guarded routed through the stop path in stop mode.
+  test("stop mode: guarded stops nothing", () => {
+    const r = monitorRig({ stopMode: true });
+    r.state.psi = 25;
+    r.rows(100, 6, 1);
+    expect(r.guarded).toHaveLength(1);
+    expect(r.mon.stop).toBeUndefined();
+    expect(r.mon.triggered).toBeUndefined();
   });
 });
 
@@ -309,7 +378,7 @@ describe("PR-466 r5 rule: the trigger", () => {
     r.mon.feed({ codeunitId: 2, method: "T", batchIndex: 0, ownMs: 1 }, 1);
     r.mon.feed({ codeunitId: 3, method: "T", batchIndex: 0, ownMs: 1 }, 2);
     expect(r.mon.armingLine()).toBe(
-      "[lethal] tier-slowdown monitor: mode shadow; fed 0 passing rows, skipped 2 (no reference 1, under 50 ms 1); 0 check(s), highest window median none, PSI unreadable 0 time(s), baseline PSI unread; not triggered",
+      "[lethal] tier-slowdown monitor: mode shadow; fed 0 passing rows, skipped 2 (no reference 1, under 50 ms 1); 0 check(s), highest window median none, PSI unreadable 0 time(s), baseline PSI unread; 0 hot window(s) guarded out by PSI; not triggered",
     );
     r.state.psi = 3.5;
     r.mon.noteBaselineEnd();
@@ -317,7 +386,7 @@ describe("PR-466 r5 rule: the trigger", () => {
     r.mon.noteBaselineEnd(); // only the first call counts
     r.rows(50, 2, 1);
     expect(r.mon.armingLine()).toBe(
-      "[lethal] tier-slowdown monitor: mode shadow; fed 50 passing rows, skipped 2 (no reference 1, under 50 ms 1); 1 check(s), highest window median 2.00×, PSI unreadable 1 time(s), baseline PSI 3.5%; not triggered",
+      "[lethal] tier-slowdown monitor: mode shadow; fed 50 passing rows, skipped 2 (no reference 1, under 50 ms 1); 1 check(s), highest window median 2.00×, PSI unreadable 1 time(s), baseline PSI 3.5%; 0 hot window(s) guarded out by PSI; not triggered",
     );
     const s = monitorRig({ stopMode: true });
     s.rows(120, 6, 1);
@@ -476,6 +545,7 @@ describe("PR-466 test 3: the window boundary through the real record() path, 2 w
       load1: () => 1,
       stopMode: true,
       onTrigger: (s) => onTierSlowdownStop({ store, runId, timeBudget, emit }, s),
+      onGuarded: () => {},
     });
     const outcomes: SessionOutcome[] = [];
     let ordinal = 0; // the recording order, across both workers
@@ -585,6 +655,7 @@ describe("PR-466 test 4: the reference", () => {
       load1: () => 1,
       stopMode: true,
       onTrigger: (s) => triggers.push(s),
+      onGuarded: () => {},
     });
     for (let i = 0; i < rows; i++) {
       mon.feed({ codeunitId: T_REF.codeunitId, method: "T1", batchIndex: 0, ownMs }, i + 1);
@@ -1049,6 +1120,7 @@ function firedMonitor(stopMode = true) {
     load1: () => 1,
     stopMode,
     onTrigger: (s) => onTierSlowdownStop({ store, runId, timeBudget, emit: () => {} }, s),
+    onGuarded: () => {},
   });
   for (let i = 0; i < 150; i++) {
     const id = addRow(store, runId, `R${i}`);
@@ -1118,6 +1190,7 @@ describe("PR-466 test 7: the teardown writes the slowdown window again", () => {
       load1: () => 1,
       stopMode: false,
       onTrigger: () => {},
+      onGuarded: () => {},
     });
     for (let i = 0; i < 120; i++) {
       monitor.feed({ codeunitId: 1, method: "T", batchIndex: 0, ownMs: 600 }, 1);
@@ -1413,7 +1486,7 @@ describe("PR-466 r5: a whole bcdev session, SHADOW (the default)", () => {
     expect(warningsOf(events, "tier-slowdown-stop")).toHaveLength(0);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(
-      /^\[lethal\] tier-slowdown monitor: mode shadow; fed \d+ passing rows, skipped 0 \(no reference 0, under 50 ms 0\); \d+ check\(s\), highest window median 1\.00×, PSI unreadable 0 time\(s\), baseline PSI 5\.0%; not triggered$/,
+      /^\[lethal\] tier-slowdown monitor: mode shadow; fed \d+ passing rows, skipped 0 \(no reference 0, under 50 ms 0\); \d+ check\(s\), highest window median 1\.00×, PSI unreadable 0 time\(s\), baseline PSI 5\.0%; 0 hot window\(s\) guarded out by PSI; not triggered$/,
     );
     expect(report.mutants.length).toBeGreaterThanOrEqual(60);
   });
@@ -1493,8 +1566,13 @@ describe("PR-466 r5: a whole bcdev session, SHADOW (the default)", () => {
       (s.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
     expect(count(trig.store, "test_results")).toBe(count(ctl.store, "test_results"));
     expect(trig.store.getRun(1)?.finished).toBe(ctl.store.getRun(1)?.finished);
+    // the control's unreadable PSI guards the same hot window out: one tier-slowdown-guarded (r5 amendment 1)
+    expect(ctl.events.filter((e) => e.type === "tier-slowdown-guarded")).toHaveLength(1);
+    expect(trig.events.filter((e) => e.type === "tier-slowdown-guarded")).toHaveLength(0);
     const types = (es: readonly RunEvent[]) =>
-      es.filter((e) => e.type !== "tier-slowdown-would-stop").map((e) => e.type);
+      es
+        .filter((e) => e.type !== "tier-slowdown-would-stop" && e.type !== "tier-slowdown-guarded")
+        .map((e) => e.type);
     expect(types(trig.events)).toEqual(types(ctl.events));
     // the unreadable PSI is counted in the control's arming line
     expect(ctl.lines.at(-1)).toMatch(/PSI unreadable [1-9]\d* time\(s\)/);

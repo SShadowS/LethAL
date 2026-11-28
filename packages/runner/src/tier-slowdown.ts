@@ -138,6 +138,22 @@ export interface TierSlowdownDeps {
   readonly stopMode: boolean;
   /** Called once, synchronously, from the `feed` whose check triggers. */
   readonly onTrigger: (stop: TierSlowdownStop) => void;
+  /**
+   * r5 amendment 1: called once per session, synchronously, at the FIRST check where every trigger condition held
+   * except the PSI (at or over the guard, or unreadable). It changes nothing; a later check can still trigger.
+   */
+  readonly onGuarded: (g: TierSlowdownGuarded) => void;
+}
+
+/** r5 amendment 1: the figures of a hot window the PSI guard suppressed. */
+export interface TierSlowdownGuarded {
+  readonly atMs: number;
+  readonly median: number;
+  readonly rows: number;
+  readonly spanMs: number;
+  /** `null` when `/proc/pressure/cpu` was unreadable. */
+  readonly psi: number | null;
+  readonly load1: number | null;
 }
 
 interface FedRow {
@@ -162,6 +178,8 @@ export class TierSlowdownMonitor {
    */
   shadowErrors = 0;
   firstShadowError: string | undefined;
+  /** r5 amendment 1: checks where a full hot window was suppressed by the PSI guard (all of them; one event only). */
+  guardedChecks = 0;
 
   noteShadowError(e: unknown): void {
     this.shadowErrors += 1;
@@ -247,7 +265,21 @@ export class TierSlowdownMonitor {
     if (now - firstT < TIER_SLOWDOWN_WINDOW_MS) return; // the window is not full
     if (w.length < TIER_SLOWDOWN_MIN_ROWS) return;
     if (median < TIER_SLOWDOWN_STOP) return;
-    if (psi === null || psi >= TIER_SLOWDOWN_MAX_PSI) return; // an unreadable PSI never triggers
+    if (psi === null || psi >= TIER_SLOWDOWN_MAX_PSI) {
+      // An unreadable PSI never triggers. r5 amendment 1: a hot window the guard suppressed is said, once per session,
+      // so a quiet shadow can be told from a guarded one. Nothing else changes; a later check can still trigger.
+      this.guardedChecks += 1;
+      if (this.guardedChecks === 1)
+        this.d.onGuarded({
+          atMs: now - firstT,
+          median,
+          rows: w.length,
+          spanMs: now - first.t,
+          psi,
+          load1: this.d.load1(),
+        });
+      return;
+    }
     this.#trigger = {
       ...first.mark,
       median,
@@ -273,7 +305,7 @@ export class TierSlowdownMonitor {
       this.shadowErrors === 0
         ? ""
         : `; ${this.shadowErrors} monitor error(s) caught in shadow mode (first: ${this.firstShadowError ?? "?"})`;
-    return `[lethal] tier-slowdown monitor: mode ${this.d.stopMode ? "stop" : "shadow"}; fed ${this.fed} passing rows, skipped ${skipped} (no reference ${this.skippedNoReference}, under ${TIER_SLOWDOWN_MIN_REF_MS} ms ${this.skippedUnderMin}); ${this.checks} check(s), highest window median ${high}, PSI unreadable ${this.psiUnreadable} time(s), baseline PSI ${base}; ${this.#trigger === undefined ? "not triggered" : "TRIGGERED"}${errors}`;
+    return `[lethal] tier-slowdown monitor: mode ${this.d.stopMode ? "stop" : "shadow"}; fed ${this.fed} passing rows, skipped ${skipped} (no reference ${this.skippedNoReference}, under ${TIER_SLOWDOWN_MIN_REF_MS} ms ${this.skippedUnderMin}); ${this.checks} check(s), highest window median ${high}, PSI unreadable ${this.psiUnreadable} time(s), baseline PSI ${base}; ${this.guardedChecks} hot window(s) guarded out by PSI; ${this.#trigger === undefined ? "not triggered" : "TRIGGERED"}${errors}`;
   }
 }
 

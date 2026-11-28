@@ -168,6 +168,12 @@ export function createProgressRenderer(
           `TIER SLOWDOWN (shadow, nothing stopped): passing tests at ${event.median.toFixed(1)}x their baseline over ${Math.round(event.spanMs / 60_000)} min, host CPU pressure ${event.psi.toFixed(1)}%.`,
         );
         break;
+      case "tier-slowdown-guarded":
+        // PR-466 r5 amendment 1: a hot window the CPU-pressure guard suppressed; nothing was stopped.
+        write(
+          `TIER SLOWDOWN GUARDED OUT (nothing stopped): passing tests at ${event.median.toFixed(1)}x their baseline over ${Math.round(event.spanMs / 60_000)} min, but host CPU pressure ${event.psi === null ? "unreadable" : `${event.psi.toFixed(1)}%`}.`,
+        );
+        break;
       case "time-budget-reached": {
         // R966: say what stopped the run. A signal or the memory guard spends the budget to stop
         // through R955's path, but the budget itself was not used up.

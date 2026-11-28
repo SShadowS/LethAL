@@ -8607,6 +8607,8 @@ async function runSessionBody(
             onTierSlowdownShadow(emit, cfg.tierSlowdownLine ?? ((l) => console.warn(l)), stop);
           }
         },
+        // r5 amendment 1: in BOTH modes, the first hot window the PSI guard suppressed; it changes nothing.
+        onGuarded: (g) => emit({ type: "tier-slowdown-guarded", ...g }),
       })
     : undefined;
   emit({ type: "phase-entered", phase: "generate" });

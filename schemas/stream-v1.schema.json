@@ -1176,6 +1176,52 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "atMs",
+        "median",
+        "rows",
+        "spanMs",
+        "psi",
+        "load1",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "tier-slowdown-guarded"
+        },
+        "atMs": {
+          "type": "number"
+        },
+        "median": {
+          "type": "number"
+        },
+        "rows": {
+          "type": "number"
+        },
+        "spanMs": {
+          "type": "number"
+        },
+        "psi": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "load1": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "batchIndex",
         "verdicts",
         "seq"

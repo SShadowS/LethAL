@@ -918,6 +918,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           onsetSeq: e.onsetSeq,
         };
         break;
+      case "tier-slowdown-guarded":
+        // PR-466 r5 amendment 1: an event only, never a report field: nothing to fold.
+        break;
       case "recheck-baseline-finished":
         // PR-144: the recheck's own baseline. Deliberately read into NOTHING: the session's baseline
         // figures (`baselineGreen`, unsupported tests, timings) are the main pass's alone.
