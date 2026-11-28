@@ -67,6 +67,15 @@ export function resolveKiller(method: string, covering: readonly string[]): stri
   return covering.find((t) => t.endsWith(`.${method}`)) ?? method;
 }
 
+/**
+ * PR-494: the verdict as LethAL SCORES it. `timeout-killed` (a mutant that hung its killing test, stopped by
+ * `--stop-hung-sessions`) counts as killed in the mutation score, so it is a kill here too; reading only `"killed"`
+ * dropped those kills from every class and cost.
+ */
+export function scoredVerdict(verdict: string): string {
+  return verdict === "timeout-killed" ? "killed" : verdict;
+}
+
 function rowOf(m: Mutant): Row {
   const r = m as Mutant & {
     killingTest?: string;
@@ -74,10 +83,11 @@ function rowOf(m: Mutant): Row {
     failureNote?: string;
   };
   const covering = r.coveringTests ?? [];
+  const verdict = scoredVerdict(m.verdict);
   return {
     code: m.mutantCode,
-    verdict: m.verdict,
-    killer: m.verdict === "killed" ? resolveKiller(r.killingTest ?? "", covering) : "",
+    verdict,
+    killer: verdict === "killed" ? resolveKiller(r.killingTest ?? "", covering) : "",
     covering,
     note: r.failureNote ?? "",
   };

@@ -84,8 +84,9 @@ describe("PR-56 keep entries", () => {
     }
     // 84 from PR-54's coverage.tsv, plus 9 ledger keys PR-130 added to two of its classes (RecordRef.* not open: 6;
     // FieldRef.* never assigned: 3), 1 PR-131 added ("Error with an ErrorInfo nobody created") and 1 PR-135 added (the
-    // DeleteAll global filter group), each matched by that class's own entry.
-    expect(Object.values(frozen).filter((f) => f.cls !== undefined).length).toBe(95);
+    // DeleteAll global filter group), and 1 PR-497 added (RecordRef.KeyIndex not open, a method the entry's own list
+    // names), each matched by that class's own entry.
+    expect(Object.values(frozen).filter((f) => f.cls !== undefined).length).toBe(96);
     expect(hits).toBeGreaterThan(0);
     expect(exactHits).toBeGreaterThan(5); // the Company keys etc. are really tested, not only the guesses
   });

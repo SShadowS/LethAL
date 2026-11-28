@@ -66,7 +66,7 @@ import {
   assertSingleBatch,
   recordAfterBothLegs,
 } from "./harden-expected";
-import { assertKillsReproduced } from "./kill-reproduction";
+import { assertKillsReproduced, latestRunId } from "./kill-reproduction";
 
 if (!process.env.LETHAL_ITEST_HARDEN) {
   console.log(
@@ -200,7 +200,7 @@ async function runLeg(
       throw e;
     });
     // R582: every kill was re-run under the mutant, by marker and by its 2 killer rows.
-    assertKillsReproduced(`harden/${leg === "a" ? "A" : "B"}`, report, store);
+    assertKillsReproduced(`harden/${leg === "a" ? "A" : "B"}`, report, store, latestRunId(store)); // scratch (R1241)
     checkGateWarnings("harden", leg, warnings);
     return report;
   } finally {

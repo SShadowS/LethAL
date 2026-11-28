@@ -26,7 +26,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import type { SessionReport } from "../packages/runner/src/report";
-import { resolveKiller, siteKey } from "./bc-v3-join.ts";
+import { resolveKiller, scoredVerdict, siteKey } from "./bc-v3-join.ts";
 import { loadReport } from "./report-summary.ts";
 
 export interface Family {
@@ -70,34 +70,38 @@ export const FAMILIES: readonly Family[] = [
     label: "the test result of an error whose text is not pinned (ADR-059)",
     pattern: /error whose text is not pinned/,
   },
+  // PR-493: the five families PR-492 left unfiled, each found filed upstream (searched read-only; the refusal text of
+  // the first cites its issue itself), so none needed a new repro.
   {
     id: "subscriber-by-id",
-    issue: "unfiled",
+    issue: "#8470",
     label: "an event subscriber bound to its publisher by object id",
     pattern: /subscribes to its publisher by the id/,
   },
   {
     id: "gotokey-descending",
-    issue: "unfiled",
+    issue: "#8172",
     label: "GoToKey on a list opened on the last row of a descending view",
     pattern: /GoToKey on a list/,
   },
   {
     id: "datacaption-no-source",
-    issue: "unfiled",
+    issue: "#8004",
     label: "the caption of a page with DataCaptionExpression and no source table",
     pattern: /DataCaptionExpression and no source table/,
   },
   {
     id: "text-to-blob",
-    issue: "unfiled",
-    label: "a conversion of Text to Blob",
+    issue: "#8213",
+    label: "a conversion of Text to Blob (through a FieldRef)",
     pattern: /conversion of Text .* to Blob/,
   },
   {
+    // #8203 is the "no collation weight" family; a non-Latin letter's order is collation data, which on Linux BC is
+    // culture data (R1210), so its BC answer is not a filing reason by itself
     id: "collation-no-weight",
-    issue: "unfiled",
-    label: "ordering of a character with no collation weight",
+    issue: "#8203",
+    label: "ordering of a character with no collation weight (collation data)",
     pattern: /no collation weight/,
   },
   {
@@ -369,7 +373,7 @@ export function costOf(
   };
   const v3Verdict = new Map<string, string>();
   for (const m of v3.mutants as M[]) {
-    v3Verdict.set(siteKey(m), m.verdict);
+    v3Verdict.set(siteKey(m), scoredVerdict(m.verdict));
     if (m.verdict !== "error") continue;
     const note = m.failureNote ?? "";
     const cascade = CASCADE.exec(note);
@@ -390,7 +394,7 @@ export function costOf(
       joined++;
       const covering = m.coveringTests ?? [];
       // a kill is LOST only when v3 did not kill the mutant at all (another test may still kill it)
-      if (m.verdict === "killed" && v !== "killed") {
+      if (scoredVerdict(m.verdict) === "killed" && v !== "killed") {
         const f = testFamily.get(resolveKiller(m.killingTest ?? "", covering));
         if (f !== undefined) of(f).killsLost++;
       }

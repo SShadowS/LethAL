@@ -85,6 +85,27 @@ test("a BC kill is lost only when v3 did not kill it (survived, error or no-cove
   });
 });
 
+// Red: read only "killed" as a kill (PR-494): BC's timeout kill that v3 refused is no longer lost (number-sequence 0),
+// and a BC kill that v3 timeout-killed reads as lost (relationfieldno 1). One family per direction, so they cannot
+// cancel out.
+test("timeout-killed is a kill on both sides, as LethAL's score counts it", () => {
+  const refused = new Map([
+    ["T.Seq", SEQ],
+    ["T.Rel", REL],
+  ]);
+  const bc = report([
+    { line: 1, verdict: "timeout-killed", killingTest: "Seq", coveringTests: ["T.Seq"] },
+    { line: 2, verdict: "killed", killingTest: "Rel", coveringTests: ["T.Rel"] },
+  ]);
+  const v3 = report([
+    { line: 1, verdict: "error", failureNote: SEQ },
+    { line: 2, verdict: "timeout-killed", killingTest: "Rel" },
+  ]);
+  const c = costOf("run", v3, refused, [bc]);
+  expect(c.families["number-sequence"]?.killsLost).toBe(1);
+  expect(c.families.relationfieldno?.killsLost).toBe(0);
+});
+
 // Red: credit a cascade by its truncated quote: it lands in untouched-handle, not in the earlier test's family.
 test("a cascade error is credited to the earlier refused test's own family, not to its note's truncated quote", () => {
   const refused = new Map([["Some Tests.Earlier", REL]]);

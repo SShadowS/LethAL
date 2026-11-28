@@ -58,6 +58,21 @@ test("equal, killed-other-test, and the answered agreement", () => {
   expect(r.summary.greenBaseline).toEqual({ both: 3, verdict: 3 });
 });
 
+// Red: read only "killed" as a kill (PR-494): line 1 reads other, line 2 loses its killer and reads equal.
+test("a timeout-killed mutant is a kill, as LethAL's score counts it", () => {
+  const bc = report([
+    { line: 1, verdict: "timeout-killed", killingTest: "One" },
+    { line: 2, verdict: "timeout-killed", killingTest: "One", coveringTests: ["T.One", "T.Two"] },
+  ]);
+  const v3 = report([
+    { line: 1, verdict: "survived" },
+    { line: 2, verdict: "killed", killingTest: "Two", coveringTests: ["T.One", "T.Two"] },
+  ]);
+  const r = joinReports([bc], v3);
+  expect(r.summary.classes).toEqual({ "killed-vs-survived": 1, "killed-other-test": 1 });
+  expect(r.summary.answeredAgreement).toEqual({ both: 2, verdict: 1, equal: 0 });
+});
+
 // Red: decide `baseline` from any red covering test (the first build): line 1 hides a real flip.
 test("a flip whose KILLING test is green on both is examined, even when another covering test is red on one side", () => {
   const cover = ["T.Kill", "T.Unrelated"];
