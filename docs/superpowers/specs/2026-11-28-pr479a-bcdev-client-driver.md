@@ -432,3 +432,18 @@ stops; it sends no further op and no second read. On bcwin a second call after a
 10. **Client legs on bcwin:** table 1 and table 2 (amendment 7's per-key rule), plus one op on the 71-method Data Tests
     copy that reads in 8 pages. Each page is far below the measured 29.7 KB line, so these legs need no fix on bcwin
     first. If kraken has not fixed it yet, they also show that the paged read works on a server that caps answers.
+
+## Amendment 9 (2026-11-28, forced leg 4 measured; orchestrator ruling)
+Evidence: `/coord/handoff/PR-479/forced/leg4-result.md` (bcwin, LethAL Control 1.0.0.32).
+- **Leg 4's fault** (Run = false on a declared method's line beyond page 130455's first viewport, so the method
+  silently does not run) **is unreachable through the driver's set-up. Measured:**
+  - a probe app's upgrade trigger set Run = false on Data Tests' `BandCountsFromLow` line (table 130450 "Test Method
+    Line", suite DEFAULT), and a read-only probe then read `runOff=1, Run=No`;
+  - a normal client run then ran every method, green;
+  - read again: `runOff=0, Run=Yes`.
+- **The guarantee, stated:** before every op the driver sets page 130455's codeunit range. That rebuilds the suite's
+  method lines for the codeunit with every Run flag on, so no Run flag set before an op reaches it.
+- **Leg 4 is recorded as "fault unreachable through the driver's set-up (measured)"**, not as a pass.
+- **The guard stays the post-run two-way join** (amendment 6): a declared method with no page result is
+  `client-incomplete`. It is unit-tested (the fake driver's `hidden-run-false` mode) and has never been seen live;
+  R1249 asks that the first real client run ending `client-incomplete` is checked by hand. No proxy is built to force it.
