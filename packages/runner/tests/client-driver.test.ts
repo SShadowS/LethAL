@@ -209,6 +209,17 @@ describe("client driver (fake sidecar)", () => {
     }
   });
 
+  // R1244: a plain kill left the server-side /cs session open. Red: abort() back to kill-only (no stdin close).
+  test("abort() first lets the driver close its session (stdin closed, its `closed` awaited), then kills", async () => {
+    const { s, log } = start("ok");
+    await s.opened();
+    await s.ready();
+    await s.bind();
+    await s.abort();
+    expect(log().some((l) => l.includes("closed-on-stdin"))).toBe(true);
+    expect(log().some((l) => l.includes('"end"'))).toBe(false);
+  });
+
   test("the driver sends nothing between End and close except on go", async () => {
     const { s, log } = start("chatty-after-end");
     await s.opened();

@@ -26,7 +26,16 @@ void (async () => {
 
 async function read(): Promise<string> {
   while (lines.length === 0) {
-    if (closed) process.exit(7);
+    if (closed) {
+      // As the real driver: a closed stdin is `stdin-closed`, then its finally closes the /cs session and says `closed`.
+      const detail = { error: "stdin-closed", message: "stdin closed before the go" };
+      console.log(JSON.stringify({ step: "error", ok: false, ms: 1, detail }));
+      if (logFile !== "")
+        appendFileSync(logFile, `${JSON.stringify({ marker: "closed-on-stdin" })}\n`);
+      const state = { state: "Closed", ended: false };
+      console.log(JSON.stringify({ step: "closed", ok: true, ms: 1, detail: state }));
+      process.exit(7);
+    }
     await new Promise<void>((r) => {
       wake = r;
     });

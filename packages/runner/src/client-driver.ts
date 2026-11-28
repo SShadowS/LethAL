@@ -406,10 +406,20 @@ export class ClientDriverSession {
   }
 
   /**
-   * Closes WITHOUT End (the op stays in flight): any failure path, and a run that did not finish. Kills our own child.
+   * Closes WITHOUT End (the op stays in flight): any failure path, and a run that did not finish. R1244: first a clean
+   * dispose. Closing stdin makes the driver fail `stdin-closed` and close its `/cs` session in its `finally`, and we wait
+   * (bounded) for its `closed` line. A plain kill left the server-side session open. Then our own child is killed.
    * Returns the exit code, or null if it had to be killed.
    */
   async abort(): Promise<number | null> {
+    if (!this.streamEnded) {
+      try {
+        this.proc.stdin.end();
+      } catch {
+        // stdin already closed
+      }
+      await this.waitForClosed();
+    }
     this.kill();
     return await Promise.race([this.proc.exited, Bun.sleep(5000).then(() => null)]);
   }
