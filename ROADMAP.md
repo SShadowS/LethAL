@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**73 of 1210 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**72 of 1210 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1253,7 +1253,7 @@ that ordering is the priority.
 - **R1238** · A generated BC differential for I/O (PR-489, family io-streams, 65 cells: streams, every TextEncoding and its bytes, EOS, Blob fields, CopyStream, Temp Blob, Base64 Convert, XMLport over a stream): al-runner edge-e5176a9fd equals BC 28.4 in all 65 cells, so nothing is filed · [R1238.md](docs/roadmap/R1238.md) · closed 2026-11-27 — measured on bc1; al-runner equals BC in every cell
 - **R1239** · al-runner v3 vs BC 29 on real DO mutants, joined per site (PR-490, scripts/bc-v3-join.ts): DOTests file 1 (CDOEMailTemplateManagement, 1,703 mutants) agrees on 1,507 verdicts (88.5%) and on 28 of 28 that a test green at both baselines reaches; 194 differences come from the two baselines, 1 from a known v3 refusal (#7760) and 1 from the GUI session kind (R895); nothing new to file · [R1239.md](docs/roadmap/R1239.md) · open — files 1-3 measured…
 - **R1242** · BC.History Base Application 28.6 x Tests-Fixed Asset on al-runner e5176a9fd (#8191 fixed): 255 of 460 tests pass (PR-75: 53), 5 fail, 200 refused by 20 causes; three causes hold 156 of the 200 (#8011, #8066, #9336 filed), so the scored run waits for those three fixes · [R1242.md](docs/roadmap/R1242.md) · open — baseline measured 2026-11-28 (coord PR-498); trigger: #8011 step 2, #8066 and #9336 fixed upstream…
-- **R1245** · The coverage-differential gate cannot run: probe-r58-differential.ts --mode fenced throws NoBaselineWorkDateError (R1131) on the first mutant call, on master too; the gate table selects this leg for every orchestrator.ts change · [R1245.md](docs/roadmap/R1245.md) · open — measured 2026-11-28 on bc2 (lethal-bugs, PR-505), on PR-505's head 96222af01 and on master 670601710…
+- **R1245** · The coverage-differential gate cannot run: probe-r58-differential.ts --mode fenced throws NoBaselineWorkDateError (R1131) on the first mutant call, on master too; the gate table selects this leg for every orchestrator.ts change · [R1245.md](docs/roadmap/R1245.md) · done (79728328c) — the probe's recording wrapper forwarded a hand-picked member list that never got PR-196's…
 - **R1247** · Every instrumented publish logs 'COMMIT called and skipped in extension upgrade context': the emitted Mutation Upgrade codeunit calls LethAL Control's RegisterArtifact, which commits · [R1247.md](docs/roadmap/R1247.md) · open — routine and harmless as measured (a warning only); trigger: a BC that makes a Commit in upgrade…
 
 ---
