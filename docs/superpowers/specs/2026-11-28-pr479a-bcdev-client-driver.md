@@ -117,3 +117,83 @@ Coord PR-479 (lethal-preproc, 2026-11-28).
     page's Run set changed;
   - `--backend bcdev-client` against bc2 refuses `client-session-unavailable` before publishing (under a lease, doctor
     clean before and after).
+
+## Amendment 1 (2026-11-28, the spec-adversary's review, before any code)
+Evidence: `/coord/handoff/PR-479/adversary-r1.md`. Every fix below is in the TypeScript side or the driver: no control
+change, so no 1.0.0.32. These are my calls, from design principles 1 (correct first), 5 (fail closed) and 13.
+
+1. **The op order (fixes F4: the mutant running outside isolation at login and logout; and F10):**
+   - open the session; then `ActivateForClient`; then bind through page 91015;
+   - the codeunit run;
+   - then End; then `DeactivateForClient` (it tombstones on the End mark, with the session still open); then
+     `ReadClientAttestation`; then close.
+   - Login runs before the op, when the tuple is blank. Logout runs after the tuple is cleared, so its next guard reloads a
+     blank tuple.
+   - End is sent ONLY after `RunNextTest` answered "All tests executed.". On any other exit, or a passed deadline, the driver
+     closes without End, the op stays in flight, and it is `in-flight-unknown` plus quarantine. A red test with the fake
+     driver covers it.
+2. **A no-mutant confirmation before every kill (F1, B1's "confirmation AND reproduction"):**
+   - (a) the killing codeunit's full declared run, in a fresh session, under a no-mutant activation (`mutantId` empty): the
+     killer must pass;
+   - (b) then the reproduction under the mutant: the killer must fail again.
+   - A failing (a) is `confirmation-failed`, an error that STOPS the run (the environment moved), never a kill.
+   - Red tests cover each direction, and there is a bcwin forced-drift leg.
+3. **Reach evidence for every kill (F3, F9):**
+   - a kill is accepted only if, in the killing codeunit's session, some row at or before the killer, in declared order,
+     has `Loaded = true`, `loadedMutantId = M`, Activate's generation and `observedActive = true`;
+   - otherwise it is `client-kill-unreached`, an error, never a kill.
+   - `Loaded = false` supports a survivor only, never a kill.
+4. **The WorkDate (F2, R1131):**
+   - `HarnessInfo`'s `workDate` is read before and after every codeunit op; a difference from the batch baseline's date is
+     `workdate-changed`, as headless.
+   - Pre-committed measurement on bcwin before the backend scores: a `/cs` session's WorkDate equals `HarnessInfo`'s (read
+     in the session through page 130455's run). If they differ, client mode does not score until the row carries the
+     WorkDate (a 1.0.0.32, its own pre-commitment).
+5. **The company (F5):**
+   - the session is opened in the config's company, using the library's company parameter, confirmed by reflection;
+   - before each `RunNextTest`, page 130455's `CurrentCompanyName` is read back and must equal it, or the run is refused.
+6. **Completeness against the manifest (F6, F14):**
+   - for each codeunit run, the manifest's declared method list is joined BOTH ways with the page results and the rows:
+     each declared method has exactly one page result and one row, and no extra codeunit or method appears;
+   - the rows' `testMethodRuns` are exactly 1..N in declared order;
+   - before the run, the driver reads back the page's Run flags (all `Run = true`);
+   - the killer is the FIRST failing method in declared order, by `testMethodRuns`, never row order. "Line no." is dropped
+     from the join (the rows do not carry it).
+7. **The bound session's id (F7):** taken from a `DeactivateForClient` call made before End, which answers
+   `client-session-alive` with the bound id (measured in PR-478 C4). Every row must carry that id. This guards against a
+   driver bug: by the writer gate, rows can only come from the bound session.
+8. **A lost Activate answer (F8)** is `client-activation-unknown`, a named failure, never a verdict. The op is still cleaned
+   up (bind, End, Deactivate, close) when its generation can be read, and otherwise left for recovery.
+9. **The baseline (F11):**
+   - a killer must be baseline-green;
+   - a baseline-red method still runs under every mutant (no method is switched off);
+   - a kill whose codeunit has a baseline-red method BEFORE the killer is listed in the report as `kill-after-red-method`
+     (a caveat detail), since it does not compare with headless.
+10. **The audit (F12)** is built from a grep for the literals `"bcdev"` and `"al-runner-v3"` across `packages/` and
+    `scripts/`, not from `BackendKind` uses alone. It includes:
+    - `not-run-survivors.ts`, `explain.ts`, `campaign-freeze.ts`, `changed-line-survivors.ts`, `mutation-elements.ts` (the
+      caveat goes on each survivor's description);
+    - `bc-v3-join.ts`, `gift-card-refreeze.ts`, `r594/compare.ts`.
+11. **Lending, coverage mode, and the gate's placement:**
+    - lending with no session refuses a bcdev-client run;
+    - a bcdev-client run stores coverage mode `none`, which also protects older clients through their coverage-mode checks;
+    - the experimental gate sits where the backend is built; its source pin scans `packages/`, `scripts/` and `itest/`.
+12. **Per-mutant reach:** each survivor's rows feed GH-24's reach fields (`guardReached` from `observedActive`), so a survivor
+    no test reached says so per mutant, beside the run caveat.
+13. **Open risks, named in the `client-no-coverage` caveat's detail and in the report (not measured in 479a):**
+    - child sessions started by a test (B4);
+    - NumberSequence not rolled back;
+    - IsolatedStorage, OnBefore writes and a raising subscriber under isolation (B6);
+    - a forced reset without a real NST restart leaves a zombie session (control amendment 5);
+    - an overrun wedges the server until a restart, ending the run's remaining work.
+14. **The bcwin table** (section 3) gains:
+    - `sandbox-data` plus `sandbox-data-tests` (several codeunits), against `itest:tables`' frozen table, with the same
+      rule: killed and survived equal, no-coverage expected survived, any other difference a BLOCK;
+    - forced legs, each a named error and never a verdict:
+      - drift after the baseline (a record changed over OData): `confirmation-failed`;
+      - a lost Activate answer (an injected drop): `client-activation-unknown`;
+      - one method set to `Run = false` behind the driver: a completeness failure;
+      - a wrong company: refused;
+      - a killed sidecar: `in-flight-unknown`;
+    - the planted baseline-red case, from a scratch copy of `sandbox-tests` outside the repo: no kill credited to the red
+      test.
