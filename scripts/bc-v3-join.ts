@@ -22,6 +22,8 @@
  *   - `coverage`: the other side is `no-coverage` though the killing test is green there;
  *   - `killed-vs-survived` / `survived-vs-killed` (BC first): the killing test is green on both and the other side ran it:
  *     the class to examine;
+ * - a `no-coverage` side whose note says its only covering tests were refused at baseline is `baseline` in every case
+ *   (PR-504: the other side's covering list may be object-level, so it proves no reach);
  * - neither killed: `baseline` when an `error` side's note names baseline-red tests, or a `no-coverage` side has every
  *   one of the other side's covering tests red; `v3-refused` / `bc-error` for another one-sided `error`; `coverage` for
  *   another `no-coverage`; `other`.
@@ -112,6 +114,15 @@ function index(
 const ANSWERED = new Set(["killed", "survived"]);
 /** LethAL's note on a mutant whose only covering tests failed or were refused at the baseline. */
 const BASELINE_NOTE = /did not pass at baseline/;
+/**
+ * PR-504: v3's note on a `no-coverage` whose only covering tests v3 refused at baseline ("al-runner v3 refusal: mutant
+ * covered by test(s) al-runner v3 refused at baseline (...)"). That is a baseline difference, whatever the other side's
+ * covering list holds: BC's list can be object-level (`coverageAttribution: object`, every test touching the object), so
+ * a BC covering test green on v3 does not show it reaches the mutant (DOTests file 2: 95 rows).
+ */
+const REFUSED_AT_BASELINE_NOTE = /refused at baseline/;
+const refusedOnly = (r: Row): boolean =>
+  r.verdict === "no-coverage" && REFUSED_AT_BASELINE_NOTE.test(r.note);
 
 /** One side killed (`k`), the other (`o`) did not; `oRed` is the other side's baseline-red set. */
 function oneKilled(
@@ -121,7 +132,7 @@ function oneKilled(
   oSide: "bc" | "v3",
   kFirst: boolean,
 ): string {
-  if (oRed.has(k.killer)) return "baseline";
+  if (oRed.has(k.killer) || refusedOnly(o)) return "baseline";
   if (o.verdict === "error")
     return BASELINE_NOTE.test(o.note) ? "baseline" : oSide === "v3" ? "v3-refused" : "bc-error";
   if (o.verdict === "no-coverage") return "coverage";
@@ -142,7 +153,7 @@ export function classify(
   if (bc.verdict === "killed") return oneKilled(bc, v3, v3Red, "v3", true);
   if (v3.verdict === "killed") return oneKilled(v3, bc, bcRed, "bc", false);
   const errBaseline = (r: Row) => r.verdict === "error" && BASELINE_NOTE.test(r.note);
-  if (errBaseline(bc) || errBaseline(v3)) return "baseline";
+  if (errBaseline(bc) || errBaseline(v3) || refusedOnly(bc) || refusedOnly(v3)) return "baseline";
   const allRed = (tests: readonly string[], red: ReadonlySet<string>) =>
     tests.length > 0 && tests.every((t) => red.has(t));
   if (v3.verdict === "no-coverage") return allRed(bc.covering, v3Red) ? "baseline" : "coverage";

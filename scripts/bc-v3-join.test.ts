@@ -141,6 +141,35 @@ test("keys no test reaches on either side are counted apart, not as green agreem
   expect(r.summary.greenBaseline).toEqual({ both: 1, verdict: 1 });
 });
 
+// PR-504 (DOTests file 2: 95 rows). Red: drop `refusedOnly` and both refused rows read `coverage`; T.Green is green
+// on v3 and sits in BC's (object-level) covering list, exactly the shape that misled the old class.
+test("a no-coverage whose note says its covering tests were refused at baseline is baseline, killed or survived", () => {
+  const refused =
+    "al-runner v3 refusal: mutant covered by test(s) al-runner v3 refused at baseline (T.Refused)";
+  const bc = report([
+    { line: 1, verdict: "survived", coveringTests: ["T.Green", "T.Refused"] },
+    { line: 2, verdict: "killed", killingTest: "Green", coveringTests: ["T.Green"] },
+  ]);
+  const v3 = report([
+    { line: 1, verdict: "no-coverage", coveringTests: [], failureNote: refused },
+    { line: 2, verdict: "no-coverage", coveringTests: [], failureNote: refused },
+  ]);
+  expect(joinReports([bc], v3).summary.classes).toEqual({ baseline: 2 });
+});
+
+// PR-504, the other direction. Red: classify every v3 no-coverage as baseline (or match any note): these read baseline.
+test("a no-coverage WITHOUT the refused-at-baseline note stays a coverage difference, survived or killed", () => {
+  const bc = report([
+    { line: 1, verdict: "survived", coveringTests: ["T.Green"] },
+    { line: 2, verdict: "killed", killingTest: "Green", coveringTests: ["T.Green"] },
+  ]);
+  const v3 = report([
+    { line: 1, verdict: "no-coverage", coveringTests: [], failureNote: "some other note" },
+    { line: 2, verdict: "no-coverage", coveringTests: [] },
+  ]);
+  expect(joinReports([bc], v3).summary.classes).toEqual({ coverage: 2 });
+});
+
 test("killed vs no-coverage with a green killing test is a coverage difference", () => {
   const bc = report([{ line: 1, verdict: "killed", killingTest: "One" }]);
   const v3 = report([{ line: 1, verdict: "no-coverage", coveringTests: [] }]);
