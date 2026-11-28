@@ -332,3 +332,45 @@ no-coverage mutants read survived, as pre-committed; 0 BLOCK.
    RunNextTest runs the codeunit, not the viewport.
 4. **A red test:** a fake page whose second viewport would hide a `Run = false` method must end in `client-incomplete`
    after the op, with End and Deactivate both sent.
+
+## Amendment 7 (2026-11-28, table 2 re-committed per mutant by key; orchestrator ruling)
+Evidence: `/coord/handoff/PR-479/table/result-sandbox-data.md`.
+- **The first table-2 run:** 413 equal, 25 headless no-coverage read survived (pre-committed), and 12 BLOCKs, each explained
+  by measurement through one of two client-mode semantics:
+  - **A, declared order:** the killer is the first failing method in declared order;
+  - **B and C, codeunit-level isolation:** page 130455 runs a codeunit's methods in one isolation, so earlier methods' rows
+    persist. For B, the headless killer `NegationFlipChangesTheCount` is RED at the client baseline ("expected 2 rows other
+    than FILT-A1, got 19"). For C, a mutant equivalent under per-method isolation becomes observable.
+- Both are what a CI run with codeunit isolation sees.
+
+**The table-2 rule, re-committed BY KEY (no class wildcard):**
+- every key of `itest/tables.baseline.json` must equal the client verdict and killing test;
+- except the 25 headless no-coverage mutants, which read survived;
+- and EXACTLY these 12 keys, each with its own expected client answer.
+- The 12 are frozen in `/coord/handoff/PR-479/table/sandbox-data.client-overrides.precommit.json` (sha256 7b898b1b…).
+
+| class | key | client (expected) | headless |
+|---|---|---|---|
+| C | `26725a0933de…\|Data Filter Ops\|CountDecoyOrTarget\|lethal.void-method-call\|1` | killed / DroppedPlaceholderFreeAlternativeChangesTheCount | survived |
+| B | `3fbca8eaf11a…\|Data Filter Ops\|CountExcluding\|lethal.return-value\|1` | survived | killed / NegationFlipChangesTheCount |
+| A | `4b5ee16c6833…\|Data Shadow\|SetRange\|lethal.remove-assignment\|1` | killed / ShadowedBuiltinsRun | killed / SelfShadowedRun |
+| A | `71f50c693e5f…\|Data Trigger Probe\|OnValidate\|lethal.empty-block\|1` | killed / ValidateRunsTheFieldTrigger | killed / ImplicitValidateRunsInsideTheTable |
+| A | `8583acc40cc8…\|Data Shadow\|TestField\|lethal.remove-assignment\|1` | killed / ShadowedBuiltinsRun | killed / SelfShadowedRun |
+| B | `8e53e05fee34…\|Data Filter Ops\|CountExcluding\|lethal.flip-filter-literal\|1` | survived | killed / NegationFlipChangesTheCount |
+| B | `8e53e05fee34…\|Data Filter Ops\|CountExcluding\|lethal.void-method-call\|1` | survived | killed / NegationFlipChangesTheCount |
+| B | `a3ff2f07cb3f…\|Data Filter Ops\|CountExcluding\|lethal.empty-block\|1` | survived | killed / NegationFlipChangesTheCount |
+| A | `c6b8a794c3ec…\|Data Shadow\|SetRange\|lethal.empty-block\|1` | killed / ShadowedBuiltinsRun | killed / SelfShadowedRun |
+| A | `ccaaa68618f9…\|Data Shadow\|TestField\|lethal.empty-block\|1` | killed / ShadowedBuiltinsRun | killed / SelfShadowedRun |
+| A | `d36581a980ee…\|Data Swap Ops\|PrimaryStamp\|lethal.empty-block\|1` | killed / WeakStampAssertionMissesTheSwap | killed / LinkedPairIsStamped |
+| A | `dc31dd558a8c…\|Data Trigger Probe\|OnValidate\|lethal.remove-assignment\|1` | killed / ValidateRunsTheFieldTrigger | killed / ImplicitValidateRunsInsideTheTable |
+
+**Before the proof run:**
+1. **The bug B exposed is fixed:** a client baseline-red method is listed in `notRunAtBaseline`, as a headless one is, so
+   B's survivors carry the not-run note. Red tests both ways (a red method listed; a green one not).
+2. **The caveat text** (`client-no-coverage`'s interpretation in 479a) states A, B and C: on this backend, a verdict can
+   differ from headless because the killer is the first failing method in declared order, and because a codeunit's methods
+   share one isolation.
+3. **The proof** is a FRESH table-2 run on the fixed head. It must match this per-key rule exactly; the first run is not
+   the proof.
+4. **Counting (ruling):** every later client run records how many codeunits are longer than the first viewport, and how
+   many end `client-incomplete`.
