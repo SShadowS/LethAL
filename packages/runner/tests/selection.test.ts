@@ -1,12 +1,40 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
+  type NumberingFacts,
   buildCoverageIndex,
   coverageFilter,
   filterHistory,
   identityKeyOf,
+  numberingUnchanged,
   serializeKey,
   testKeyOf,
 } from "../src/selection";
+
+// PR-505: the unchanged-numbering rule is all three facts known and equal; each missing or different fact fails it
+// closed. Red: drop any one comparison and its row below reads true.
+describe("PR-505: numberingUnchanged", () => {
+  const facts = (o: Partial<NumberingFacts> = {}): NumberingFacts => ({
+    digest: "d1",
+    hidden: ["h|op|1", "g|op|1"],
+    twins: new Set(["src/A.al|t"]),
+    ...o,
+  });
+  test("equal digest, hidden set (in any order) and twin set: unchanged", () => {
+    expect(numberingUnchanged(facts(), facts({ hidden: ["g|op|1", "h|op|1"] }))).toBe(true);
+  });
+  test("each fact that differs or is missing keeps R307's refusal", () => {
+    for (const [prior, current] of [
+      [facts(), facts({ digest: "d2" })],
+      [facts(), facts({ hidden: ["h|op|1"] })],
+      [facts(), facts({ hidden: ["h|op|1", "g|op|1", "k|op|1"] })],
+      [facts(), facts({ twins: new Set(["src/A.al|u"]) })],
+      [facts({ digest: null }), facts({ digest: null })],
+      [facts({ hidden: null }), facts()],
+      [facts(), facts({ twins: null })],
+    ] as const)
+      expect(numberingUnchanged(prior, current)).toBe(false);
+  });
+});
 
 function entry(over: Partial<Record<string, unknown>> = {}) {
   return {
