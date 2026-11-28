@@ -203,3 +203,49 @@ lethal-code, 2026-11-27.
 - Per `legs.ts` for the touched files. The frozen BC gates should not move.
 - Any `tier-slowdown-stop` in a gate is a BLOCK, to be investigated (N3: not pre-measured on the latest gate stores).
 - The `time-budget-reached` type change: gates that pin event sets are checked by the scan.
+
+## r4 (2026-11-28, lethal-code): the STOP rule after R1228 settled; PRE-COMMITTED before any replay of it
+
+**Why.** R1228 is settled as BC tier state, not host load (lethal-bugs, a46c058fb; the orchestrator unblocked PR-466,
+`/coord/handoff/PR-466/orchestrator-unblock-2026-11-28.md`).
+- DOTests file 2's same passing tests went from 0.44x to 3.3-3.6x their own baseline about 3-4 h into the run, at load
+  9.5-31 and 0.01% CPU pressure.
+- **r2's STOP at 4.0 would never fire on file 2,** whose blocks peak at 3.3-3.6.
+- Part 1's healthy runs reach 3.64 only in short plateaus. So the hold, not the height, has to separate them: bugs' input
+  is a median held for at least 1 h.
+- The load gate r3 deferred is now the design's own guard, as bugs asks: overnight load bursts of 100-300 would
+  otherwise trip it.
+
+**r4 overrides r2/r3's STOP rule (everything else in r2, r2a and r3 stands: the rows, the reference, the window, the
+stop mechanism, the events, the texts' shape, the ripple, the arming line):**
+- **Block:** 50 passing rows, as before; its median ratio, and the host's `/proc/pressure/cpu` "some avg60" read at the
+  block's last row (r3's reading).
+- **A block is HOT** when its median is ≥ **2.5** AND its PSI is readable AND below **20%**.
+  - An unreadable PSI (`null`) or PSI ≥ 20% makes the block NOT hot. So on a host without PSI the STOP never fires: the
+    fail-safe direction (no stop is today's behaviour). The arming line says when PSI was unreadable.
+- **STOP** when the current run of consecutive hot blocks has at least **3** blocks AND spans at least **60 minutes** of
+  wall clock, from the first row of its first block to the last row of the current block. A block that is not hot
+  resets the run.
+  - The onset (and so the window) is the first row of the run's first block, as in r2.
+- **The baseline's load:** the arming line also prints the PSI read at the baseline's end. A baseline under heavy load
+  inflates the denominators and hides a slowdown. That is stated, with no rule.
+- **Constants:** `TIER_SLOWDOWN_BLOCK = 50`, `TIER_SLOWDOWN_STOP = 2.5`, `TIER_SLOWDOWN_HOLD = 3`,
+  `TIER_SLOWDOWN_HOLD_MS = 3_600_000`, `TIER_SLOWDOWN_MAX_PSI = 20`, `TIER_SLOWDOWN_MIN_REF_MS = 50`.
+- **The texts** print the hot run's block medians with their PSI and the run's span in minutes, instead of "3 blocks ≥ 4.0".
+
+**Acceptance, PRE-COMMITTED: an offline replay of exactly this rule, run before any runtime code moves.**
+- **Script:** `/coord/handoff/PR-466/replay-r4.ts` over part 1's stores (`stores.txt`), tm7-a and tm7-b, and DOTests file 2
+  (`/coord/handoff/PR-427/f2-header`).
+- **Wall clock** comes from each row's `mutant-scored` event time.
+- **History has no PSI:** every replayed block counts as PSI-readable and below 20%. So the replay can only show the rule
+  firing TOO OFTEN, never too rarely: the guard only removes STOPs.
+- **A1 (healthy):** NO STOP on any healthy run with event times. At least 20 healthy runs must be evaluable, or "not
+  enough data". A healthy run without event times is reported as not evaluable and never counted as a pass.
+- **A2 (degraded):** a STOP on email3 (run 1, or its resume) AND on file 2, before each run's end. The onset time is
+  reported against bugs' onset (file 2: about 3-4 h in) and part 1's STOP points (email3 3.09 h).
+- **A3 (informational):** queue2, email, subs, edocs.
+- **The rule:**
+  - If A1 and A2 both pass, the build goes ahead with these constants.
+  - If either fails, NO runtime build. The result is reported, and any new constants need a new pre-commitment
+    evaluated on data recorded after it.
+  - The constants are not tuned on this replay.
