@@ -107,3 +107,98 @@ OverBudgetDetected and ClampPercentRuns), driven by the repo client driver (479a
 - A spec-adversary on this file after section 1 is amended. An Opus build review.
 - Headless gates 0 moves on the final head, the v3 gate, CI, and the bcwin tables above.
 - bcdev-client stays experimental through 479b. Lifting the flag is its own ruling.
+
+## Amendment 1 (2026-11-28, the spec-adversary's r1 review and the orchestrator's F1 ruling, before any measurement)
+Evidence: `/coord/handoff/PR-479/adversary-479b-r1.md` and `/coord/handoff/PR-479/m4/result.md`. Amendment 1 overrides the
+text above where they differ.
+
+1. **No truncation inside a codeunit (F1; ruling, overturning B1's prefix for client mode).**
+   - Coverage chooses the covering CODEUNITS and the `no-coverage` mutants. Each covering codeunit then runs its FULL
+     declared run, in its own fresh session (479a's run).
+   - **The reason:** a test codeunit's methods share one instance and one isolation. With the common `Initialize()`
+     pattern, only method 1 runs the setup, so per-test coverage credits the setup to method 1 alone, while later methods
+     observe its data. Truncating to "the last covering method" would switch off the methods that see a mutant in the setup:
+     a false survivor.
+   - Section 2 items 3 and 5 (the prefix filter) and M7 are WITHDRAWN.
+   - Truncation returns only with a pre-committed probe shown both ways on an Initialize-style fixture.
+2. **A measured Initialize case** (ruling), outside the repo, with invented identifiers: `/coord/handoff/PR-479/initfix/`.
+   - **The target app:** one setup procedure (it writes a setup record with a computed value) and one checking procedure
+     (it reads the value).
+   - **The test codeunit:** method 1 calls `Initialize()` (`if IsInitialized then exit; <setup through the target>;
+     IsInitialized := true`) and asserts only that the record exists. Method 2 calls `Initialize()` too (a no-op by then)
+     and asserts the computed value through the checking procedure.
+   - **The mutant:** one, in the setup's computation.
+   - **Pre-committed:**
+     - per-test coverage credits the setup procedure to method 1 ONLY;
+     - the mutant is `killed` by method 2 on bcdev-client with coverage on;
+     - the no-mutant confirmation passes;
+     - the reproduction fails method 2 again.
+   - **Negative control:** a scratch run that DOES truncate to method 1 scores it `survived`, which shows the case can
+     fail. That run is a measurement only, never a code path.
+3. **Per-codeunit coverage, if M1 finds no per-test setting (F2):**
+   - the merged coverage chooses codeunits;
+   - the attribution is a new `codeunit` value (with its `ATTRIBUTION_INTERPRETATIONS` entry), never `exact`;
+   - a mutant whose covering codeunit holds a baseline-red or unscored method is declined to `error` with R140's note, never
+     scored `survived`;
+   - `no-coverage` is taken across ALL methods (red ones included), and only on a download shown complete (item 5).
+   - The per-test index is not fed merged rows.
+4. **Coverage outside any per-test window (F3):**
+   - a scratch test app plants target code reached only from the test codeunit's `OnRun`, and code reached only from an
+     `OnBeforeTestMethodRun` subscriber in the test app;
+   - pre-committed: each appears in the coverage, and where;
+   - if one appears nowhere, coverage on this backend is refused.
+5. **No silent emptiness (F4, F5).**
+   - **What the mapping really does:** in `buildFencedCoverageMap` a naming gap is a warning plus `unplaceable`, and rows
+     whose object type does not map are skipped. So `client-fenced` adds real refusals:
+     - (a) a per-test WITNESS: each baseline-green test's rows must include lines inside that test method's own body in
+       the test codeunit, else `client-coverage-no-witness`;
+     - (b) zero declared rows while some test is green is `client-coverage-empty`.
+   - **Completeness:** every chunk ends in a line terminator, and every row has the exact column count. Completeness is a
+     COUNT: `CCInfo`'s count if it has one, otherwise two downloads that must be equal. A forced leg cuts the text mid-row
+     and expects a refusal.
+6. **M4, sharpened (F6).**
+   - **The probe:** `probe-r58-differential.ts`'s per-test layer is fixed to read per-test sets from the same baseline
+     verdicts `buildCoverageIndex` reads. Today it records them from `run()` only, so OverBudgetDetected's set reads empty.
+   - **Compared per mutant:**
+     - the covering-test SET;
+     - `coverageAttribution`;
+     - `unplaceable`.
+   - **Compared per test:**
+     - the member set, where the reference is non-empty (an empty reference is "not measured", never "equal"; an empty
+       CLIENT set for a green test is a refusal, through item 5's witness);
+     - the RAW hit rows `(objectType, objectId, lineNo)` in declared objects. Headless from `dumpFencedCoverage`, client from
+       the parser; they must be equal, since both come from the same instrumented artifact. This replaces M3's naming-gap
+       check.
+   - **Fixtures:** sandbox-app, sandbox-data, and initfix (item 2).
+   - **The sandbox-data difference allowed:** PageActionComputesNonZero's own coverage only (headless refuses that test).
+7. **The sandbox-data table (F7), replacing section 3 item 2's expected-difference rule.**
+   - The GetValue mutants (the `Data Value Source` GetValue sites, which are `no-coverage` headless, R78) are pre-committed
+     BY KEY: under the client they are `killed` by `PageActionComputesNonZero`.
+   - Any OTHER mutant whose client killer is `PageActionComputesNonZero` is a BLOCK.
+   - Every other mutant's verdict and killer must be equal.
+   - The circular count from a coverage-off run is withdrawn.
+8. **Two caveats, not one (F8):**
+   - `client-no-coverage` now means coverage only, on a coverage-off run;
+   - a new, always-on `client-mode-risks` carries 479a's open-risks list on EVERY bcdev-client report (with the CLAUDE.md
+     caveat ripple).
+9. **Coverage must not change the baseline (F9):**
+   - set `CCTrackAllSessions` = false, and read it back;
+   - `ClearCodeCoverage` before each baseline codeunit, then a download that must be empty and complete (a stale-row
+     control);
+   - M5 also runs on sandbox-data (which writes data);
+   - M6 also times one mutant session after a coverage-on baseline against one after a coverage-off baseline.
+10. **What "per test" means (F10):**
+    - per-test rows must CARRY their codeunit and method (or come from `CCMapCSVText` per test), never "the download that
+      followed a call", because one RunNextTest runs a whole codeunit;
+    - positive control: sandbox-tests' two methods have disjoint, non-empty sets;
+    - if attribution comes from the map CSV, the parser of section 2 item 2 is amended before the build.
+11. **The stored mode (F11).**
+    - **Kept:** `client-fenced`.
+    - **The cost, named:** an OLDER client reading such a store row throws "corrupt coverage mode" (`parseCoverageMode`)
+      through its unfiltered queries. That is loud, never wrong.
+    - **To update:** explain's `KNOWN_COVERAGE_MODES`, and the store's parser.
+12. **Wiring (F12):**
+    - the line map and object filter are built for `client-fenced` as for `fenced`;
+    - the coverage download happens before page 130455 closes, within the 540 s op deadline;
+    - the `declared` list passed to `checkClientRun` is always the TypeScript side's list from the manifest, never the
+      page's read-back (with a red test).
