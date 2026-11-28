@@ -221,7 +221,9 @@ try
         var cells = row.ContainedControls.ToList();
         string Cell(string n) => cells.FirstOrDefault(c => c.Name == n || c.Caption == n)?.StringValue;
         var lineType = Cell("Line Type");
-        if (lineType != null && !lineType.Equals("Function", StringComparison.OrdinalIgnoreCase)) continue;
+        // Measured on bcwin (BC 28.4, 2026-11-28): the cell reads the option ORDINAL ("1" = Function, "0" = Codeunit), not
+        // its caption. The ordinal is locale-free; the caption is accepted too.
+        if (lineType != null && lineType != "1" && !lineType.Equals("Function", StringComparison.OrdinalIgnoreCase)) continue;
         var nm = Cell("Name") ?? throw new DriverFailure("control-missing", "method line has no Name cell", 3);
         var run = Cell("Run") ?? throw new DriverFailure("control-missing", "method line has no Run cell", 3);
         lines.Add((nm, Yes(run)));
