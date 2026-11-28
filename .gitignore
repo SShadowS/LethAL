@@ -60,6 +60,9 @@ reports/mutation/
 mutation-report.json
 mutation-report.html
 packages/engine/native/target/
+# PR-479: the bcdev-client sidecar's build output
+packages/runner/client-driver/out/
+packages/runner/client-driver/obj/
 packages/engine/vendor/native/*.node
 packages/engine/vendor/native/*.provenance.json
 

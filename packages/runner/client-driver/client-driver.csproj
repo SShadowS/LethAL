@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- PR-479: the bcdev-client sidecar. Build it with `bun scripts/build-client-driver.ts`, which passes
+       -p:BcClient=<dir of Microsoft.Dynamics.Framework.UI.Client.dll> and -p:Wcf=<the System.ServiceModel 4.10.3 set>.
+       No path is fixed here: the build fails by name when either is missing.
+       WCF: the library asks for System.ServiceModel 4.0.0.0 (a .NET Framework name); the net6.0 set carries the facade
+       and FaultException<T>'s forward (PR-478 libprobe). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>client-driver</AssemblyName>
+  </PropertyGroup>
+  <Target Name="NeedPaths" BeforeTargets="BeforeBuild">
+    <Error Condition="'$(BcClient)' == '' Or !Exists('$(BcClient)/Microsoft.Dynamics.Framework.UI.Client.dll')" Text="client-library-missing: pass -p:BcClient=&lt;dir holding Microsoft.Dynamics.Framework.UI.Client.dll&gt;" />
+    <Error Condition="'$(Wcf)' == '' Or !Exists('$(Wcf)/net6.0/System.ServiceModel.dll')" Text="wcf-facade-missing: pass -p:Wcf=&lt;the servicemodel-4.10.3 dir&gt;" />
+  </Target>
+  <ItemGroup>
+    <Reference Include="Microsoft.Dynamics.Framework.UI.Client"><HintPath>$(BcClient)/Microsoft.Dynamics.Framework.UI.Client.dll</HintPath></Reference>
+    <Reference Include="System.ServiceModel.Primitives"><HintPath>$(Wcf)/net6.0/System.ServiceModel.Primitives.dll</HintPath></Reference>
+    <Reference Include="System.ServiceModel"><HintPath>$(Wcf)/net6.0/System.ServiceModel.dll</HintPath></Reference>
+    <Reference Include="System.Private.ServiceModel"><HintPath>$(Wcf)/private-netstandard2.0/System.Private.ServiceModel.dll</HintPath></Reference>
+    <None Include="$(BcClient)/*.dll" Exclude="$(BcClient)/System.*ServiceModel*.dll;$(BcClient)/Microsoft.Dynamics.Framework.UI.Client.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

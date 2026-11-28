@@ -38,6 +38,7 @@ import type {
 } from "./backend";
 import { BCDEV_CLIENT } from "./backend";
 import { BcAnswerUnreadError, BcRedirectRefusedError, bcFetch, withDeadline } from "./bc-fetch";
+import type { ClientDriverLauncher } from "./client-driver";
 import {
   BcdevClientNotBuiltError,
   type ClientSessionProbe,
@@ -199,6 +200,10 @@ export interface BcDevConfig {
   readonly webClientBaseUrl?: string;
   /** PR-479: test seam for the `/cs` probe: the HTTP status of a GET. Default: `fetch`. */
   readonly clientSessionProbe?: ClientSessionProbe;
+  /** PR-479: the sidecar's path (config `bcdev.clientDriverPath`). Round 3's run path reads it. */
+  readonly clientDriverPath?: string;
+  /** PR-479: test seam for round 3: starts a client driver. Default: `startClientDriver`. Unused in round 2. */
+  readonly clientDriverLauncher?: ClientDriverLauncher;
 }
 
 /**

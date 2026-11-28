@@ -2827,6 +2827,8 @@ export interface BcDevConfigSection {
    * `<it>/cs` is probed before anything is published. Absent, a bcdev-client run refuses (`client-session-unavailable`).
    */
   readonly webClientBaseUrl?: string;
+  /** PR-479: the built bcdev-client sidecar (a `.dll` run with dotnet, or an executable). Absent: the build output of `scripts/build-client-driver.ts`. */
+  readonly clientDriverPath?: string;
 }
 
 export interface LethalConfigFile {
@@ -3100,6 +3102,14 @@ export function validateBcDevConfig(
   ) {
     throw new Error(
       `lethal.config.json "bcdev" section: "webClientBaseUrl" ${JSON.stringify(raw.webClientBaseUrl)} is not a non-empty string`,
+    );
+  }
+  if (
+    raw.clientDriverPath !== undefined &&
+    (typeof raw.clientDriverPath !== "string" || raw.clientDriverPath === "")
+  ) {
+    throw new Error(
+      `lethal.config.json, bcdev section: "clientDriverPath" ${JSON.stringify(raw.clientDriverPath)} is not a non-empty string`,
     );
   }
   return raw as BcDevConfigSection;
@@ -3464,6 +3474,7 @@ export function bcDevBackendConfig(
     ...(stopHungSessions === true ? { stopHungSessions: true } : {}),
     ...(clientMode === true ? { clientMode: true as const } : {}),
     ...(c.webClientBaseUrl !== undefined ? { webClientBaseUrl: c.webClientBaseUrl } : {}),
+    ...(c.clientDriverPath !== undefined ? { clientDriverPath: c.clientDriverPath } : {}),
   };
 }
 

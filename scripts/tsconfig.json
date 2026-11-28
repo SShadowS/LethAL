@@ -61,6 +61,7 @@
     "bench-record.ts",
     "build-binary.ts",
     "build-binary.test.ts",
+    "build-client-driver.ts",
     "ci-templates.test.ts",
     "build-native-parser-clang.test.ts",
     "biome-touched-hook.test.ts",
