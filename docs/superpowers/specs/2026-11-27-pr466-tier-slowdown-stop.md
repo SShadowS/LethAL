@@ -249,3 +249,75 @@ stop mechanism, the events, the texts' shape, the ripple, the arming line):**
   - If either fails, NO runtime build. The result is reported, and any new constants need a new pre-commitment
     evaluated on data recorded after it.
   - The constants are not tuned on this replay.
+
+**r4's result (2026-11-28):** it FAILED A2. email3 stops, but DOTests file 2 does not: its longest unbroken hot run is
+54.7 min, because single blocks just under 2.5 reset it. A1 passed: 0 healthy STOPs on 20 timed runs, and no healthy
+hot stretch is longer than 11.6 min. So there is no r4 build (`/coord/handoff/PR-466/findings.md`, section r4).
+
+## r5 (2026-11-28, the orchestrator's ruling): a sliding 60-minute median, built as a SHADOW; PRE-COMMITTED
+
+**The rule.** It replaces r4's STOP rule. Everything else in r2, r2a and r3 stands: the rows fed, the MIN reference,
+the window semantics, the stop mechanism, the ripple.
+- **Every fed row** (r2's: a passing mutant row in `runSession`'s mutant loop, with an own duration and a reference of at
+  least 50 ms) is stamped with its monotonic time.
+- **A check runs after every 50th fed row.** W is the fed rows of the last 60 min, ending at the current row.
+- **It TRIGGERS when all of these hold:**
+  - the first fed row of the session is at least 60 min old (the window is full);
+  - |W| ≥ 50;
+  - the median of W's ratios is ≥ **2.5**;
+  - the host's `/proc/pressure/cpu` "some avg60", read at the check, is readable and below **20%**. An unreadable PSI
+    never triggers: the fail-safe direction.
+- **It triggers once per session.** The onset is W's FIRST row, and the window (store and fold) starts at that row's
+  mutant, with r2's mark semantics taken at that row.
+- **Constants:** `TIER_SLOWDOWN_WINDOW_MS = 3_600_000`, `TIER_SLOWDOWN_CHECK_EVERY = 50`, `TIER_SLOWDOWN_MIN_ROWS = 50`,
+  `TIER_SLOWDOWN_STOP = 2.5`, `TIER_SLOWDOWN_MAX_PSI = 20`, `TIER_SLOWDOWN_MIN_REF_MS = 50`.
+- **Why this form:** r4's replay showed that time held separates healthy runs (≤ 11.6 min hot) from slow ones, and that
+  the strict reset is what missed file 2. **Its trigger was chosen after seeing file 2, so file 2 cannot judge it.**
+
+**Two modes. The DEFAULT is SHADOW.**
+- **Shadow** (no flag; bcdev sessions only, as r2): on a trigger it records `tier-slowdown-would-stop`. That is a new
+  event type, NOT a `warning`, so no gate's warning set moves. Its fields:
+  - atMs, the window median, |W|, the window's span, PSI and load1 at the check, the onset's mutant row id and seq;
+  - plus the same figures, optional, in the report as `tierSlowdownWouldStop`, and one console line.
+  - Nothing else changes: no stop, no window, no verdict, no exit code.
+  - Every check's figures still go to the arming line at session end: fed, skipped, checks, the highest window median,
+    the PSI-unreadable count, the baseline's PSI, and the mode.
+- **Opt-in stop:** `lethal run --tier-slowdown-stop` (bcdev only; refused by name elsewhere). On a trigger it does r2a's
+  clean stop exactly:
+  - `TimeBudget` spends, never a quarantine, and the window is marked in the store and the fold;
+  - `time-budget-reached` with `stoppedByTierSlowdown`, exit `TIME_BUDGET_EXIT_CODE`;
+  - the run is never finished, and is resumable by R1229 after the operator restarts the tier. Never an automatic
+    restart.
+  - The texts print r5's figures (median, |W|, span, PSI) instead of r4's blocks.
+- **The flag is in the run's identity** (PR-472's precedent, `--no-kill-ledger`):
+  - `tierSlowdownStop: true` joins the config fingerprint only when the flag is on;
+  - a cross-flag search refuses, by name, a `--resume` whose stored run was made with the flag the other way.
+  - So a resume never mixes shadow rows with stop rows.
+
+**Tests (red both ways).**
+- **The rule:**
+  - no trigger while the window is not full, with |W| < 50, at a median of 2.49, at PSI ≥ 20, or with PSI unreadable;
+  - a trigger at 2.5 with a full window;
+  - the onset is W's first row;
+  - once per session.
+- **Shadow:**
+  - a session that triggers stops nothing;
+  - its report, verdicts, exit code and store rows equal those of the same session with no monitor, apart from the
+    new event and field;
+  - red if shadow stops, or if it moves any verdict.
+- **Opt-in:** r2's tests 3, 4 and 6-10, adapted (the boundary through the real `record()`, B1's order, the teardown
+  write, no quarantine, the texts, al-runner).
+- **Identity:**
+  - a flag-on run is not resumed by a flag-off `--resume`, and the reverse; both refusals are named;
+  - flag-off digests are unchanged, so existing stores still resume.
+
+**Acceptance: judged ONLY on runs recorded after this pre-commitment, in shadow mode.**
+- **Data:** bugs runs the shadow beside `ratio-watch.sh` on every DOTests run from now on, plus the gates.
+- **Labels,** set from evidence other than r5's own figures: bugs' `hourly.tsv`, `ratio-watch.sh` alerts, their
+  degradation-restart notes, and a fresh tier.
+- **A1:** no would-stop on any healthy run, with at least 10 healthy runs (gates included).
+- **A2:** a would-stop on every degraded run, with at least 2, before its end. Its onset is reported against bugs'.
+- **Below the floors:** "not enough data", and the opt-in stays off by default.
+- **If A1 and A2 pass:** the orchestrator decides whether DOTests' configs turn the stop on. Nothing changes a default
+  by itself.
+- **If either fails:** a new pre-commitment.
