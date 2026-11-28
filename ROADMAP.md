@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**69 of 1205 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**70 of 1206 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -418,6 +418,7 @@ that ordering is the priority.
 - **R1226** · Login replay can lose a mutant's login-time effect when a login's read set changes inside one daemon life (the date crosses midnight, or data the login reads changes): a mutant not on the login path by the image's read set replays it and may be scored survived; kill pairs confirm kills only · [R1226.md](docs/roadmap/R1226.md) · open — measured and designed (PR-453 r3, 2026-11-26): the date part is closed by al-runner's key (clock day)…
 - **R1228** · A BC tier that degrades while its lease renews stay ANSWERED goes undetected: PR-427 scored 44 kills, 16 survivors and 8 errors at 8.95-11.03 h with renews answered; its late kills disagree with al-runner far more often than its earlier ones (R1227: 22 of 72 late verdicts vs 7 of 60 before; al-runner is not authoritative) · [R1228.md](docs/roadmap/R1228.md) · open — REOPENED 2026-11-27 on its second trigger (a named reason): in PR-427's email3 run the SAME passing…
 - **R1241** · The itests read the NEWEST run in a fixture's persistent store (MAX(id)) as their own, so two servers' gates running at once in one worktree check each other's half-written runs: R206's liveness invariant failed twice on PR-478's proofs this way, and the R582 repro check can pass for the wrong reason · [R1241.md](docs/roadmap/R1241.md) · done (lethal/pr-495, coord PR-495): a gate holds its fixture's shared store and reads only its own run…
+- **R1243** · CI flake: four skip-path tests in scripts/al-runner-v3-update.test.ts read "pass" where "skipped" was expected on one CI attempt (run 46139921525), then passed on the re-run; suspected shared state in the file's setup · [R1243.md](docs/roadmap/R1243.md) · open — seen once (CI run 46139921525, first attempt, PR-504's head 578af96b9); not reproduced locally…
 
 ## Product gaps a real project hits
 
