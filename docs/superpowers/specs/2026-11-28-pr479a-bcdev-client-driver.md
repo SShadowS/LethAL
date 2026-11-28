@@ -292,3 +292,20 @@ No false kill or false survivor was found. These pre-commit what the build now d
    - `lethal verify` refuses a bcdev-client source run;
    - the client preflight refuses, by name and before publishing, a missing config path, a missing company, a driver not
      built, and `credentialsEnv`.
+
+## Amendment 5 (2026-11-28, the first live runs on bcwin)
+**Measured** (`/coord/handoff/PR-479/table/`):
+- page 130455's method lines load into its repeater's viewport;
+- their `Line Type` cell reads the option ORDINAL (`1` = Function, `0` = Codeunit), not its caption;
+- a long codeunit's lines arrive in PAGES: sandbox-data-tests has 80 lines and the first viewport held 20.
+
+**Rules:**
+1. **The driver reads ordinals, never captions** (orchestrator ruling): a method line is a line whose `Line Type` is `1`. A
+   caption would break on a translated BC. It is a pure helper, checked by the driver's `--self-test` (run by a test when
+   the driver is built), and red-checked both ways.
+2. **The driver pages the repeater** until it holds every line (TotalRowCount), merging pages by identity. An incomplete
+   read is still the named refusal `methods-viewport-incomplete`, before any op.
+3. **A client report has its own execution-context banner;** it never prints al-runner's label. A test pins it.
+
+**Table 1 (sandbox-app):** PASS. 20 equal with `itest:bcdev`'s frozen table (verdict and killing test); the 6 headless
+no-coverage mutants read survived, as pre-committed; 0 BLOCK.
