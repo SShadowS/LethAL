@@ -264,3 +264,31 @@ change, so no 1.0.0.32. These are my calls, from design principles 1 (correct fi
      The read-back stays fail-closed.
 3. **The one wedge still possible from the driver** is a failure between Activate and the end of the run. It is recovered
    only by an NST restart plus ForceResetLease. Waiting out the run bound does not clear it.
+
+## Amendment 4 (2026-11-28, the Opus review of the build, rounds 2-3b; `/coord/handoff/PR-479/review-r2.md`)
+No false kill or false survivor was found. These pre-commit what the build now does, where it departs from the text above.
+1. **The op number** is taken just before Activate. A failure before Activate burns none, so the next op's Activate is not
+   refused.
+2. **A refusal before Activate** waits (with a deadline) for the driver's own close before the process is ended, so that
+   `/cs` session is closed before the next op starts.
+3. **A failed close after the final Deactivate** is `client-close-failed`. The session may linger and later refresh
+   another mutant, so it stops the run and quarantines the lane.
+4. **Time:**
+   - the control's run bound is its cap, 600 s;
+   - the driver has ONE deadline for the op, from the bind to the end of the run: 540 s. It is enforced across the whole
+     RunNextTest loop, so it always fires before the control's bound;
+   - a codeunit run longer than that is `in-flight-unknown` plus quarantine (by design; the run's remaining work ends);
+   - the C# loop has no unit test, so the bcwin run covers it.
+5. **Rows from another server state:** each row's `serverGeneration` and `databaseId` must equal the lease's, else
+   `client-row-stale-server`. This covers attempt ids restarting at a1 after a reset.
+6. **Departures from amendments 1 and 3, kept (both fail closed):**
+   - `ReadClientAttestation` runs AFTER the close (the rows are committed by then);
+   - a lost Activate answer is always left for recovery (quarantine), never cleaned up by a guessed generation.
+7. **Labels:**
+   - `kill-after-red-method` is a WARNING event, not a caveat value;
+   - it also fires when an unscored TestPage method failed before the killer;
+   - a client kill carries no `killPosition`, which reads with headless meaning elsewhere.
+8. **Refusals:**
+   - `lethal verify` refuses a bcdev-client source run;
+   - the client preflight refuses, by name and before publishing, a missing config path, a missing company, a driver not
+     built, and `credentialsEnv`.
