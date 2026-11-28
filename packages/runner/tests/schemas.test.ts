@@ -2013,6 +2013,10 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "test-discovery-failed",
         "workdate-changed",
         "left-out-test-reach",
+        // PR-479 round 3b: the client causes, in v38 (unreleased) beside the client caveat.
+        "client-kill-unreached",
+        "client-activation-unknown",
+        "client-run-failed",
       ],
       "#/properties/toolConditions/items/properties/condition": [
         "quarantined",

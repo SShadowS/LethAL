@@ -28,7 +28,7 @@ import {
 } from "../src/cli";
 import {
   BcdevClientExperimentalError,
-  BcdevClientNotBuiltError,
+  BcdevClientMethodRunError,
   CLIENT_MIN_CONTROL_VERSION,
   ClientControlTooOldError,
   ClientModeRefusedError,
@@ -37,6 +37,7 @@ import {
   assertClientControlVersion,
   probeClientSession,
 } from "../src/client-mode";
+import type { ClientCodeunitResult } from "../src/client-run";
 import { ConfirmBackendNotBcdevError, ConfirmInputNotV3Error } from "../src/confirm";
 import {
   ConfirmMergeBcNotBcdevError,
@@ -68,7 +69,8 @@ import { scratchDirs } from "./helpers/scratch";
 
 /**
  * PR-479 (479a, round 1): the plumbing of the experimental `bcdev-client` backend. There is no driver yet: a built
- * backend throws `BcdevClientNotBuiltError` from run and runMany. Each guard has a red test in each direction.
+ * backend throws `BcdevClientMethodRunError` from run and runMany (round 3b: a client run goes through
+ * runClientCodeunit). Each guard has a red test in each direction.
  */
 
 const scratch = scratchDirs();
@@ -214,6 +216,30 @@ describe("PR-479: --backend bcdev-client needs --experimental-client-mode", () =
     expect(client.webClientBaseUrl).toBe("https://web/BC");
     expect("clientMode" in bcDevBackendConfig(section, "p")).toBe(false);
   });
+
+  // Round 3b. Red: drop the clientConfigPath spread in bcDevBackendConfig, or `parsed.configPath` at its call.
+  test("round 3b: a client backend gets the config file's absolute path, the driver path and the company; headless gets no config path", () => {
+    const section = {
+      mcpCommand: ["x"],
+      server: "http://s",
+      serverInstance: "BC",
+      company: "CRONUS",
+      username: "u",
+      password: "p",
+      packageCachePath: "pc",
+      controlSymbolPath: "cs",
+      webClientBaseUrl: "https://web/BC",
+      clientDriverPath: "/opt/driver/client-driver.dll",
+    } as BcDevConfigSection;
+    const client = bcDevBackendConfig(section, "p", undefined, true, "proj/lethal.config.json");
+    expect(client.clientConfigPath).toBe(join(process.cwd(), "proj", "lethal.config.json"));
+    expect(client.clientDriverPath).toBe("/opt/driver/client-driver.dll");
+    expect(client.company).toBe("CRONUS");
+    expect(
+      "clientConfigPath" in
+        bcDevBackendConfig(section, "p", undefined, undefined, "proj/lethal.config.json"),
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -263,19 +289,19 @@ describe("PR-479: the built backend", () => {
     expect(headless.coverage).toBe("fenced");
   });
 
-  test("run throws BcdevClientNotBuiltError on a client backend", async () => {
+  test("run throws BcdevClientMethodRunError on a client backend (a client run sends whole codeunits)", async () => {
     await expect(backendOf({ clientMode: true }).run(REF, RUN_OPTS)).rejects.toBeInstanceOf(
-      BcdevClientNotBuiltError,
+      BcdevClientMethodRunError,
     );
   });
 
-  test("runMany throws BcdevClientNotBuiltError on a client backend, and does not on a headless one", async () => {
+  test("runMany throws BcdevClientMethodRunError on a client backend, and does not on a headless one", async () => {
     await expect(backendOf({ clientMode: true }).runMany({} as never)).rejects.toBeInstanceOf(
-      BcdevClientNotBuiltError,
+      BcdevClientMethodRunError,
     );
-    // Headless: the same call fails for its own reason (no deploy), never as the not-built error.
+    // Headless: the same call fails for its own reason (no deploy), never as the client error.
     await expect(backendOf({}).runMany({} as never)).rejects.not.toBeInstanceOf(
-      BcdevClientNotBuiltError,
+      BcdevClientMethodRunError,
     );
   });
 
@@ -462,6 +488,49 @@ class Stub implements ExecutionBackend {
   async compileCheck(): Promise<void> {}
   async activate(id: string | null) {
     this.active = id;
+  }
+  /** Round 3b: a client run's ops. The same rule as `run`: only M0001's Z1 fails; every row reached the mutant. */
+  private generation = 0;
+  async runClientCodeunit(req: {
+    readonly codeunitId: number;
+    readonly declaredMethods: readonly string[];
+    readonly mutantId: string;
+  }): Promise<ClientCodeunitResult> {
+    this.log.push(`run:${req.mutantId === "" ? "baseline" : req.mutantId}`);
+    this.generation += 1;
+    const generation = this.generation;
+    const methods = req.declaredMethods.map((method, i) => {
+      if (req.mutantId !== "") this.runs.push({ mutant: req.mutantId, method });
+      const fail = req.mutantId === "M0001" && method === "Z1";
+      return {
+        method,
+        outcome: fail ? ("fail" as const) : ("pass" as const),
+        row: {
+          attemptId: `a${generation}`,
+          opSeq: generation,
+          codeunitId: req.codeunitId,
+          method,
+          loaded: true,
+          loadedGeneration: generation,
+          loadedMutantId: req.mutantId,
+          observedAny: true,
+          observedIdentityMismatch: false,
+          observedActive: req.mutantId !== "",
+          success: !fail,
+          testMethodRuns: i + 1,
+          sessionId: 100 + generation,
+          serverGeneration: "g",
+          databaseId: "d",
+        },
+      };
+    });
+    return {
+      codeunitId: req.codeunitId,
+      methods,
+      boundSessionId: 100 + generation,
+      generation,
+      workDates: { before: "2026-10-01", after: "2026-10-01" },
+    };
   }
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     this.log.push(`run:${this.active ?? "baseline"}`);

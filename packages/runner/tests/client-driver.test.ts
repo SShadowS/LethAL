@@ -75,7 +75,10 @@ describe("client driver (fake sidecar)", () => {
     expect((await s.ready()).step).toBe("ready");
     expect((await s.bind()).step).toBe("bound");
     const ran = await s.ran();
-    expect((ran.detail?.results as string[]).length).toBe(2);
+    // one TestResultJson per codeunit (measured on bcwin, PR-478), its two methods inside
+    const texts = ran.detail?.results as string[];
+    expect(texts.length).toBe(1);
+    expect((JSON.parse(texts[0] ?? "{}") as { testResults: unknown[] }).testResults.length).toBe(2);
     expect((await s.end()).step).toBe("ended");
     expect((await s.close()).step).toBe("closed");
     expect(goLines(log())).toEqual(['{"go":"bind"}', '{"go":"end"}', '{"go":"close"}']);

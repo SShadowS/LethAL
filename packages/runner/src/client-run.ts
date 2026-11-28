@@ -1,3 +1,13 @@
+import {
+  ClientDriverCommandError,
+  ClientDriverDeadlineError,
+  ClientDriverDiedError,
+  ClientDriverNotBuiltError,
+  ClientDriverProtocolError,
+  ClientDriverRefusedError,
+  ClientDriverSequenceError,
+  ClientDriverSessionError,
+} from "./client-driver";
 import type { ClientAttestationRow } from "./client-transport";
 
 /**
@@ -23,16 +33,64 @@ export type ClientRunFailureReason =
   | "client-row-mutant"
   | "client-row-not-loaded-observed"
   | "client-row-identity-mismatch"
-  | "client-row-success";
+  | "client-row-success"
+  /** The driver failed BEFORE Activate (a read-back refusal, a dead driver): no op exists, nothing is wedged. */
+  | "client-driver-failed"
+  /** Anything that is not a named check, between Activate and the final Deactivate (an overrun, a dead driver, a
+   *  lost answer): the op may still be running. */
+  | "client-in-flight-unknown";
 
 export class ClientRunFailure extends Error {
   constructor(
     readonly reason: ClientRunFailureReason,
     message: string,
+    /**
+     * PR-479 round 3b: the op may still be in flight (it was, or may have been, activated and its final Deactivate
+     * never answered `deactivated`). Recovered only by an NST restart plus ForceResetLease, so the orchestrator
+     * quarantines the lane (base spec item 7, amendment 1 items 1 and 8).
+     */
+    readonly inFlight = false,
   ) {
     super(`${reason}: ${message}`);
     this.name = "ClientRunFailure";
+    this.detail = message;
   }
+  /** The message without its reason prefix. */
+  readonly detail: string;
+}
+
+const DRIVER_ERRORS = [
+  ClientDriverRefusedError,
+  ClientDriverDeadlineError,
+  ClientDriverDiedError,
+  ClientDriverSessionError,
+  ClientDriverCommandError,
+  ClientDriverProtocolError,
+  ClientDriverSequenceError,
+  ClientDriverNotBuiltError,
+] as const;
+
+/**
+ * Round 3b: what a client op's failure means for the orchestrator. Inside the in-flight window (`inFlight`), every
+ * failure is marked in flight, and one that is not a named check becomes `client-in-flight-unknown`. Outside it, a
+ * driver failure is `client-driver-failed` (no op exists). Any other error is returned unchanged: it stops the run.
+ */
+export function classifyClientFailure(err: unknown, inFlight: boolean): unknown {
+  if (err instanceof ClientRunFailure) {
+    return inFlight && !err.inFlight ? new ClientRunFailure(err.reason, err.detail, true) : err;
+  }
+  const text = err instanceof Error ? err.message : String(err);
+  if (inFlight) {
+    return new ClientRunFailure(
+      "client-in-flight-unknown",
+      `${text}; the op did not End, and stays in flight until an NST restart plus ForceResetLease`,
+      true,
+    );
+  }
+  if (DRIVER_ERRORS.some((c) => err instanceof c)) {
+    return new ClientRunFailure("client-driver-failed", `${text} (before Activate: no op exists)`);
+  }
+  return err;
 }
 
 export interface ClientMethodResult {
@@ -63,11 +121,22 @@ export interface PageResult {
 const ON_RUN = "onrun";
 const isOnRun = (name: string): boolean => name.toLowerCase() === ON_RUN;
 
+/** The test runner's method `result` values, measured on bcwin (PR-478): 2 is a pass, 1 a failure. */
+const RESULT_SUCCESS = 2;
+const RESULT_FAILURE = 1;
+
 /**
- * Reads the driver's `ran` detail: `results` is an array of the test runner's per-method JSON texts
- * (`{"name": ..., "result": "Success" | "Failure", "message"?: ...}`). Anything else throws.
+ * Reads the driver's `ran` detail. `results` is an array of the test runner's `TestResultJson` texts, ONE per codeunit
+ * (measured on bcwin, PR-478 `client-op-result.md`):
+ * `{"name", "codeUnit": <id>, ..., "result", "testResults": [{"method", "startTime", "finishTime", "result"}, ...]}`.
+ * A method's `result` is 2 (success) or 1 (failure); anything else is unreadable. A failing entry's text is its
+ * `message` or `errorMessage` string, when it has one. A codeunit other than `codeunitId` is an extra codeunit
+ * (`client-incomplete`). Anything else that does not read throws `client-page-result-unreadable`.
  */
-export function parsePageResults(detail: Record<string, unknown> | undefined): PageResult[] {
+export function parsePageResults(
+  detail: Record<string, unknown> | undefined,
+  codeunitId: number,
+): PageResult[] {
   const raw = detail?.results;
   if (!Array.isArray(raw)) {
     throw new ClientRunFailure(
@@ -75,31 +144,50 @@ export function parsePageResults(detail: Record<string, unknown> | undefined): P
       "the driver's ran step has no results array",
     );
   }
-  return raw.map((text, i) => {
-    let o: unknown;
+  const unreadable = (why: string): never => {
+    throw new ClientRunFailure("client-page-result-unreadable", why);
+  };
+  const asObject = (v: unknown, at: string): Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : unreadable(`${at} is not an object`);
+  return raw.flatMap((text, i) => {
+    let parsed: unknown;
     try {
-      o = typeof text === "string" ? JSON.parse(text) : text;
+      parsed = typeof text === "string" ? JSON.parse(text) : text;
     } catch {
-      throw new ClientRunFailure("client-page-result-unreadable", `result ${i} is not JSON`);
+      return unreadable(`result ${i} is not JSON`);
     }
-    if (typeof o !== "object" || o === null) {
-      throw new ClientRunFailure("client-page-result-unreadable", `result ${i} is not an object`);
-    }
-    const { name, result, message } = o as Record<string, unknown>;
-    if (typeof name !== "string" || name === "") {
-      throw new ClientRunFailure("client-page-result-unreadable", `result ${i} has no name`);
-    }
-    if (result !== "Success" && result !== "Failure") {
+    const cu = asObject(parsed, `result ${i}`);
+    if (typeof cu.codeUnit !== "number") unreadable(`result ${i} has no numeric codeUnit`);
+    if (cu.codeUnit !== codeunitId) {
       throw new ClientRunFailure(
-        "client-page-result-unreadable",
-        `result ${i} (${name}) has result ${JSON.stringify(result)}, not Success or Failure`,
+        "client-incomplete",
+        `the page ran codeunit ${String(cu.codeUnit)}, not the requested ${codeunitId}`,
       );
     }
-    return {
-      name,
-      outcome: result === "Success" ? "pass" : "fail",
-      ...(typeof message === "string" && message !== "" ? { message } : {}),
-    };
+    if (!Array.isArray(cu.testResults)) unreadable(`result ${i} has no testResults array`);
+    return (cu.testResults as unknown[]).map((entry, j): PageResult => {
+      const at = `result ${i} entry ${j}`;
+      const { method, result, message, errorMessage } = asObject(entry, at);
+      if (typeof method !== "string" || method === "") return unreadable(`${at} has no method`);
+      if (result !== RESULT_SUCCESS && result !== RESULT_FAILURE) {
+        return unreadable(
+          `${at} (${method}) has result ${JSON.stringify(result)}, not ${RESULT_SUCCESS} (success) or ${RESULT_FAILURE} (failure)`,
+        );
+      }
+      const text =
+        typeof message === "string" && message !== ""
+          ? message
+          : typeof errorMessage === "string" && errorMessage !== ""
+            ? errorMessage
+            : undefined;
+      return {
+        name: method,
+        outcome: result === RESULT_SUCCESS ? "pass" : "fail",
+        ...(text !== undefined ? { message: text } : {}),
+      };
+    });
   });
 }
 

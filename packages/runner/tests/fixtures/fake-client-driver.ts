@@ -44,7 +44,7 @@ async function waitGo(go: string): Promise<void> {
   if (l.go !== go) fail("unexpected-go", `wanted ${go}, got ${JSON.stringify(l)}`, 3);
 }
 
-await read(); // the command
+const command = JSON.parse(await read()) as { codeunitId?: number }; // the command
 if (mode === "bad-json") {
   console.log("this is not json");
   await Bun.sleep(100);
@@ -73,16 +73,33 @@ if (mode === "bind-refused") fail("bind-refused", "Bound=No, Reason=not register
 out("bound", true, { bound: "Yes", reason: "" });
 if (mode === "stall-before-ran") await Bun.sleep(60_000);
 if (mode === "driver-deadline") fail("deadline", "no 'All tests executed.' within 1s", 4);
-const M1 = '{"name":"M1","result":"Success"}';
-const M2 = '{"name":"M2","result":"Success"}';
-const M2_FAIL = '{"name":"M2","result":"Failure","message":"Assert.AreEqual failed"}';
-const ON_RUN = '{"name":"OnRun","result":"Success"}';
+// The page's TestResultJson, measured on bcwin (PR-478 client-op-result.md): ONE text per codeunit, its methods in
+// `testResults`, `result` 2 for a success and 1 for a failure.
+const t = { startTime: "2026-11-27T16:45:01.000Z", finishTime: "2026-11-27T16:45:01.100Z" };
+const M1 = { method: "M1", ...t, result: 2 };
+const M2 = { method: "M2", ...t, result: 2 };
+const M2_FAIL = { method: "M2", ...t, result: 1, message: "Assert.AreEqual failed" };
+const M2_FAIL_ERR = { method: "M2", ...t, result: 1, errorMessage: "Assert.IsTrue failed" };
+const ON_RUN = { method: "OnRun", ...t, result: 2 };
+const codeunitText = (methods: unknown[], codeUnit = command.codeunitId ?? 0) =>
+  JSON.stringify({
+    name: "Fake Tests",
+    codeUnit,
+    codeunitName: "Fake Tests",
+    applicationID: "{00000000-0000-0000-0000-000000000000}",
+    applicationName: "Fake Tests App",
+    ...t,
+    result: methods.some((m) => (m as { result: number }).result === 1) ? 1 : 2,
+    testResults: methods,
+  });
 const results: Record<string, string[]> = {
-  "fail-m2": [M1, M2_FAIL],
+  "fail-m2": [codeunitText([M1, M2_FAIL])],
+  "fail-m2-error-message": [codeunitText([M1, M2_FAIL_ERR])],
   "empty-results": [],
-  onrun: [ON_RUN, M1, M2],
+  onrun: [codeunitText([ON_RUN, M1, M2])],
+  "other-codeunit": [codeunitText([M1, M2], 99999)],
 };
-out("ran", true, { results: results[mode] ?? [M1, M2] });
+out("ran", true, { results: results[mode] ?? [codeunitText([M1, M2])] });
 await waitGo("end");
 out("ended", true, { ended: "Yes", reason: "" });
 if (mode === "chatty-after-end") {

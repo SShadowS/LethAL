@@ -311,8 +311,9 @@ import { refuseRetiredV2Report } from "./v2-retired";
  * 37: PR-472 (R197, R1174) added the caveat value `kill-ledger-off` to `$.caveats[].caveat`. A new value, so it
  * bumps (R233); v36 is frozen.
  *
- * 38: PR-479 added the caveat value `client-no-coverage` to `$.caveats[].caveat`. A new value, so it
- * bumps (R233); v37 is frozen.
+ * 38: PR-479 added the caveat value `client-no-coverage` to `$.caveats[].caveat`, and (round 3b) the causes
+ * `client-kill-unreached`, `client-activation-unknown` and `client-run-failed` to `$.notMeasured[].cause`. New
+ * values, so it bumps (R233); v37 is frozen.
  */
 export const EXPLAIN_SCHEMA_VERSION = 38;
 

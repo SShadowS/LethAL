@@ -580,7 +580,10 @@
               "confirm-stopped",
               "test-discovery-failed",
               "workdate-changed",
-              "left-out-test-reach"
+              "left-out-test-reach",
+              "client-kill-unreached",
+              "client-activation-unknown",
+              "client-run-failed"
             ]
           },
           "withheldKill": {

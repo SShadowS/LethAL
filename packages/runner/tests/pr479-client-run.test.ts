@@ -217,17 +217,88 @@ describe("PR-479 round 3a: the row checks", () => {
     expect(reason(() => checkClientRun(input({ rows: onlyOnRun })))).toBe("client-run-empty");
   });
 
-  test("the page results reader refuses what it cannot read", () => {
+  // The measured shape (PR-478 bcwin, client-op-result.md): one TestResultJson per codeunit, result 2 / 1.
+  const cuText = (testResults: unknown[], codeUnit = 79100) =>
+    JSON.stringify({
+      name: "Sandbox Tests",
+      codeUnit,
+      codeunitName: "Sandbox Tests",
+      applicationID: "{x}",
+      applicationName: "Sandbox Tests",
+      startTime: "s",
+      finishTime: "f",
+      result: 2,
+      testResults,
+    });
+  const entry = (method: string, result: unknown, extra: Record<string, unknown> = {}) => ({
+    method,
+    startTime: "s",
+    finishTime: "f",
+    result,
+    ...extra,
+  });
+
+  test("the page results reader reads the measured shape: one codeunit text, result 2 a pass and 1 a failure", () => {
     expect(
-      parsePageResults({ results: ['{"name":"M1","result":"Failure","message":"x"}'] }),
-    ).toEqual([{ name: "M1", outcome: "fail", message: "x" }]);
-    expect(reason(() => parsePageResults(undefined))).toBe("client-page-result-unreadable");
-    expect(reason(() => parsePageResults({ results: ["not json"] }))).toBe(
+      parsePageResults(
+        {
+          results: [
+            cuText([
+              entry("OverBudgetDetected", 1, { message: "x" }),
+              entry("ClampPercentRuns", 2),
+            ]),
+          ],
+        },
+        79100,
+      ),
+    ).toEqual([
+      { name: "OverBudgetDetected", outcome: "fail", message: "x" },
+      { name: "ClampPercentRuns", outcome: "pass" },
+    ]);
+  });
+
+  test("a failing entry's text is message, else errorMessage, else none", () => {
+    const read = (extra: Record<string, unknown>) =>
+      parsePageResults({ results: [cuText([entry("M1", 1, extra)])] }, 79100)[0];
+    expect(read({ errorMessage: "e" })).toEqual({ name: "M1", outcome: "fail", message: "e" });
+    expect(read({ message: "m", errorMessage: "e" })).toEqual({
+      name: "M1",
+      outcome: "fail",
+      message: "m",
+    });
+    expect(read({})).toEqual({ name: "M1", outcome: "fail" });
+    expect(read({ message: 7 })).toEqual({ name: "M1", outcome: "fail" });
+  });
+
+  test("the page results reader refuses what it cannot read", () => {
+    const bad = (detail: Record<string, unknown> | undefined) =>
+      reason(() => parsePageResults(detail, 79100));
+    expect(bad(undefined)).toBe("client-page-result-unreadable");
+    expect(bad({ results: ["not json"] })).toBe("client-page-result-unreadable");
+    // any result other than 2 or 1 (the old string form included)
+    for (const r of [0, 3, "Success", "Failure", null]) {
+      expect(bad({ results: [cuText([entry("M1", r)])] })).toBe("client-page-result-unreadable");
+    }
+    expect(bad({ results: [cuText([{ result: 2 }])] })).toBe("client-page-result-unreadable");
+    expect(bad({ results: [JSON.stringify({ codeUnit: 79100 })] })).toBe(
       "client-page-result-unreadable",
     );
-    expect(reason(() => parsePageResults({ results: ['{"name":"M1","result":"Skipped"}'] }))).toBe(
+    expect(bad({ results: [JSON.stringify({ testResults: [] })] })).toBe(
       "client-page-result-unreadable",
     );
+    // the old per-method shape is not a codeunit text
+    expect(bad({ results: ['{"name":"M1","result":"Success"}'] })).toBe(
+      "client-page-result-unreadable",
+    );
+  });
+
+  test("a result for another codeunit is an extra codeunit: client-incomplete", () => {
+    expect(
+      reason(() => parsePageResults({ results: [cuText([entry("M1", 2)], 79101)] }, 79100)),
+    ).toBe("client-incomplete");
+    expect(
+      reason(() => parsePageResults({ results: [cuText([entry("M1", 2)], 79100)] }, 79100)),
+    ).toBe("no failure");
   });
 });
 
@@ -414,15 +485,21 @@ function rig(mode: string, sc: Scenario = {}, cfgOver: Partial<BcDevConfig> = {}
     lastCompletedOpSeq: 0,
     expiresAt: "x",
   });
-  const run = (over: Partial<Parameters<BcDevMcpBackend["runClientCodeunit"]>[0]> = {}) =>
-    backend.runClientCodeunit({
-      codeunitId: 50100,
-      declaredMethods: ["M1", "M2"],
-      mutantId: MUTANT,
-      baselineWorkDate: BASE_DATE,
-      company: "CRONUS",
-      ...over,
-    });
+  type Req = Parameters<BcDevMcpBackend["runClientCodeunit"]>[0];
+  // A key given as undefined is left OUT of the request (round 3b's optional baselineWorkDate and company).
+  const run = (over: { [K in keyof Req]?: Req[K] | undefined } = {}) =>
+    backend.runClientCodeunit(
+      Object.fromEntries(
+        Object.entries({
+          codeunitId: 50100,
+          declaredMethods: ["M1", "M2"],
+          mutantId: MUTANT,
+          baselineWorkDate: BASE_DATE,
+          company: "CRONUS",
+          ...over,
+        }).filter(([, v]) => v !== undefined),
+      ) as unknown as Req,
+    );
   return { backend, run, calls, driverLog, driverAtCall, reads: () => reads };
 }
 
@@ -601,6 +678,88 @@ describe("PR-479 round 3a: one client codeunit op", () => {
     await first;
     // after close returned, the next op may start (it consumes the next op sequence)
     await r.run();
+  });
+
+  test("round 3b: a failing entry's errorMessage reaches the method's failureMessage", async () => {
+    const r = rig("fail-m2-error-message", {
+      attestation: (b) => ({
+        read: true,
+        rows: [
+          row({ attemptId: String(b.attemptId), opSeq: Number(b.opSeq) }),
+          row({
+            attemptId: String(b.attemptId),
+            opSeq: Number(b.opSeq),
+            method: "M2",
+            testMethodRuns: 2,
+            success: false,
+          }),
+        ],
+      }),
+    });
+    expect((await r.run()).methods[1]).toMatchObject({
+      outcome: "fail",
+      failureMessage: "Assert.IsTrue failed",
+    });
+  });
+
+  test("round 3b: the page ran another codeunit: client-incomplete", async () => {
+    await failing(rig("other-codeunit").run(), "client-incomplete");
+  });
+
+  // Round 3b: what is in flight. Red: drop `inFlight = true` before Activate, or the classify call in the catch.
+  test("round 3b: a failure after Activate is in flight; one before it, or after the final Deactivate, is not", async () => {
+    const caught = async (p: Promise<unknown>) => {
+      const e = await p.catch((x: unknown) => x);
+      if (!(e instanceof ClientRunFailure)) throw new Error(`not a ClientRunFailure: ${String(e)}`);
+      return [e.reason, e.inFlight];
+    };
+    // the driver's own deadline after bind: an overrun, the op did not End
+    expect(await caught(rig("driver-deadline").run())).toEqual(["client-in-flight-unknown", true]);
+    // a named check inside the window keeps its reason and is marked in flight
+    expect(await caught(rig("ok", { deactivate: () => ({ deactivated: true }) }).run())).toEqual([
+      "client-deactivate-before-end",
+      true,
+    ]);
+    // a lost Activate answer may have claimed the op
+    expect(
+      await caught(
+        rig("ok", {
+          activate: () => {
+            throw new Error("socket hang up");
+          },
+        }).run(),
+      ),
+    ).toEqual(["client-activation-unknown", true]);
+    // a refused Activate claimed nothing
+    expect(
+      await caught(rig("ok", { activate: () => ({ claimed: false, reason: "x" }) }).run()),
+    ).toEqual(["client-activation-refused", false]);
+    // a read-back refusal comes before Activate: no op exists
+    expect(await caught(rig("wrong-company").run())).toEqual(["client-driver-failed", false]);
+    // a row check after the final Deactivate: the op ended
+    expect(
+      await caught(rig("ok", { attestation: () => ({ read: true, rows: [] }) }).run()),
+    ).toEqual(["client-run-empty", false]);
+  });
+
+  test("round 3b: with no baselineWorkDate the op's own start read sets it, and the end read must equal it", async () => {
+    const first = rig("ok", { workDates: ["2026-10-05", "2026-10-05"] });
+    expect((await first.run({ baselineWorkDate: undefined })).workDates).toEqual({
+      before: "2026-10-05",
+      after: "2026-10-05",
+    });
+    const moved = rig("ok", { workDates: ["2026-10-05", "2026-10-06"] });
+    await failing(moved.run({ baselineWorkDate: undefined }), "workdate-changed");
+  });
+
+  test("round 3b: the company defaults to the bcdev section's", async () => {
+    const r = rig("ok", {}, { company: "CRONUS" });
+    await r.run({ company: undefined });
+    expect(r.driverLog()[0]).toContain('"company":"CRONUS"');
+    const none = rig("ok");
+    await expect(none.run({ company: undefined })).rejects.toThrow(
+      /needs the bcdev section's company/,
+    );
   });
 
   test("a headless backend refuses a client op", async () => {

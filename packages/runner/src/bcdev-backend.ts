@@ -40,7 +40,7 @@ import { BCDEV_CLIENT } from "./backend";
 import { BcAnswerUnreadError, BcRedirectRefusedError, bcFetch, withDeadline } from "./bc-fetch";
 import { type ClientDriverLauncher, startClientDriver } from "./client-driver";
 import {
-  BcdevClientNotBuiltError,
+  BcdevClientMethodRunError,
   ClientModeRefusedError,
   type ClientSessionProbe,
   assertClientControlVersion,
@@ -50,6 +50,7 @@ import {
   type ClientCodeunitResult,
   ClientRunFailure,
   checkClientRun,
+  classifyClientFailure,
   parsePageResults,
 } from "./client-run";
 import { monoNow } from "./clock";
@@ -1440,7 +1441,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * session it exists to stop using, and every gate would still have passed.
    */
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-    if (this.cfg.clientMode === true) throw new BcdevClientNotBuiltError("run");
+    if (this.cfg.clientMode === true) throw new BcdevClientMethodRunError("run");
     if (opts.alone === true) throw new BcDevAloneUnsupportedError(ref);
     const v =
       opts.coverage === "procedure" || opts.coverage === "line"
@@ -1464,7 +1465,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * transport does the rest.
    */
   async runMany(opts: RunManyOpts): Promise<RunManyResult> {
-    if (this.cfg.clientMode === true) throw new BcdevClientNotBuiltError("runMany");
+    if (this.cfg.clientMode === true) throw new BcdevClientMethodRunError("runMany");
     const transport = this.runMutantTransport;
     if (!transport) {
       throw new Error(
@@ -1552,8 +1553,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
     readonly declaredMethods: readonly string[];
     /** "" for a baseline or a no-mutant confirmation. */
     readonly mutantId: string;
-    readonly baselineWorkDate: string;
-    readonly company: string;
+    /** The batch baseline's WorkDate. Absent on the batch's FIRST op only: that op's start read sets it. */
+    readonly baselineWorkDate?: string;
+    /** Default: the config's bcdev `company`. */
+    readonly company?: string;
   }): Promise<ClientCodeunitResult> {
     if (this.cfg.clientMode !== true) {
       throw new Error("BcDevMcpBackend: runClientCodeunit is for the bcdev-client backend only");
@@ -1582,6 +1585,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
         "BcDevMcpBackend: a client run needs bcdev.webClientBaseUrl and the config file's path (clientConfigPath)",
       );
     }
+    const company = req.company ?? this.cfg.company;
+    if (company === undefined || company === "") {
+      throw new Error("BcDevMcpBackend: a client run needs the bcdev section's company");
+    }
     this.assertDeployed(req.mutantId);
     if (this.clientOpInFlight) {
       throw new Error(
@@ -1591,8 +1598,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
     this.clientOpInFlight = true;
     let session: ReturnType<ClientDriverLauncher> | undefined;
     let closed = false;
+    // Round 3b: true from the Activate call until the final Deactivate answered `deactivated`. A failure in that
+    // window may leave the op running: it is marked in flight, for the orchestrator's quarantine.
+    let inFlight = false;
     try {
       const before = await this.clientWorkDate(req.baselineWorkDate);
+      const baselineWorkDate = req.baselineWorkDate ?? before;
       this.attemptSeq += 1;
       const opSeq = this.nextOpSeq;
       this.nextOpSeq += 1;
@@ -1608,7 +1619,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         {
           configPath: clientConfigPath,
           webClientBaseUrl,
-          company: req.company,
+          company,
           codeunitId: req.codeunitId,
           methods: req.declaredMethods,
           attemptId,
@@ -1624,6 +1635,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       await session.ready();
 
       let generation: number;
+      inFlight = true;
       try {
         const a = await transport.activateForClient({
           attemptId,
@@ -1633,6 +1645,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           timeoutMs: CLIENT_ACTIVATE_TIMEOUT_MS,
         });
         if (!a.claimed) {
+          inFlight = false; // a refusal claimed nothing
           throw new ClientRunFailure(
             "client-activation-refused",
             `ActivateForClient refused: ${a.reason}`,
@@ -1644,12 +1657,13 @@ export class BcDevMcpBackend implements ExecutionBackend {
         throw new ClientRunFailure(
           "client-activation-unknown",
           `no usable answer from ActivateForClient (${describeThrown(err)}); the op may be active and is left for recovery`,
+          true,
         );
       }
 
       await session.bind();
       const ran = await session.ran();
-      const pageResults = parsePageResults(ran.detail);
+      const pageResults = parsePageResults(ran.detail, req.codeunitId);
 
       const alive = await transport.deactivateForClient({
         attemptId,
@@ -1680,6 +1694,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           `expected deactivated after End, got ${JSON.stringify(done)}`,
         );
       }
+      inFlight = false; // ended and tombstoned
 
       await session.close();
       closed = true;
@@ -1695,7 +1710,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
           `ReadClientAttestation: ${att.reason}`,
         );
       }
-      const after = await this.clientWorkDate(req.baselineWorkDate);
+      const after = await this.clientWorkDate(baselineWorkDate);
       const methods = checkClientRun({
         codeunitId: req.codeunitId,
         declared: req.declaredMethods,
@@ -1716,16 +1731,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
       };
     } catch (err) {
       if (session !== undefined && !closed) await session.abort();
-      throw err;
+      throw classifyClientFailure(err, inFlight);
     } finally {
       this.clientOpInFlight = false;
     }
   }
 
   /** The server's start WorkDate now (HarnessInfo); a difference from the batch baseline's is `workdate-changed`. */
-  private async clientWorkDate(baseline: string): Promise<string> {
+  private async clientWorkDate(baseline: string | undefined): Promise<string> {
     const { workDate } = await this.verifierFor().verify();
-    if (workDate !== baseline) {
+    if (baseline !== undefined && workDate !== baseline) {
       throw new ClientRunFailure(
         "workdate-changed",
         `HarnessInfo reports ${workDate}, the batch baseline ran on ${baseline}`,

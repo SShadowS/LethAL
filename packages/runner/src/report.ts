@@ -1014,7 +1014,13 @@ export type MutantErrorCause =
   // batch had), so the row is not scored.
   | "workdate-changed"
   // PR-212 (R1113): no remaining test covers this mutant, and it sits in an object a left-out company-writing test names.
-  | "left-out-test-reach";
+  | "left-out-test-reach"
+  // PR-479 (479a): a bcdev-client test failed under the mutant, but no row at or before it shows the mutant reached.
+  | "client-kill-unreached"
+  // PR-479 (479a): ActivateForClient gave no usable answer; the op may be active, and the lane is quarantined.
+  | "client-activation-unknown"
+  // PR-479 (479a): a bcdev-client op failed one of its named row checks (the note names the check).
+  | "client-run-failed";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -1342,6 +1348,38 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "Not `survived` and not `no-coverage`: no verdict was taken. Not a claim that a left-out test covers it, and not a " +
       "claim that none does. A mutant in an object no left-out method names keeps its own `no-coverage`.",
     basis: "R1113",
+  },
+  "client-kill-unreached": {
+    meaning:
+      "On the experimental bcdev-client backend, a test that passed at baseline failed under this mutant, but no " +
+      "attestation row at or before it (in declared order) shows the mutant loaded at this op's generation and " +
+      "reached: its statement marker (`observedActive`), or for enclosing and unplaced grain any of its guards " +
+      "(`observedAny`). The note says whether this was the mutated run or its reproduction. A failure with no reach " +
+      "is not attributed to the mutant. No verdict. Re-run to measure it again (PR-479).",
+    entailedNegative:
+      "Not `killed`: nothing shows the mutant ran before the failure. Not `survived`: a test failed under it.",
+    basis: "R1170",
+  },
+  "client-activation-unknown": {
+    meaning:
+      "On the experimental bcdev-client backend, `ActivateForClient` gave no usable answer, so whether the op was " +
+      "claimed is unknown. It is left for recovery (an NST restart plus `ForceResetLease`), the lane is " +
+      "quarantined, and the run stops. No verdict (PR-479).",
+    entailedNegative:
+      "Not a verdict about the mutant: no test is known to have run under it. Not `stranded`: the run was never " +
+      "known to start.",
+    basis: "R1170",
+  },
+  "client-run-failed": {
+    meaning:
+      "On the experimental bcdev-client backend, one client op for this mutant (its run, the no-mutant " +
+      "confirmation, or the reproduction) failed a named check: a row from another session or generation, a " +
+      "missing or extra row or page result, a page and row that disagree, an unreadable answer, a driver refusal " +
+      "before Activate, a refused Activate. The note names the check. No op was left running (one that may be is " +
+      "`stranded` or `client-activation-unknown` instead). No verdict (PR-479).",
+    entailedNegative:
+      "Not `killed` and not `survived`: a run whose rows fail a check proves nothing about the mutant.",
+    basis: "R1170",
   },
 };
 
@@ -4163,6 +4201,9 @@ function errorBreakdown(r: SessionReport): string {
     "test-discovery-failed",
     "workdate-changed",
     "left-out-test-reach",
+    "client-kill-unreached",
+    "client-activation-unknown",
+    "client-run-failed",
   ];
   const parts: string[] = [];
   for (const cause of named) {

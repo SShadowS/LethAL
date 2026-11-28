@@ -1,5 +1,6 @@
 import type { V3EnvironmentChoice } from "./al-runner-v3-environment";
 import type { CompiledArtifact } from "./artifact";
+import type { ClientCodeunitResult } from "./client-run";
 import type { MicrosoftMode } from "./digest-inputs";
 import type { AlSource, RenamedMemberNames } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
@@ -790,6 +791,18 @@ export interface ExecutionBackend {
    * version). Called once by `runSession`, after `status()`. Absent on every other backend.
    */
   clientPreflight?(): Promise<void>;
+  /**
+   * PR-479 round 3b, OPTIONAL: one client op, a test codeunit's full declared run in a fresh `/cs` session under
+   * `mutantId` ("" for a baseline or a no-mutant confirmation). Every row check is done inside; a failed one throws a
+   * named `ClientRunFailure`. `baselineWorkDate` is absent on the batch's first op only. The bcdev-client backend
+   * only; `runSession` scores a client run through it alone.
+   */
+  runClientCodeunit?(req: {
+    readonly codeunitId: number;
+    readonly declaredMethods: readonly string[];
+    readonly mutantId: string;
+    readonly baselineWorkDate?: string;
+  }): Promise<ClientCodeunitResult>;
   /**
    * R739, OPTIONAL: where the backend's user-facing notices go during a session. `runSession` and
    * `runNamedMutants` install a function that emits a warning event (`code` is the event's code),

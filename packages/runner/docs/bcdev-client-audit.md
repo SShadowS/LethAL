@@ -125,6 +125,8 @@ count must equal the number of sites it claims. An unclaimed site, or a count th
 | packages/runner/src/orchestrator.ts | isBcdev(caps.kind) && baselineTimeoutMs | 1 | off | the stop grace does not apply: a client run sends no stop |
 | packages/runner/src/orchestrator.ts | if (isBcServer(caps.kind) && workers > 1) | 1 | refuse:workers | one session at a time on one tier |
 | packages/runner/src/orchestrator.ts | killLedgerOff: cfg.killLedger === false \|\| isBcdevClient(caps.kind) | 1 | off | R197's ledger and R1174's re-walk are off on a client run |
+| packages/runner/src/orchestrator.ts | if (isBcdevClient(scope.caps.kind)) return scoreClientBatch(scope, input); | 1 | new-arm | round 3b: a client batch is scored from whole-codeunit client ops (`scoreClientBatch`); headless scoreBatch is unchanged below it |
+| packages/runner/src/orchestrator.ts | isBcdevClient(caps.kind) ? { clientUnscored: | 1 | new-arm | round 3b: the TestPage methods a client run runs but never scores |
 | packages/runner/src/orchestrator.ts | dependents !== null && isBcServer(caps.kind) | 1 | same-as-bcdev | object-clash check before publish |
 | packages/runner/src/orchestrator.ts | isBcdev(caps.kind) && backend.stopsHungSessions | 1 | off | a client run sends no stop |
 | packages/runner/src/orchestrator.ts | isBcServer(scope.caps.kind) && !attestation.clean | 1 | same-as-bcdev | an unattested probe is an error |

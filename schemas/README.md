@@ -6,7 +6,7 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | File | Describes | Version constant |
 |---|---|---|
 | [`explain-v38.schema.json`](explain-v38.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 38 |
-| [`explain-v37.schema.json`](explain-v37.schema.json) | the same, from builds before PR-479; kept so a stored v37 document stays checkable (v38 added the caveat `client-no-coverage`) | `EXPLAIN_SCHEMA_VERSION` = 37 |
+| [`explain-v37.schema.json`](explain-v37.schema.json) | the same, from builds before PR-479; kept so a stored v37 document stays checkable (v38 added the caveat `client-no-coverage` and three client causes) | `EXPLAIN_SCHEMA_VERSION` = 37 |
 | [`explain-v36.schema.json`](explain-v36.schema.json) | the same, from builds before PR-472; kept so a stored v36 document stays checkable (v37 added the caveat `kill-ledger-off`) | `EXPLAIN_SCHEMA_VERSION` = 36 |
 | [`explain-v35.schema.json`](explain-v35.schema.json) | the same, from builds before PR-456; kept so a stored v35 document stays checkable (v36 added the caveat `resumed-across-restart`) | `EXPLAIN_SCHEMA_VERSION` = 35 |
 | [`explain-v34.schema.json`](explain-v34.schema.json) | the same, from builds before PR-381; kept so a stored v34 document stays checkable (v35 added the caveat `survivors-beside-unrun-tests` and the optional `score.survivorsBesideUnrunTests`) | `EXPLAIN_SCHEMA_VERSION` = 34 |

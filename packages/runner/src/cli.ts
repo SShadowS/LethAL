@@ -3464,6 +3464,8 @@ export function bcDevBackendConfig(
   stopHungSessions?: boolean,
   /** PR-479: build the experimental bcdev-client backend (the caller has checked `--experimental-client-mode`). */
   clientMode?: boolean,
+  /** PR-479 round 3b: the config FILE's path, which the client driver reads its login from (a client run only). */
+  configPath?: string,
 ): BcDevConfig {
   return {
     mcpCommand: c.mcpCommand,
@@ -3481,6 +3483,9 @@ export function bcDevBackendConfig(
     ...(clientMode === true ? { clientMode: true as const } : {}),
     ...(c.webClientBaseUrl !== undefined ? { webClientBaseUrl: c.webClientBaseUrl } : {}),
     ...(c.clientDriverPath !== undefined ? { clientDriverPath: c.clientDriverPath } : {}),
+    ...(clientMode === true && configPath !== undefined
+      ? { clientConfigPath: resolve(configPath) }
+      : {}),
   };
 }
 
@@ -3789,7 +3794,8 @@ export type BackendInputs = Pick<
     >
   > &
   // R505: the run's own output files, which the source-drift watch must not count.
-  Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath">>;
+  // PR-479 round 3b: `configPath`, the file a bcdev-client driver reads its login from.
+  Partial<Pick<RunCliConfig, "dbPath" | "outPath" | "progressOutPath" | "configPath">>;
 
 /**
  * The coverage mode a v3 run gets: the configured one, or "none" (with a warning naming the files)
@@ -4175,6 +4181,7 @@ export async function buildBackend(
       parsed.projectDir,
       parsed.stopHungSessions,
       isBcdevClient(parsed.backendKind),
+      parsed.configPath,
     ),
     undefined,
     { compiler, deployer, verifier, harnessVerifier },

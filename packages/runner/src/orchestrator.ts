@@ -143,10 +143,22 @@ import {
 } from "./bisect";
 import {
   BcdevClientExperimentalError,
+  ClientConfirmationFailedError,
   ClientModeRefusedError,
   ClientNeverMixedError,
   ClientSessionUnavailableError,
 } from "./client-mode";
+import { type ClientCodeunitResult, ClientRunFailure } from "./client-run";
+import {
+  type ClientCodeunit,
+  type ClientCodeunitBaseline,
+  clientCodeunitsOf,
+  clientReach,
+  confirmationFailures,
+  firstScoredFailure,
+  killReach,
+  redBefore,
+} from "./client-verdict";
 import { createSuspendWatch, monoNow, suspendMessage } from "./clock";
 import {
   type ClosedWorldResult,
@@ -5697,6 +5709,11 @@ interface BatchScope {
   readonly v3MutantStop?: { ms: number | undefined };
   /** PR-456: a resume across a restart that lost the database (survivors only, per batch); the run it resumes. */
   readonly restart?: { readonly priorRunId: number };
+  /**
+   * PR-479 round 3b, a bcdev-client run only: `testKeyOf` of each test the TestPage scan names. They run (no method is
+   * switched off) but are never a killer and never counted until 479b (`client-ran-testpage-unscored`).
+   */
+  readonly clientUnscored?: ReadonlySet<string>;
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 
@@ -6656,6 +6673,8 @@ async function chooseIsolationAuto(
 }
 
 async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<ScoreBatchResult> {
+  // PR-479 round 3b: a bcdev-client run scores through whole-codeunit client ops; nothing below runs for it.
+  if (isBcdevClient(scope.caps.kind)) return scoreClientBatch(scope, input);
   const {
     backend,
     caps,
@@ -7359,6 +7378,23 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // not a verdict this artifact produced, so it is correctly outside this gate's scope.
   // R912: when the time budget stopped the session, a covered mutant that was never scheduled
   // contributed nothing either; a planned stop is not an unattested artifact.
+  gateUnattestedBatch(scope, input, toExecute, perMutantTests, attestation);
+  return "scored";
+}
+
+/**
+ * Design §G's per-artifact attestation gate, shared by `scoreBatch` and (PR-479) `scoreClientBatch`, whose ledger is
+ * fed from the client rows. See the comment above its call in `scoreBatch`.
+ */
+function gateUnattestedBatch(
+  scope: BatchScope,
+  input: ScoreBatchInput,
+  toExecute: readonly MutantManifestEntry[],
+  perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>,
+  attestation: AttestationLedger,
+): void {
+  const { caps, emit, store, runId, safety, outcomes } = scope;
+  const batchIdx = input.batchIndex;
   const budgetStopped = scope.timeBudget?.reached !== undefined;
   const contributed = toExecute.some(
     (m) =>
@@ -7376,6 +7412,363 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     store.invalidateBatch(runId, batchIdx, note);
     safety.latchUnsafe(note);
   }
+}
+
+/** PR-479 round 3b: a TestPage method's baseline row on a client run: it ran, and is never scored (479b). */
+function clientUnscoredNote(outcome: string): string {
+  return `client-ran-testpage-unscored: ran in the client session (${outcome}); a TestPage test is never a killer and never counted until 479b`;
+}
+
+/** PR-479 round 3b: how one mutant of a client run ended. */
+type ClientMutantDecision =
+  | {
+      readonly verdict: "survived";
+      readonly reach: ReturnType<typeof clientReach>;
+    }
+  | {
+      readonly verdict: "killed";
+      readonly ref: TestMethodRef;
+      readonly position: number;
+      readonly failure: string | undefined;
+      readonly reproducedFailure: string | undefined;
+      readonly byAny: boolean;
+      readonly redBefore: readonly string[];
+      readonly reach: ReturnType<typeof clientReach>;
+    }
+  | {
+      readonly verdict: "error";
+      readonly cause: MutantErrorCause;
+      readonly note: string;
+    };
+
+/**
+ * PR-479 (479a) round 3b: one batch of a bcdev-client run (base spec section 1 items 4-7, amendments 1-3). Coverage
+ * is off, so every mutant runs every test codeunit, each as its full declared run in a fresh `/cs` session.
+ * - Baseline: each codeunit once with no mutant, in the fixed codeunit order; a red method is left out of scoring
+ *   but still runs. The first op's WorkDate is the batch baseline's. A `ClientRunFailure` stops the run.
+ * - Per mutant: codeunits in order; the first failing scored method (by `testMethodRuns`) is a candidate kill. It is
+ *   killed only with reach at or before it, then (a) the codeunit with no mutant passes every scored method
+ *   (else `ClientConfirmationFailedError` stops the run), then (b) the codeunit under the mutant fails the same
+ *   method again with reach in its own rows. A survivor ran every codeunit with no scored failure.
+ * - An op that may still be running (an overrun, a dead driver, a lost answer, a lost Activate) quarantines the lane
+ *   and stops the run. There is no `timeout-killed`.
+ * - The attestation ledger is fed from the mutant-phase rows, then design §G's gate runs as for headless.
+ */
+async function scoreClientBatch(
+  scope: BatchScope,
+  input: ScoreBatchInput,
+): Promise<ScoreBatchResult> {
+  const { backend, safety, store, runId, emit, outcomes } = scope;
+  const runOp = backend.runClientCodeunit?.bind(backend);
+  if (runOp === undefined)
+    throw new Error("runSession: a bcdev-client backend must implement runClientCodeunit");
+  const batchIdx = input.batchIndex;
+  const unscored = scope.clientUnscored ?? new Set<string>();
+  const codeunits = clientCodeunitsOf(input.tests);
+  let workDate: string | undefined;
+  const op = async (cu: ClientCodeunit, mutantId: string): Promise<ClientCodeunitResult> => {
+    const r = await runOp({
+      codeunitId: cu.codeunitId,
+      declaredMethods: cu.refs.map((r) => r.method),
+      mutantId,
+      ...(workDate !== undefined ? { baselineWorkDate: workDate } : {}),
+    });
+    workDate ??= r.workDates.before;
+    return r;
+  };
+  // An op that may still be running is recovered only by an NST restart plus ForceResetLease: quarantine the lane.
+  const quarantineIfInFlight = async (err: unknown, what: string): Promise<void> => {
+    if (!(err instanceof ClientRunFailure)) return;
+    if (!err.inFlight && err.reason !== "client-activation-unknown") return;
+    await quarantineInFlight({
+      safety,
+      quarantineStore: scope.quarantineStore,
+      resourceKey: scope.resourceKey,
+      nowIso: scope.nowIso,
+      detail: `client op in-flight-unknown ${what}: ${err.message}. Recover with an NST restart plus ForceResetLease`,
+    });
+  };
+
+  // 4. baseline
+  emit({
+    type: "phase-entered",
+    phase: "baseline",
+    testCount: input.tests.length,
+    batchIndex: batchIdx,
+  });
+  const baselineStartedMs = monoNow();
+  const baseline: BaselineRow[] = [];
+  const cuBaselines: ClientCodeunitBaseline[] = [];
+  for (const cu of codeunits) {
+    let r: ClientCodeunitResult;
+    try {
+      r = await op(cu, "");
+    } catch (err) {
+      await quarantineIfInFlight(err, `in the baseline of codeunit ${cu.codeunitName}`);
+      throw err;
+    }
+    const scored = new Set<string>();
+    const red = new Set<string>();
+    for (const ref of cu.refs) {
+      const m = r.methods.find((x) => x.method === ref.method);
+      if (m === undefined)
+        throw new Error(`runClientCodeunit returned no result for ${qualifiedTestName(ref)}`);
+      const isUnscored = unscored.has(testKeyOf(ref));
+      if (!isUnscored && m.outcome === "pass") scored.add(ref.method);
+      if (!isUnscored && m.outcome === "fail") red.add(ref.method);
+      const verdict: TestVerdict = {
+        ref,
+        outcome: isUnscored ? "skip" : m.outcome,
+        durationMs: 0,
+        sessionId: r.boundSessionId,
+        ...(isUnscored
+          ? { failureMessage: clientUnscoredNote(m.outcome) }
+          : m.failureMessage !== undefined
+            ? { failureMessage: m.failureMessage }
+            : {}),
+      };
+      baseline.push({ ref, verdict });
+      store.recordTestResult(
+        runId,
+        null,
+        null,
+        ref,
+        verdict.outcome,
+        0,
+        verdict.failureMessage,
+        undefined,
+        r.boundSessionId,
+      );
+    }
+    cuBaselines.push({ declared: cu.refs.map((x) => x.method), scored, red });
+  }
+  emit({ type: "phase-left", phase: "baseline", elapsedMs: monoNow() - baselineStartedMs });
+  emit({
+    type: "baseline-batch-finished",
+    batchIndex: batchIdx,
+    ...(workDate !== undefined ? { workDate } : {}),
+    verdicts: baseline.map((b) => ({
+      name: qualifiedTestName(b.ref),
+      outcome: b.verdict.outcome,
+      classification: [],
+      ...(b.verdict.failureMessage !== undefined
+        ? { failureMessage: b.verdict.failureMessage }
+        : {}),
+    })),
+  });
+  const plan = input.select(baseline, new Set(baseline.map((b) => b.ref)));
+  if (plan === undefined) return "nothing-to-run";
+  const { mutants: toExecute, perMutantTests, coverageAttribution } = plan;
+
+  // 6. per mutant
+  const attestation = unmarkedLedger();
+  const attest = (r: ClientCodeunitResult): void => {
+    for (const { row } of r.methods)
+      feedAttestation(attestation, {
+        observedAny: row.loaded && row.observedAny,
+        identityMismatch: row.observedIdentityMismatch,
+      });
+  };
+  emit({
+    type: "phase-entered",
+    phase: "mutants",
+    detail: `client mode: ${toExecute.length} mutant(s), each against ${codeunits.length} test codeunit(s) in full (coverage off)`,
+  });
+  const mutantsStartedMs = monoNow();
+  const decide = async (m: MutantManifestEntry): Promise<ClientMutantDecision> => {
+    const failed = async (err: unknown, what: string): Promise<ClientMutantDecision> => {
+      if (!(err instanceof ClientRunFailure)) throw err;
+      await quarantineIfInFlight(err, `${what} (mutant ${m.mutantId})`);
+      if (err.reason === "client-activation-unknown")
+        return {
+          verdict: "error",
+          cause: "client-activation-unknown",
+          note: `${err.message} (${what})`,
+        };
+      if (err.inFlight)
+        return {
+          verdict: "error",
+          cause: "stranded",
+          note: `${STRANDED_NOTE_PREFIX}${what}: ${err.message}`,
+        };
+      return {
+        verdict: "error",
+        cause: err.reason === "workdate-changed" ? "workdate-changed" : "client-run-failed",
+        note: `${err.message} (${what})`,
+      };
+    };
+    const ran: { cu: ClientCodeunit; result: ClientCodeunitResult }[] = [];
+    for (const [ci, cu] of codeunits.entries()) {
+      const base = cuBaselines[ci];
+      if (base === undefined) throw new Error("unreachable: one baseline per codeunit");
+      let r: ClientCodeunitResult;
+      try {
+        r = await op(cu, m.mutantId);
+      } catch (err) {
+        return failed(err, `running ${cu.codeunitName} under the mutant`);
+      }
+      attest(r);
+      ran.push({ cu, result: r });
+      const killer = firstScoredFailure(r, base.scored);
+      if (killer === undefined) continue;
+      const ref = cu.refs.find((x) => x.method === killer.method);
+      if (ref === undefined) throw new Error("unreachable: the killer is a declared method");
+      const name = qualifiedTestName(ref);
+      const reach = killReach(r, killer, m.mutantId, m.reachGrain);
+      if (reach === undefined)
+        return {
+          verdict: "error",
+          cause: "client-kill-unreached",
+          note: `${name} failed under the mutant, but no row at or before it shows the mutant reached (the mutated run)`,
+        };
+      // (a) the no-mutant confirmation, in a fresh session
+      let a: ClientCodeunitResult;
+      try {
+        a = await op(cu, "");
+      } catch (err) {
+        return failed(err, `confirming ${name} with no mutant`);
+      }
+      attest(a);
+      const bad = confirmationFailures(a, base.scored);
+      if (bad.length > 0) throw new ClientConfirmationFailedError(m.mutantId, cu.codeunitName, bad);
+      // (b) the reproduction under the mutant
+      let b: ClientCodeunitResult;
+      try {
+        b = await op(cu, m.mutantId);
+      } catch (err) {
+        return failed(err, `reproducing ${name} under the mutant`);
+      }
+      attest(b);
+      const again = b.methods.find((x) => x.method === killer.method);
+      if (again === undefined || again.outcome !== "fail")
+        return {
+          verdict: "error",
+          cause: "kill-not-reproduced",
+          note: `${name} failed under the mutant and passed with no mutant, but passed again under the mutant in a fresh session`,
+        };
+      if (killReach(b, again, m.mutantId, m.reachGrain) === undefined)
+        return {
+          verdict: "error",
+          cause: "client-kill-unreached",
+          note: `${name} failed again under the mutant, but no row at or before it shows the mutant reached (the reproduction)`,
+        };
+      return {
+        verdict: "killed",
+        ref,
+        position: killer.row.testMethodRuns,
+        failure: killer.failureMessage,
+        reproducedFailure: again.failureMessage,
+        byAny: reach === "by-any",
+        redBefore: redBefore(base, killer.method),
+        reach: clientReach(ran, m.mutantId, m.reachGrain),
+      };
+    }
+    return { verdict: "survived", reach: clientReach(ran, m.mutantId, m.reachGrain) };
+  };
+  const killedAfterRed: string[] = [];
+  for (const [at, m] of toExecute.entries()) {
+    if (scope.timeBudget?.exhausted === true) {
+      const left = toExecute.slice(at).filter((x) => perMutantTests.has(x.mutantId)).length;
+      if (left > 0) reachBudget(scope.timeBudget, left, batchIdx + 1);
+      break;
+    }
+    const covering = perMutantTests.get(m.mutantId);
+    if (covering === undefined) continue; // recorded by `select`
+    const started = monoNow();
+    const d = await decide(m);
+    const spent = monoNow() - started;
+    const coveringNames = covering.map(qualifiedTestName);
+    if (d.verdict === "killed") {
+      if (d.redBefore.length > 0)
+        killedAfterRed.push(
+          `${m.mutantId} (${qualifiedTestName(d.ref)} after ${d.redBefore.join(", ")})`,
+        );
+      record(
+        store,
+        runId,
+        m,
+        "killed",
+        outcomes,
+        batchIdx,
+        emit,
+        d.ref.method,
+        d.byAny
+          ? "reach-by-any: the kill's reach is an observed guard of this mutant (observedAny), not its statement marker (enclosing or unplaced grain)"
+          : undefined,
+        undefined, // cause
+        spent,
+        coveringNames,
+        coverageAttribution.get(m.mutantId),
+        undefined, // guardObserved
+        undefined, // carried
+        undefined, // strandedSkip
+        undefined, // runner
+        undefined, // runnerDisagreement
+        undefined, // runnerDisagreementTest
+        undefined, // fromRunId
+        undefined, // permissionRefusedTest
+        d.failure,
+        undefined, // unplaceable
+        d.position,
+        d.reach,
+        d.ref,
+        d.reproducedFailure !== undefined ? { reproducedFailure: d.reproducedFailure } : {},
+      );
+    } else if (d.verdict === "survived") {
+      record(
+        store,
+        runId,
+        m,
+        "survived",
+        outcomes,
+        batchIdx,
+        emit,
+        undefined, // killingTest
+        undefined, // failureNote
+        undefined, // cause
+        spent,
+        coveringNames,
+        coverageAttribution.get(m.mutantId),
+        undefined, // guardObserved
+        undefined, // carried
+        undefined, // strandedSkip
+        undefined, // runner
+        undefined, // runnerDisagreement
+        undefined, // runnerDisagreementTest
+        undefined, // fromRunId
+        undefined, // permissionRefusedTest
+        undefined, // killingTestFailure
+        undefined, // unplaceable
+        undefined, // killPosition
+        d.reach,
+      );
+    } else {
+      record(
+        store,
+        runId,
+        m,
+        "error",
+        outcomes,
+        batchIdx,
+        emit,
+        undefined,
+        d.note,
+        d.cause,
+        spent,
+        coveringNames,
+      );
+    }
+    if (safety.isUnsafe) break;
+  }
+  emit({ type: "phase-left", phase: "mutants", elapsedMs: monoNow() - mutantsStartedMs });
+  if (killedAfterRed.length > 0) {
+    emit({
+      type: "warning",
+      code: "kill-after-red-method",
+      message: `[lethal] kill-after-red-method: ${killedAfterRed.length} kill(s) in a codeunit whose baseline-red method ran before the killer, so the killer ran after a failed method, as a headless run never runs it: ${killedAfterRed.join("; ")}. Do not compare these kills with headless ones (PR-479).`,
+    });
+  }
+  gateUnattestedBatch(scope, input, toExecute, perMutantTests, attestation);
   return "scored";
 }
 
@@ -9155,6 +9548,7 @@ async function runSessionBody(
       minMutantBudgetMs,
       baselineTimeoutMs,
       testPageRefused,
+      ...(isBcdevClient(caps.kind) ? { clientUnscored: new Set(testPageScan.keys()) } : {}),
       ...(reachTrace !== undefined ? { reachTrace } : {}),
       ...(reachPrune ? { reachPrune: true as const } : {}),
       ...(carryWalk && carryApplies ? { carryWalk: true as const } : {}),

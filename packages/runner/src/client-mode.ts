@@ -2,8 +2,8 @@ import { compareAppVersions } from "./app-version";
 
 /**
  * PR-479 (479a): the experimental `bcdev-client` backend: each test codeunit runs in a `/cs` client
- * session, with coverage off. Round 1 is the plumbing: the kind, its refusals and its caveat. The
- * driver that runs a codeunit is not built yet, so a built backend throws `BcdevClientNotBuiltError`.
+ * session, with coverage off. Round 1 is the plumbing: the kind, its refusals and its caveat. Round 3b runs a
+ * session through `runClientCodeunit`; a per-method `run`/`runMany` throws `BcdevClientMethodRunError`.
  * Spec: `docs/superpowers/specs/2026-11-28-pr479a-bcdev-client-driver.md`.
  */
 
@@ -17,14 +17,32 @@ export const CLIENT_MIN_CONTROL_VERSION = "1.0.0.31";
 export const CLIENT_NO_COVERAGE_TEXT =
   "client-no-coverage: coverage is off on this backend: a survivor may be a mutant no test reached. Do not read these survivors as headless survivors.";
 
-/** Run and runMany of a built bcdev-client backend, until the driver exists. */
-export class BcdevClientNotBuiltError extends Error {
-  readonly reason = "bcdev-client-not-built";
+/**
+ * Run and runMany of a built bcdev-client backend. Round 3b: a client run goes through `runClientCodeunit` (one
+ * codeunit's full declared run per op), never a per-method call, so reaching either is a caller bug.
+ */
+export class BcdevClientMethodRunError extends Error {
+  readonly reason = "bcdev-client-method-run";
   constructor(what: string) {
     super(
-      `bcdev-client-not-built: ${what} was called on the bcdev-client backend, which has no driver yet (PR-479 round 1 builds the plumbing only). Use --backend bcdev.`,
+      `bcdev-client-method-run: ${what} was called on the bcdev-client backend, which runs whole codeunits only (runClientCodeunit). A client run never sends one method.`,
     );
-    this.name = "BcdevClientNotBuiltError";
+    this.name = "BcdevClientMethodRunError";
+  }
+}
+
+/**
+ * Round 3b (amendment 1 item 2): a candidate kill's no-mutant confirmation (a) did not pass: a baseline-green method
+ * failed with NO mutant active, in a fresh session. The environment moved since the baseline, so the run stops; it is
+ * never a kill, and the verdicts so far are not trusted either.
+ */
+export class ClientConfirmationFailedError extends Error {
+  readonly reason = "confirmation-failed";
+  constructor(mutantId: string, codeunit: string, failed: readonly string[]) {
+    super(
+      `confirmation-failed: confirming mutant ${mutantId}'s kill, codeunit ${codeunit} ran with no mutant active in a fresh client session and baseline-green method(s) ${failed.join(", ")} did not pass. The environment changed since the baseline; the run is stopped (PR-479).`,
+    );
+    this.name = "ClientConfirmationFailedError";
   }
 }
 
