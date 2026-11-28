@@ -20,6 +20,9 @@ using System.Threading.Channels;
 using Microsoft.Dynamics.Framework.UI.Client;
 using Microsoft.Dynamics.Framework.UI.Client.Interactions;
 
+// --self-test: asserts on the pure helpers, no server, no stdin. Exit 0 all pass, 1 any fail.
+if (args.Contains("--self-test")) return SelfTest.Run();
+
 var sw = Stopwatch.StartNew();
 void Out(string step, bool ok, object detail = null)
 {
@@ -214,18 +217,55 @@ try
         Diag("after-refresh", rep);
         rows = rep.DefaultViewport.ToList();
     }
-    if (rep.TotalRowCount > rows.Count) throw new DriverFailure("methods-viewport-incomplete", $"{rep.TotalRowCount} lines, viewport holds {rows.Count}", 3);
-    var lines = new List<(string Name, bool Run)>();
-    foreach (var row in rows)
+    // Paging: the viewport holds PageSize rows (20 on bcwin; the codeunit there has 80 lines). Scroll until the collected
+    // rows equal TotalRowCount, merging by identity so an overlap or a repeated page never double-counts. Whether Scroll's
+    // argument is an absolute offset or a delta is unmeasured: the first call tries absolute and reads Offset back.
+    Line ReadLine(ClientLogicalControl row)
     {
         var cells = row.ContainedControls.ToList();
-        string Cell(string n) => cells.FirstOrDefault(c => c.Name == n || c.Caption == n)?.StringValue;
-        var lineType = Cell("Line Type");
-        // Measured on bcwin (BC 28.4, 2026-11-28): the cell reads the option ORDINAL ("1" = Function, "0" = Codeunit), not
-        // its caption. The ordinal is locale-free; the caption is accepted too.
-        if (lineType != null && lineType != "1" && !lineType.Equals("Function", StringComparison.OrdinalIgnoreCase)) continue;
-        var nm = Cell("Name") ?? throw new DriverFailure("control-missing", "method line has no Name cell", 3);
-        var run = Cell("Run") ?? throw new DriverFailure("control-missing", "method line has no Run cell", 3);
+        string Cell(params string[] ns) => cells.FirstOrDefault(c => ns.Contains(c.Name) || ns.Contains(c.Caption))?.StringValue;
+        return new Line(Cell("Test Codeunit", "Codeunit ID", "Codeunit No.") ?? "", Cell("Name"), Cell("Line Type"), Cell("Run"));
+    }
+    var collected = new SortedDictionary<long, Line>();
+    void Collect(string point)
+    {
+        Diag(point, rep);
+        Pure.MergePage(collected, rep.Offset, rep.DefaultViewport.Select(ReadLine).ToList());
+    }
+    Collect("page-0");
+    var maxPages = (int)(rep.TotalRowCount / Math.Max(1, rep.PageSize)) + 3;
+    string scrollMode = null; // null = unknown, "absolute", "delta"
+    for (var page = 1; collected.Count < rep.TotalRowCount && page <= maxPages; page++)
+    {
+        var want = collected.Count == 0 ? 0 : collected.Keys.Max() + 1;
+        var before = (long)rep.Offset;
+        var seen = collected.Count;
+        async Task Go(long arg) => await Settle(rep.Scroll(arg, new ClientInteractionsOptions()), stepDl, $"scroll method lines to {arg}");
+        if (scrollMode != "delta")
+        {
+            await Go(want);
+            // From offset 0 the two readings agree; assume absolute, and switch if a later call lands at before+want.
+            if (before != 0 && rep.Offset == before + want) scrollMode = "delta";
+            else if (rep.Offset != before) scrollMode = "absolute";
+        }
+        if (scrollMode != "absolute" && rep.Offset == before)
+        {
+            await Go(want - before);
+            if (rep.Offset == before) throw new DriverFailure("methods-viewport-incomplete", $"Scroll moved Offset neither as absolute {want} nor as delta {want - before} (stays {before})", 3);
+            scrollMode = "delta";
+        }
+        Collect($"page-{page}");
+        if (collected.Count == seen) break; // no new row: do not loop on the same page
+    }
+    if (collected.Count < rep.TotalRowCount) throw new DriverFailure("methods-viewport-incomplete", $"{rep.TotalRowCount} lines, collected {collected.Count} (page size {rep.PageSize}, scroll {scrollMode ?? "not tried"})", 3);
+    var lines = new List<(string Name, bool Run)>();
+    foreach (var row in collected.Values)
+    {
+        // Measured on bcwin (BC 28.4, 2026-11-28): the cell reads the option ORDINAL ("1" = Function, "0" = Codeunit).
+        // Ordinal only: a caption would break on a translated BC. A missing column (null) keeps the row.
+        if (row.LineType != null && !Pure.IsFunctionLine(row.LineType)) continue;
+        var nm = row.Name ?? throw new DriverFailure("control-missing", "method line has no Name cell", 3);
+        var run = row.Run ?? throw new DriverFailure("control-missing", "method line has no Run cell", 3);
         lines.Add((nm, Yes(run)));
     }
     if (!lines.Select(l => l.Name).SequenceEqual(declared))
@@ -303,6 +343,84 @@ finally
     catch (Exception e) { Out("closed", false, new { error = "close-failed", message = $"{e.GetType().Name}: {e.Message}", ended }); }
 }
 return exitCode;
+
+// One method-line row as read from the repeater. LineType null = the column is absent.
+record Line(string CodeunitId, string Name, string LineType, string Run);
+
+static class Pure
+{
+    // Measured on bcwin (BC 28.4, 2026-11-28): "Line Type" reads the option ORDINAL, "1" = Function, "0" = Codeunit.
+    // Ordinal only: a caption would break on a translated BC.
+    public static bool IsFunctionLine(string lineType) => lineType == "1";
+
+    static (string, string, string) Id(Line l) => (l.CodeunitId ?? "", l.Name ?? "", l.LineType ?? "");
+
+    // Merges one viewport page read at `offset` into the rows collected so far, keyed by absolute row index. A row whose
+    // identity (codeunit id + name + line type) is already collected is skipped, so overlap and a repeated page never
+    // double-count. Order is by row index, whatever order the pages arrived in. A different row at an index already
+    // taken means the offset is wrong: refuse.
+    public static void MergePage(SortedDictionary<long, Line> acc, long offset, IReadOnlyList<Line> page)
+    {
+        var seen = new HashSet<(string, string, string)>(acc.Values.Select(Id));
+        for (var i = 0; i < page.Count; i++)
+        {
+            var idx = offset + i;
+            if (acc.TryGetValue(idx, out var have))
+            {
+                if (Id(have) != Id(page[i])) throw new DriverFailure("methods-viewport-incomplete", $"row {idx} reads '{Id(page[i])}' but '{Id(have)}' was collected there", 3);
+                continue;
+            }
+            if (seen.Add(Id(page[i]))) acc[idx] = page[i];
+        }
+    }
+}
+
+static class SelfTest
+{
+    static int fails;
+    static void Check(string name, bool ok)
+    {
+        Console.Out.WriteLine($"{(ok ? "PASS" : "FAIL")} {name}");
+        if (!ok) fails++;
+    }
+    static Line L(string n, string t = "1") => new("50100", n, t, "Yes");
+    static string Names(SortedDictionary<long, Line> a) => string.Join(",", a.Select(kv => $"{kv.Key}:{kv.Value.Name}"));
+
+    public static int Run()
+    {
+        Check("IsFunctionLine \"1\" is true", Pure.IsFunctionLine("1"));
+        Check("IsFunctionLine \"0\" is false", !Pure.IsFunctionLine("0"));
+        Check("IsFunctionLine \"2\" is false", !Pure.IsFunctionLine("2"));
+        Check("IsFunctionLine \"Function\" is false", !Pure.IsFunctionLine("Function"));
+        Check("IsFunctionLine \"\" is false", !Pure.IsFunctionLine(""));
+        Check("IsFunctionLine null is false", !Pure.IsFunctionLine(null));
+
+        var a = new SortedDictionary<long, Line>();
+        Pure.MergePage(a, 0, new[] { L("CU", "0"), L("A"), L("B") });
+        Pure.MergePage(a, 2, new[] { L("B"), L("C"), L("D") }); // overlap on B
+        Check("overlapping pages merge without double count", Names(a) == "0:CU,1:A,2:B,3:C,4:D");
+        Pure.MergePage(a, 2, new[] { L("B"), L("C"), L("D") }); // the same page again
+        Check("a repeated page adds nothing", a.Count == 5);
+
+        var o = new SortedDictionary<long, Line>();
+        Pure.MergePage(o, 3, new[] { L("D"), L("E") });
+        Pure.MergePage(o, 0, new[] { L("A"), L("B"), L("C") }); // lower offset arrives later
+        Check("an out-of-order offset keeps row order", Names(o) == "0:A,1:B,2:C,3:D,4:E");
+
+        var c = new SortedDictionary<long, Line>();
+        Pure.MergePage(c, 0, new[] { L("A"), L("B") });
+        var refused = false;
+        try { Pure.MergePage(c, 1, new[] { L("X") }); } catch (DriverFailure) { refused = true; }
+        Check("a different row at a taken index is refused", refused);
+
+        var t = new SortedDictionary<long, Line>();
+        Pure.MergePage(t, 0, new[] { L("A", "1"), L("A", "0") });
+        Check("same name, different line type are two rows", t.Count == 2);
+
+        Console.Out.WriteLine(fails == 0 ? "self-test ok" : $"self-test FAILED ({fails})");
+        return fails == 0 ? 0 : 1;
+    }
+}
 
 class DriverFailure : Exception
 {

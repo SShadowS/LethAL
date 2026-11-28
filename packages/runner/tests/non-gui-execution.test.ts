@@ -166,6 +166,17 @@ describe("validity.executionContexts (R60, widened by R69 Phase 2 Task 5)", () =
     expect(v3).not.toContain("NON-GUI EXECUTION");
   });
 
+  test("PR-479: a client run prints its own GUI label, never al-runner's; a v3 run keeps al-runner's", () => {
+    const client = renderConsole(build({ caps: { ...CAPS_AUTHORITATIVE, kind: "bcdev-client" } }));
+    expect(client).toContain("GUI EXECUTION (bcdev-client): 1 verdict(s)");
+    expect(client).toContain("/cs web client session");
+    expect(client).not.toContain("al-runner v3");
+    expect(client).not.toContain("NON-GUI EXECUTION");
+    const v3 = renderConsole(build({ caps: CAPS_AL_RUNNER }));
+    expect(v3).toContain("GUI EXECUTION (al-runner v3)");
+    expect(v3).not.toContain("GUI EXECUTION (bcdev-client)");
+  });
+
   test("R895: a bcdev run's console keeps the non-GUI line and prints no v3 GUI line", () => {
     const text = renderConsole(build());
     expect(text).toContain("NON-GUI EXECUTION");

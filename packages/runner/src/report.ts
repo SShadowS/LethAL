@@ -4678,10 +4678,17 @@ export function renderConsole(r: SessionReport): string {
   }
   // R895: al-runner v3 runs the CLIENT branch (measured), the opposite of BC's fenced path, unless
   // `alRunnerV3.noClient` is on (R-907). Say so, so a v3 verdict is not read as BC's.
-  const v3Gui = summarizeRunnerContexts(r.validity.executionContexts, "fenced", true);
+  const v3Gui = summarizeRunnerContexts(r.validity.executionContexts, "fenced", true, true);
   if (v3Gui !== undefined && v3Gui.verdictCount > 0) {
     lines.push(
       `GUI EXECUTION (al-runner v3): ${v3Gui.verdictCount} verdict(s) here describe the app's interactive branch (GuiAllowed=Yes, ClientType=${v3Gui.clientType}) — ${v3Gui.basisText}. BC's fenced path runs the non-interactive branch (GuiAllowed=No), so a mutant behind GuiAllowed, or behind a confirm wrapper such as ConfirmManagement.GetResponseOrDefault, can reach a different verdict here than on BC (R895).`,
+    );
+  }
+  // PR-479: the bcdev-client backend is the only other fenced entry with GuiAllowed=Yes (not v3), so it has its own label.
+  const clientGui = summarizeRunnerContexts(r.validity.executionContexts, "fenced", true, false);
+  if (clientGui !== undefined && clientGui.verdictCount > 0) {
+    lines.push(
+      `GUI EXECUTION (bcdev-client): ${clientGui.verdictCount} verdict(s) here ran in a /cs web client session on the BC server (GuiAllowed=Yes, ClientType=${clientGui.clientType}) — ${clientGui.basisText}. The test codeunit is driven through the test tool page as a client user would, so a mutant behind GuiAllowed or a Confirm can reach a different verdict here than on BC's fenced path (GuiAllowed=No).`,
     );
   }
   // The companion fact, for the opposite path. Without this a reader who knows the fenced caveat
