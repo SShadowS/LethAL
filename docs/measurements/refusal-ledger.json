@@ -2765,5 +2765,79 @@
     "state": "open",
     "issue": "#8084",
     "note": "PR-497: seen on e5176a9fd in DOTests' stores (1: (mutant 1)); family xml-node (v3-refusal-cost.ts, PR-492/493)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the decimalformatter of a report column: AutoFormatType N while codeunit <x>.ResolveAutoFormatTypes subscribes to OnResolveAutoFormat of Auto Format and can set its result (BC resolves the format th",
+    "state": "open",
+    "issue": "#8011",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (43: (test 43)); #8011 step 2 (the AutoFormatTranslate event); here Base Application runs as an app under test, so its own Amount Auto Format subscriber counts as an outside subscriber (the maintainer, #8011, 2026-11-17)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (modify permission on object type N id N) where an inherent permission is not read: an indirect [InherentPermissions] attribute",
+    "state": "open",
+    "issue": "#8066",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (42: (test 42)); #8066's text"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (a read other than FindFirst that finds no row on a table that has rows); the test is not run",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (25: (test 25)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: AutoFormatType N while codeunit <x>.ResolveAutoFormatTypes subscribes to OnResolveAutoFormat of Auto Format and can set its result (BC resolves the format through that event, which the runtime does",
+    "state": "open",
+    "issue": "#8011",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (24: (test 24)); #8011 step 2 (the AutoFormatTranslate event); here Base Application runs as an app under test, so its own Amount Auto Format subscriber counts as an outside subscriber (the maintainer, #8011, 2026-11-17)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetValue of a text into a Text page variable with a TableRelation (whether BC takes the related row's stored value is not pinned)",
+    "state": "open",
+    "issue": "#9336",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (20: (test 20)); filed by PR-498: BC 28.4 (bc1) takes the related row's key (case, prefix) or raises its does-not-exist error"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (insert permission on object type N id N) whose error is not pinned yet (made by the runtime for a page, report, xmlport or validation; ADR-N probes PN-PN); the test is not run",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (2: (test 2)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused before it started (HideAllowPaymentExportForNonPaymentBatches: not run (handler GeneralJournalBatchesModalPageHandler: Cryptography Managem): part of its",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (2: (test 2)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Fin. Charge Comment Sheet.__datacaption_N: <x> beside a page procedure named Caption, in a form BC was not measured on (the pinned forms are on Card and List pages, one procedure of a measured signa",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (2: (test 2)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: handler GeneralJournalBatchesModalPageHandler: Cryptography Management Impl..GetEncryptionKeyAsStream: builtin System.ExportEncryptionKey#N is not implemented",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (2: (test 2)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a request page handler error with an OnQueryClosePage that answers false (close not pinned)",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (1: (test 1)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an error raised by OnNewRecord or OnAfterGetCurrRecord at the open of a page over an empty view, or at a read of it after a filter emptied it (what BC does with the error is not pinned)",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (1: (test 1)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of TestPage control to Code[N]",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (1: (test 1)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: report column Ins__Coverage_Ledger_Entry__Amount: column Ins__Coverage_Ledger_Entry__Amount reads a field of the data item Ins. Coverage Ledger Entry nested below its own (when BC reads it is not im",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (1: (test 1)); not searched or reduced yet (outside PR-498's top three)"
+  },
+  {
+    "key": "NotRun: out-of-scope: report column Maintenance_Ledger_Entry__Amount: column Maintenance_Ledger_Entry__Amount reads a field of the data item Maintenance Ledger Entry nested below its own (when BC reads it is not implemen",
+    "state": "unexamined",
+    "note": "PR-498: seen on e5176a9fd in BC.History Base Application 28.6 x Tests-Fixed Asset's baseline (1: (test 1)); not searched or reduced yet (outside PR-498's top three)"
   }
 ]
