@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**73 of 1212 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**74 of 1213 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1257,6 +1257,7 @@ that ordering is the priority.
 - **R1245** · The coverage-differential gate cannot run: probe-r58-differential.ts --mode fenced throws NoBaselineWorkDateError (R1131) on the first mutant call, on master too; the gate table selects this leg for every orchestrator.ts change · [R1245.md](docs/roadmap/R1245.md) · done (79728328c) — the probe's recording wrapper forwarded a hand-picked member list that never got PR-196's…
 - **R1247** · Every instrumented publish logs 'COMMIT called and skipped in extension upgrade context': the emitted Mutation Upgrade codeunit calls LethAL Control's RegisterArtifact, which commits · [R1247.md](docs/roadmap/R1247.md) · open — routine and harmless as measured (a warning only); trigger: a BC that makes a Commit in upgrade…
 - **R1248** · BC.History on al-runner edge e5176a9fd (103 projects): 277 tests lost, every one a refusal under an issue already filed (none a wrong result); 125 gained (100 by LethAL's isolation auto, 16 by two causes now gone upstream); 92 new causes in the refusal ledger · [R1248.md](docs/roadmap/R1248.md) · closed 2026-11-28 — measured; every new cause is in the refusal ledger with its issue, or unexamined under…
+- **R1250** · The update gate fills a gate worktree at an older lethalCommit from master's fixture-symbol tar: since the PR-483 re-pin (431354324c23) every gate judged at current's .gated commit (73fdb1fc5, which pins 165b17dd) is infra-fail before any leg · [R1250.md](docs/roadmap/R1250.md) · open — measured 2026-11-28 by PR-508's private gate; trigger: a fix in scripts/al-runner-v3-update.ts…
 
 ---
 
