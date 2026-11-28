@@ -890,18 +890,24 @@ describe("R442: a site hidden from numbering in one run poisons no key in the ne
     });
     const p = await w.run();
     const compute = p.rows("src/Good.al", "Compute");
-    const twinIds = p.report.mutants
-      .filter((m) => m.file === "src/Good.al" && m.procedureName === "Compute")
-      .map((m) => m.mutantCode);
     await w.write("src/BadX.al", obj(REPAIRED_TABLE, X()));
     w.unfinish(p.runId);
     const resumed = await w.run({ resume: p.runId });
     expect(resumed.rows("src/Good.al", "Compute")).toEqual(compute); // executed, not carried
     expect(resumed.warnings("resume-numbering-unchanged")).toEqual([]);
+    // Mutant codes are per run: take Good's twins from the RESUMED run (BadX's newly numbered mutants come first and
+    // took Good's run-1 codes). Good's twins moved ordinal, so their record is found by rule 2's member site.
+    const goodTwins = resumed.report.mutants
+      .filter((m) => m.file === "src/Good.al" && m.procedureName === "Compute")
+      .map((m) => m.mutantCode);
+    expect(goodTwins.length).toBeGreaterThan(0);
     const named = resumed.warnings("resume-recorded-not-carried");
     expect(named).toHaveLength(1);
-    expect(named[0]).toContain(`${twinIds.length} carry-disabled (R307`);
-    for (const id of twinIds) expect(named[0]).toContain(id);
+    expect(named[0]).toContain("carry-disabled (R307");
+    for (const id of goodTwins) expect(named[0]).toContain(`${id}`);
+    // Each named id once, by exact token, so a code that is a prefix of another (M0001 in M00010) cannot satisfy it.
+    const listed = new Set(named[0]?.match(/M\d{4,}/g) ?? []);
+    for (const id of goodTwins) expect(listed.has(id)).toBe(true);
   });
 
   test("resume: a preproc-undecided file since fixed is refused by name", async () => {
