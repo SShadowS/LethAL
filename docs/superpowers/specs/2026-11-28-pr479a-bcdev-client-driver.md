@@ -309,3 +309,26 @@ No false kill or false survivor was found. These pre-commit what the build now d
 
 **Table 1 (sandbox-app):** PASS. 20 equal with `itest:bcdev`'s frozen table (verdict and killing test); the 6 headless
 no-coverage mutants read survived, as pre-committed; 0 BLOCK.
+
+## Amendment 6 (2026-11-28, page 130455's repeater cannot be paged reliably; the read-back scope)
+**Measured on bcwin** (codeunit 79310, `/coord/handoff/PR-479/smoke/`):
+- **The first viewport:** TotalRowCount 80, offset 0, 20 rows.
+- **After `Scroll(20)`:** offset 60, TotalRowCount 73, 13 rows. Rows 20-59 were never shown.
+- **Reading:** TotalRowCount is an estimate, and the meaning of Scroll's argument is not a plain offset. Paging this repeater
+  rests on undocumented behaviour.
+
+**Change (my call; principles 1, 5, 13), replacing amendment 2 item 5 and amendment 5 item 2:**
+1. **Before the op,** the method-line read-back checks the lines of the FIRST viewport only:
+   - every line read must be a declared method of this codeunit, in declared order, with Run = true;
+   - when the viewport holds the whole codeunit (TotalRowCount within the page), the lines must EQUAL the declared list
+     both ways, as before;
+   - a longer codeunit is not refused for that alone.
+2. **The full proof is the post-run join, which is unchanged and mandatory:** each declared method has exactly one page
+   result and one attestation row; no extra method appears; testMethodRuns runs 1..N in declared order.
+   - A method the page skipped (a filter that did not apply, a stale `Run = false` beyond the first viewport) therefore
+     fails as the named `client-incomplete`, never as a verdict.
+   - That failure comes after a normal End and Deactivate, so it does not wedge the server.
+3. **The driver's paging code is removed,** to keep the driver small. A codeunit longer than one page still runs whole:
+   RunNextTest runs the codeunit, not the viewport.
+4. **A red test:** a fake page whose second viewport would hide a `Run = false` method must end in `client-incomplete`
+   after the op, with End and Deactivate both sent.
