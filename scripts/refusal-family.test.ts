@@ -11,6 +11,7 @@ import {
   DOTNET_NO_OBJECT,
   EDGE_REFUSALS,
   ERRORS_TEMP,
+  ERRORS_TEMP_2,
   FAMILIES,
   FIELDREF_CONVERT,
   FORMAT_EVALUATE,
@@ -18,6 +19,7 @@ import {
   type Family,
   GET_URL,
   IO_STREAMS,
+  IO_STREAMS_2,
   JSON_TEXT,
   LANGUAGE_REGION,
   NO_CLIENT,
@@ -2094,6 +2096,7 @@ describe("PR-417: BC answers measured on Linux BC", () => {
         FORMAT_EVALUATE,
         FORMAT_REGION,
         IO_STREAMS,
+        IO_STREAMS_2,
         JSON_TEXT,
         LANGUAGE_REGION,
         NUMBERS_TEXT,
@@ -2294,8 +2297,7 @@ describe("PR-489: the io-streams family", () => {
   const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
 
   // Red: insert the family before numbers-text, or drop it from FAMILIES.
-  test("last of FAMILIES (place 30, BC-check number 31): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("io-streams");
+  test("place 30 of FAMILIES (BC-check number 31): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(29);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051031");
   });
@@ -2354,6 +2356,308 @@ describe("PR-489: the io-streams family", () => {
     }
     // 7 Blob-field cells and 5 XMLport cells take a key each (the malformed and empty imports write none)
     expect(byKey.size).toBe(12);
+    for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });
+  });
+});
+
+/** PR-500: each `Format(...)` argument list in a cell's statements, with nested parentheses kept. */
+const formatArgList = (s: string): string[] => {
+  const out: string[] = [];
+  for (let i = s.indexOf("Format("); i >= 0; i = s.indexOf("Format(", i + 1)) {
+    let depth = 0;
+    for (let j = i + "Format".length; j < s.length; j++) {
+      if (s[j] === "(") depth++;
+      if (s[j] === ")" && --depth === 0) {
+        out.push(s.slice(i + "Format(".length, j));
+        break;
+      }
+    }
+  }
+  return out;
+};
+
+describe("PR-500: the errors-temp-2 family", () => {
+  const f = ERRORS_TEMP_2;
+  const al = (): string => emitApp(f)["src/Cells.al"] ?? "";
+  const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
+
+  // Red: insert the family before io-streams, or drop it from FAMILIES.
+  test("place 31 of FAMILIES (BC-check number 32): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(30);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051032");
+  });
+
+  // Red: drop a cell, reuse a type/method pair, or move a support codeunit off the id right after the last cell.
+  test("45 cells with distinct names, 11 support codeunits right after the last cell", () => {
+    expect(f.cells).toHaveLength(45);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(45);
+    const last = BASE_ID + f.cells.length;
+    expect(al()).toContain(`codeunit ${last + 1} "E2 Helper"`);
+    for (const [i, name] of [
+      "Probe",
+      "Last",
+      "Collect",
+      "Err",
+      "Nest",
+      "NestFail",
+      "Commit",
+      "CommitOk",
+      "Ok",
+      "Fail",
+    ].entries())
+      expect(al()).toContain(`codeunit ${last + 2 + i} "E2 Run ${name}"`);
+    expect(f.extraIds).toBe(11);
+    // the cell and support ids are all distinct: every `codeunit <id>` in the app appears once
+    const ids = [...al().matchAll(/^codeunit (\d+) /gm)].map((m) => m[1]);
+    expect(ids).toHaveLength(45 + 11);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  // Red: a DeleteAll on a real table in any cell (a write before Codeunit.Run's return value is used), or two cells counting
+  // the same key range, or a cell writing a key outside its own range.
+  // PR-500 review: the writers are found in the support code too (a Run target or helper procedure that Inserts, Modifies,
+  // Deletes, Renames or Validates a non-temporary record), and every cell that reaches one must declare its own range.
+  // Red: plant `Rec.Insert();` in "E2 Run Probe" or "E2 Run Nest" (a cell then writes with no range).
+  const checkKeyRanges = (f: typeof ERRORS_TEMP_2): void => {
+    const WRITE = /\b(\w+)\.(Insert|Modify|ModifyAll|Delete|DeleteAll|Rename|Validate)\(/g;
+    const recVars = (text: string, base: string[]): Map<string, string> => {
+      const m = new Map<string, string>(base.map((n) => [n, "E2 Row"]));
+      for (const d of text.matchAll(/(\w+): Record "([^"]+)"( temporary)?/g))
+        if (d[3]) m.delete(d[1] ?? "");
+        else m.set(d[1] ?? "", d[2] ?? "");
+      return m;
+    };
+    // support units: helper procedures and Run-target codeunits, each with the real tables it writes and what it calls
+    type Unit = { name: string; text: string; tables: Set<string>; calls: string[] };
+    const units: Unit[] = [];
+    const sup = f.support;
+    for (const cu of sup.matchAll(/^codeunit \d+ "([^"]+)"\n\{\n([\s\S]*?)^\}$/gm)) {
+      const [, cuName = "", text = ""] = cu;
+      if (cuName === "E2 Helper") {
+        for (const p of text.split(/^ {4}procedure /m).slice(1))
+          units.push({ name: `H.${p.split("(")[0]}`, text: p, tables: new Set(), calls: [] });
+      } else {
+        units.push({ name: cuName, text, tables: new Set(), calls: [] });
+      }
+    }
+    expect(units.length).toBeGreaterThanOrEqual(10 + 17);
+    const direct = (u: Unit): void => {
+      const vars = recVars(u.text, u.name.startsWith("H.") ? [] : ["Rec"]);
+      for (const m of u.text.matchAll(WRITE)) {
+        const t = vars.get(m[1] ?? "");
+        if (t) u.tables.add(t);
+      }
+      for (const m of u.text.matchAll(/Codeunit::"([^"]+)"/g)) u.calls.push(m[1] ?? "");
+      for (const m of u.text.matchAll(/(?<![\w."])(\w+)\(/g)) u.calls.push(`H.${m[1]}`);
+    };
+    for (const u of units) direct(u);
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const u of units)
+        for (const c of u.calls)
+          for (const t of units.find((x) => x.name === c)?.tables ?? [])
+            if (!u.tables.has(t)) {
+              u.tables.add(t);
+              changed = true;
+            }
+    }
+    const cellTables = (c: (typeof f.cells)[number]): Set<string> => {
+      const body = stmts(c);
+      const out = new Set<string>();
+      const vars = recVars((c.vars ?? []).join("\n"), []);
+      for (const m of body.matchAll(WRITE)) {
+        const t = vars.get(m[1] ?? "");
+        if (t) out.add(t);
+      }
+      for (const m of body.matchAll(/Codeunit::"([^"]+)"/g))
+        for (const t of units.find((x) => x.name === m[1])?.tables ?? []) out.add(t);
+      for (const m of body.matchAll(/\bH\.(\w+)\(/g))
+        for (const t of units.find((x) => x.name === `H.${m[1]}`)?.tables ?? []) out.add(t);
+      return out;
+    };
+    const ranges: string[] = [];
+    const writers: string[] = [];
+    const autoWriters: string[] = [];
+    const rangeOnly: string[] = [];
+    for (const c of f.cells) {
+      const body = stmts(c);
+      expect({ cell: c.method, del: /\b(Row|Row2|RA|RA2)\.DeleteAll/.test(body) }).toEqual({
+        cell: c.method,
+        del: false,
+      });
+      const tables = cellTables(c);
+      if (tables.delete("E2 Auto")) autoWriters.push(c.method);
+      const own = [...body.matchAll(/Row2\.SetRange\("Key", (\d+), (\d+)\)/g)];
+      for (const m of own) ranges.push(m[1] ?? "");
+      if (tables.size > 0) writers.push(c.method);
+      // a cell that writes a real table declares exactly one range
+      if (tables.size > 0)
+        expect({ cell: c.method, writes: [...tables], ranges: own.length }).toEqual({
+          cell: c.method,
+          writes: [...tables],
+          ranges: 1,
+        });
+      else if (own.length > 0) rangeOnly.push(c.method);
+      if (own.length === 0) continue;
+      const lo = Number(own[0]?.[1]);
+      const hi = Number(own[0]?.[2]);
+      // every 4-digit key in setup AND call (InsertRow(k), Row."Key" := k, TryInsert...(k)) lies in the range
+      const keys = [...body.matchAll(/(?<![\d.])(\d{4})(?!\d)/g)].map((m) => Number(m[1]));
+      expect({ cell: c.method, hasKey: keys.length > 0 }).toEqual({ cell: c.method, hasKey: true });
+      for (const n of keys)
+        expect({ cell: c.method, n, inRange: n >= lo && n <= hi }).toEqual({
+          cell: c.method,
+          n,
+          inRange: true,
+        });
+    }
+    // the one cell that writes the AutoIncrement table has no key to range (its rows roll back with the test)
+    expect(autoWriters).toEqual(["RealAfterRollback"]);
+    // 7 cells write a real keyed table (Try 2, Run 4, Assert 1); RealToTempParam only counts (its by-value temp copy is no write)
+    expect(rangeOnly).toEqual(["RealToTempParam"]);
+    expect(writers).toHaveLength(7);
+    expect(ranges).toHaveLength(8);
+    expect(new Set(ranges).size).toBe(ranges.length);
+  };
+  test("no real-table DeleteAll; every cell that writes a real table (directly or through support code) declares its own key range and keeps every 4-digit key in it", () => {
+    checkKeyRanges(f);
+  });
+
+  // Red: plant an Insert in "E2 Run Last" (a Run target no cell writes through today): a cell then writes with no range.
+  test("planted copy: an Insert in a Run target with no range is caught", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    const at = "Rec.Val := CopyStr(GetLastErrorText(), 1, 30);";
+    expect(bad.support).toContain(at);
+    bad.support = bad.support.replace(at, `Rec.Insert(); ${at}`);
+    // the same copy without the fault passes, so the planted line alone is what the check rejects
+    expect(() => checkKeyRanges(structuredClone(f))).not.toThrow();
+    expect(() => checkKeyRanges(bad)).toThrow();
+  });
+
+  /** The Format scan over cells plus support code: every Format is format 9, no Boolean, enum or Integer-cast is printed bare. */
+  const checkFormatScan = (f: typeof ERRORS_TEMP_2): void => {
+    for (const c of f.cells) expect(c.depends).toBeUndefined();
+    // the cells and the support code (the E2 Helper procedures and Run targets, where most of the answers are built)
+    const all = `${f.cells.map(stmts).join("\n")}\n${f.support}`;
+    expect(formatArgList(all).filter((a) => !a.endsWith(", 0, 9"))).toEqual([]);
+    expect(all).not.toMatch(/Error\('V:\[[^']*'(, [^,;]+)*, R[,)]/);
+    expect(all).not.toMatch(/(?<!Format\()HasCollectedErrors\(\)/);
+    expect(all).not.toMatch(
+      /(?<!Format\()\b\w+\.(IsTemporary|Collectible|ErrorType|Verbosity)\b(?!\()/,
+    );
+    expect(all).not.toContain("AsInteger");
+  };
+  /** Every Format the 45 cells and the support code hold (a scan that finds none would make the scan above vacuous). */
+  const checkFormatCount = (f: typeof ERRORS_TEMP_2): void => {
+    const cellsText = f.cells.map(stmts).join("\n");
+    expect(formatArgList(cellsText).length).toBe(25);
+    expect(formatArgList(`${cellsText}\n${f.support}`).length).toBe(40); // 25 in the cells, 15 in the support code
+  };
+
+  // Red (each separately): `Format(R)` without `, 0, 9`; `R` or a bare Boolean as a V:[...] argument.
+  test("every Format is Format(x, 0, 9) and no Boolean or enum is printed bare", () => {
+    checkFormatScan(f);
+    checkFormatCount(f);
+  });
+
+  test("planted copy: a bare HasCollectedErrors() print in a helper is caught", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    const at = "Rec.Val := CopyStr(GetLastErrorText(), 1, 30);";
+    expect(bad.support).toContain(at);
+    bad.support = bad.support.replace(at, "Rec.Val := CopyStr(HasCollectedErrors(), 1, 30);");
+    expect(() => checkFormatScan(structuredClone(f))).not.toThrow();
+    expect(() => checkFormatScan(bad)).toThrow();
+  });
+
+  test("planted copy: an AsInteger in a helper is caught", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    const at = "Rec.Val := CopyStr(GetLastErrorText(), 1, 30);";
+    expect(bad.support).toContain(at);
+    bad.support = bad.support.replace(at, "Rec.Val := Format(Rec.Val.AsInteger(), 0, 9);");
+    expect(() => checkFormatScan(structuredClone(f))).not.toThrow();
+    expect(() => checkFormatScan(bad)).toThrow();
+  });
+
+  test("planted copy: one extra Format(x, 0, 9) in a cell moves the exact count", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    // the cell table is declared read-only; this is a test-local copy, so plant the fault through a mutable view of it
+    const c = bad.cells[0] as { call: string } | undefined;
+    if (!c) throw new Error("no cell");
+    c.call += " Error('V:[%1]', Format(1, 0, 9));";
+    expect(() => checkFormatScan(bad)).not.toThrow();
+    expect(() => checkFormatCount(structuredClone(f))).not.toThrow();
+    expect(() => checkFormatCount(bad)).toThrow();
+  });
+});
+
+describe("PR-500: the io-streams-2 family", () => {
+  const f = IO_STREAMS_2;
+  const stmts = (c: (typeof f.cells)[number]): string => [...(c.setup ?? []), c.call].join("\n");
+
+  // Red: insert the family before errors-temp-2, or drop it from FAMILIES.
+  test("last of FAMILIES (place 32, BC-check number 33): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("io-streams-2");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(31);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051033");
+  });
+
+  // Red: drop a cell, reuse a type/method pair, or move the helper off the id right after the last cell.
+  test("36 cells with distinct names, the helper right after the last cell", () => {
+    expect(f.cells).toHaveLength(36);
+    expect(new Set(f.cells.map((c) => `${c.type}/${c.method}`)).size).toBe(36);
+    const al = emitApp(f)["src/Cells.al"] ?? "";
+    expect(al).toContain(`codeunit ${BASE_ID + 37} "I2 Helper"`);
+    expect(f.extraIds).toBe(1);
+    const ids = [...al.matchAll(/^codeunit (\d+) /gm)].map((m) => m[1]);
+    expect(ids).toHaveLength(37);
+    expect(new Set(ids).size).toBe(37);
+    // the System Application dependency Temp Blob needs
+    expect(f.dependencies?.map((d) => d.name)).toEqual(["System Application"]);
+  });
+
+  // Red: drop `locale` from a code-page cell, or mark an ASCII or UTF cell `locale` (R1210 would read the wrong cells).
+  test("exactly the 2 code-page cells are locale cells", () => {
+    expect(f.cells.filter((c) => c.depends === "locale").map((c) => c.method)).toEqual([
+      "UTF8 ae read as MSDos",
+      "Csv Windows export",
+    ]);
+  });
+
+  /** Every Format the 36 cells hold: exactly 52 (a scan that finds fewer or more is no longer the scan that was measured). */
+  const checkFormatCount = (f: typeof IO_STREAMS_2): void => {
+    expect(f.cells.flatMap((c) => formatArgList(stmts(c)))).toHaveLength(52);
+  };
+
+  // Red: one extra `n9(...)` in a cell: the count moves though every Format is still format 9.
+  test("planted copy: one extra n9(...) in a cell moves the exact Format count", () => {
+    const bad = structuredClone(f) as typeof f & { support: string }; // a test-local, mutable copy
+    // the cell table is declared read-only; this is a test-local copy, so plant the fault through a mutable view of it
+    const c = bad.cells[0] as { call: string } | undefined;
+    if (!c) throw new Error("no cell");
+    c.call += " Error('V:[%1]', Format(1, 0, 9));";
+    expect(() => checkFormatCount(structuredClone(f))).not.toThrow();
+    expect(() => checkFormatCount(bad)).toThrow();
+  });
+
+  // Red: a real-table DeleteAll, a reused key, or a Format without `, 0, 9`.
+  test("no real-table DeleteAll, every real key its own, every Format is format 9", () => {
+    const byKey = new Map<string, Set<string>>();
+    for (const c of f.cells) {
+      const s = stmts(c);
+      expect({ cell: c.method, del: /\b(B|Item)\.DeleteAll/.test(s) }).toEqual({
+        cell: c.method,
+        del: false,
+      });
+      for (const m of s.matchAll(/(?:InsertBlob\(|B\.Id := |B\.Get\(|'X)(\d{4})/g)) {
+        const key = m[1] ?? "";
+        byKey.set(key, (byKey.get(key) ?? new Set()).add(c.method));
+      }
+      for (const a of formatArgList(s))
+        expect({ cell: c.method, f9: a.endsWith(", 0, 9") }).toEqual({ cell: c.method, f9: true });
+    }
+    checkFormatCount(f);
+    // 3 Temp Blob cells and 13 XMLport cells take a key each
+    expect(byKey.size).toBe(16);
     for (const [key, cells] of byKey) expect({ key, cells: cells.size }).toEqual({ key, cells: 1 });
   });
 });
