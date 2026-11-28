@@ -107,6 +107,8 @@ const results: Record<string, string[]> = {
   "empty-results": [],
   onrun: [codeunitText([ON_RUN, M1, M2])],
   "other-codeunit": [codeunitText([M1, M2], 99999)],
+  // Amendment 6: the first viewport read-back passed, but a declared M2 sat beyond it with Run = false and never ran.
+  "hidden-run-false": [codeunitText([M1])],
 };
 out("ran", true, { results: results[mode] ?? [codeunitText([M1, M2])] });
 await waitGo("end");

@@ -195,8 +195,7 @@ try
     var (gotRange, gotRunner, gotCompany) = CheckHeader(f);
 
     // The method lines: a repeater whose rows carry cells "Name" and "Run" (and "Line Type", when present, to skip the
-    // codeunit line). Cell names are unmeasured on BC 28.4: a missing column is a named refusal. Only the first viewport is
-    // read; more rows than it holds is refused, never skipped.
+    // codeunit line). Cell names are unmeasured on BC 28.4: a missing column is a named refusal. Only the first viewport is read.
     var rep = f.ContainedControls.OfType<ClientRepeaterControl>().FirstOrDefault() ?? throw new DriverFailure("control-missing", "no repeater (method lines) on page 130455", 3);
     Diag("after-range", rep);
     var rows = rep.DefaultViewport.ToList();
@@ -226,40 +225,11 @@ try
         string Cell(params string[] ns) => cells.FirstOrDefault(c => ns.Contains(c.Name) || ns.Contains(c.Caption))?.StringValue;
         return new Line(Cell("Test Codeunit", "Codeunit ID", "Codeunit No.") ?? "", Cell("Name"), Cell("Line Type"), Cell("Run"));
     }
-    var collected = new SortedDictionary<long, Line>();
-    void Collect(string point)
-    {
-        Diag(point, rep);
-        Pure.MergePage(collected, rep.Offset, rep.DefaultViewport.Select(ReadLine).ToList());
-    }
-    Collect("page-0");
-    var maxPages = (int)(rep.TotalRowCount / Math.Max(1, rep.PageSize)) + 3;
-    string scrollMode = null; // null = unknown, "absolute", "delta"
-    for (var page = 1; collected.Count < rep.TotalRowCount && page <= maxPages; page++)
-    {
-        var want = collected.Count == 0 ? 0 : collected.Keys.Max() + 1;
-        var before = (long)rep.Offset;
-        var seen = collected.Count;
-        async Task Go(long arg) => await Settle(rep.Scroll(arg, new ClientInteractionsOptions()), stepDl, $"scroll method lines to {arg}");
-        if (scrollMode != "delta")
-        {
-            await Go(want);
-            // From offset 0 the two readings agree; assume absolute, and switch if a later call lands at before+want.
-            if (before != 0 && rep.Offset == before + want) scrollMode = "delta";
-            else if (rep.Offset != before) scrollMode = "absolute";
-        }
-        if (scrollMode != "absolute" && rep.Offset == before)
-        {
-            await Go(want - before);
-            if (rep.Offset == before) throw new DriverFailure("methods-viewport-incomplete", $"Scroll moved Offset neither as absolute {want} nor as delta {want - before} (stays {before})", 3);
-            scrollMode = "delta";
-        }
-        Collect($"page-{page}");
-        if (collected.Count == seen) break; // no new row: do not loop on the same page
-    }
-    if (collected.Count < rep.TotalRowCount) throw new DriverFailure("methods-viewport-incomplete", $"{rep.TotalRowCount} lines, collected {collected.Count} (page size {rep.PageSize}, scroll {scrollMode ?? "not tried"})", 3);
+    // Amendment 6: the FIRST viewport only (page 130455's repeater cannot be paged reliably). The post-run join on the
+    // TypeScript side is the full proof for a longer codeunit.
+    var complete = rows.Count >= rep.TotalRowCount;
     var lines = new List<(string Name, bool Run)>();
-    foreach (var row in collected.Values)
+    foreach (var row in rows.Select(ReadLine))
     {
         // Measured on bcwin (BC 28.4, 2026-11-28): the cell reads the option ORDINAL ("1" = Function, "0" = Codeunit).
         // Ordinal only: a caption would break on a translated BC. A missing column (null) keeps the row.
@@ -268,10 +238,8 @@ try
         var run = row.Run ?? throw new DriverFailure("control-missing", "method line has no Run cell", 3);
         lines.Add((nm, Yes(run)));
     }
-    if (!lines.Select(l => l.Name).SequenceEqual(declared))
-        throw new DriverFailure("methods-mismatch", $"page lines [{string.Join(", ", lines.Select(l => l.Name))}] differ from declared [{string.Join(", ", declared)}]", 3);
-    var off = lines.Where(l => !l.Run).Select(l => l.Name).ToList();
-    if (off.Count > 0) throw new DriverFailure("run-flag-false", $"Run is not set on: {string.Join(", ", off)}", 3);
+    var problem = Pure.CheckFirstViewport(lines, declared, complete);
+    if (problem != null) throw new DriverFailure(problem.Value.Name, problem.Value.Message, 3);
     Out("readback", true, new { range = gotRange, runner = gotRunner, company = gotCompany, methods = lines.Select(l => l.Name) });
 
     // Ready: the TypeScript side Activates, then sends go:bind.
@@ -353,25 +321,16 @@ static class Pure
     // Ordinal only: a caption would break on a translated BC.
     public static bool IsFunctionLine(string lineType) => lineType == "1";
 
-    static (string, string, string) Id(Line l) => (l.CodeunitId ?? "", l.Name ?? "", l.LineType ?? "");
-
-    // Merges one viewport page read at `offset` into the rows collected so far, keyed by absolute row index. A row whose
-    // identity (codeunit id + name + line type) is already collected is skipped, so overlap and a repeated page never
-    // double-count. Order is by row index, whatever order the pages arrived in. A different row at an index already
-    // taken means the offset is wrong: refuse.
-    public static void MergePage(SortedDictionary<long, Line> acc, long offset, IReadOnlyList<Line> page)
+    // Amendment 6. `lines` are the Function lines of the first viewport. They must be a prefix of `declared` with Run set;
+    // when `complete` (the viewport holds the whole codeunit) they must equal `declared`. Null = ok.
+    public static (string Name, string Message)? CheckFirstViewport(IReadOnlyList<(string Name, bool Run)> lines, IReadOnlyList<string> declared, bool complete)
     {
-        var seen = new HashSet<(string, string, string)>(acc.Values.Select(Id));
-        for (var i = 0; i < page.Count; i++)
-        {
-            var idx = offset + i;
-            if (acc.TryGetValue(idx, out var have))
-            {
-                if (Id(have) != Id(page[i])) throw new DriverFailure("methods-viewport-incomplete", $"row {idx} reads '{Id(page[i])}' but '{Id(have)}' was collected there", 3);
-                continue;
-            }
-            if (seen.Add(Id(page[i]))) acc[idx] = page[i];
-        }
+        if (lines.Count > declared.Count || !lines.Select(l => l.Name).SequenceEqual(declared.Take(lines.Count)))
+            return ("methods-mismatch", $"page lines [{string.Join(", ", lines.Select(l => l.Name))}] are not a prefix of declared [{string.Join(", ", declared)}]");
+        if (complete && lines.Count != declared.Count)
+            return ("methods-mismatch", $"page lines [{string.Join(", ", lines.Select(l => l.Name))}] differ from declared [{string.Join(", ", declared)}]");
+        var off = lines.Where(l => !l.Run).Select(l => l.Name).ToList();
+        return off.Count > 0 ? ("run-flag-false", $"Run is not set on: {string.Join(", ", off)}") : null;
     }
 }
 
@@ -383,8 +342,8 @@ static class SelfTest
         Console.Out.WriteLine($"{(ok ? "PASS" : "FAIL")} {name}");
         if (!ok) fails++;
     }
-    static Line L(string n, string t = "1") => new("50100", n, t, "Yes");
-    static string Names(SortedDictionary<long, Line> a) => string.Join(",", a.Select(kv => $"{kv.Key}:{kv.Value.Name}"));
+    static (string Name, bool Run) R(string n, bool run = true) => (n, run);
+    static readonly string[] Decl = { "A", "B", "C" };
 
     public static int Run()
     {
@@ -395,27 +354,13 @@ static class SelfTest
         Check("IsFunctionLine \"\" is false", !Pure.IsFunctionLine(""));
         Check("IsFunctionLine null is false", !Pure.IsFunctionLine(null));
 
-        var a = new SortedDictionary<long, Line>();
-        Pure.MergePage(a, 0, new[] { L("CU", "0"), L("A"), L("B") });
-        Pure.MergePage(a, 2, new[] { L("B"), L("C"), L("D") }); // overlap on B
-        Check("overlapping pages merge without double count", Names(a) == "0:CU,1:A,2:B,3:C,4:D");
-        Pure.MergePage(a, 2, new[] { L("B"), L("C"), L("D") }); // the same page again
-        Check("a repeated page adds nothing", a.Count == 5);
-
-        var o = new SortedDictionary<long, Line>();
-        Pure.MergePage(o, 3, new[] { L("D"), L("E") });
-        Pure.MergePage(o, 0, new[] { L("A"), L("B"), L("C") }); // lower offset arrives later
-        Check("an out-of-order offset keeps row order", Names(o) == "0:A,1:B,2:C,3:D,4:E");
-
-        var c = new SortedDictionary<long, Line>();
-        Pure.MergePage(c, 0, new[] { L("A"), L("B") });
-        var refused = false;
-        try { Pure.MergePage(c, 1, new[] { L("X") }); } catch (DriverFailure) { refused = true; }
-        Check("a different row at a taken index is refused", refused);
-
-        var t = new SortedDictionary<long, Line>();
-        Pure.MergePage(t, 0, new[] { L("A", "1"), L("A", "0") });
-        Check("same name, different line type are two rows", t.Count == 2);
+        Check("incomplete prefix passes", Pure.CheckFirstViewport(new[] { R("A"), R("B") }, Decl, false) == null);
+        Check("complete equal list passes", Pure.CheckFirstViewport(new[] { R("A"), R("B"), R("C") }, Decl, true) == null);
+        Check("out-of-order line fails", Pure.CheckFirstViewport(new[] { R("B"), R("A") }, Decl, false) is { Name: "methods-mismatch" });
+        Check("undeclared line fails", Pure.CheckFirstViewport(new[] { R("A"), R("X") }, Decl, false) is { Name: "methods-mismatch" });
+        Check("Run=false line fails", Pure.CheckFirstViewport(new[] { R("A"), R("B", false) }, Decl, false) is { Name: "run-flag-false" });
+        Check("complete list missing a method fails", Pure.CheckFirstViewport(new[] { R("A"), R("B") }, Decl, true) is { Name: "methods-mismatch" });
+        Check("more lines than declared fails", Pure.CheckFirstViewport(new[] { R("A"), R("B"), R("C"), R("D") }, Decl, false) is { Name: "methods-mismatch" });
 
         Console.Out.WriteLine(fails == 0 ? "self-test ok" : $"self-test FAILED ({fails})");
         return fails == 0 ? 0 : 1;

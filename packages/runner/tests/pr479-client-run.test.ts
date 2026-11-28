@@ -743,6 +743,15 @@ describe("PR-479 round 3a: one client codeunit op", () => {
     });
   });
 
+  // Amendment 6 item 4. The attestation is the default (both rows), so ONLY the page-result join can catch this.
+  // Red: skip the page-result assertJoin in checkClientRun.
+  test("amendment 6: a declared method the page never ran is client-incomplete AFTER the op, End and Deactivate sent", async () => {
+    const r = rig("hidden-run-false");
+    await failing(r.run(), "client-incomplete");
+    expect(r.driverLog().some((l) => l.includes('"end"'))).toBe(true);
+    expect(r.calls.filter((c) => c === "DeactivateForClient")).toHaveLength(2);
+  });
+
   test("round 3b: the page ran another codeunit: client-incomplete", async () => {
     await failing(rig("other-codeunit").run(), "client-incomplete");
   });
